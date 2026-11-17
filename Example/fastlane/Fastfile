@@ -1,6 +1,27 @@
+require "json"
+
+# The simulator to test on: TEST_DEVICE when set (for example "iPhone 17 Pro"), otherwise the
+# first iPhone Pro, or else the first iPhone, on the newest iOS runtime this Xcode has. A fixed
+# name breaks whenever Xcode or the CI image ships a different device list.
+def test_device
+  requested = ENV["TEST_DEVICE"].to_s.strip
+  return requested unless requested.empty?
+
+  runtimes = JSON.parse(`xcrun simctl list devices available -j`)["devices"]
+    .select { |runtime, devices| runtime.include?("SimRuntime.iOS-") && devices.any? }
+  UI.user_error!("No iOS simulator is available.") if runtimes.empty?
+
+  newest = runtimes.keys.max_by { |runtime| runtime[/iOS-([\d-]+)/, 1].split("-").map(&:to_i) }
+  phones = runtimes[newest].select { |device| device["name"].start_with?("iPhone") }
+  UI.user_error!("No iPhone simulator on #{newest}.") if phones.empty?
+
+  (phones.find { |device| device["name"] =~ /\AiPhone \d+ Pro\z/ } || phones.first)["name"]
+end
+
 desc "Run the tests and prepare for Danger"
 lane :test do
-  # Run tests
+  device = test_device
+  UI.message("Testing on #{device}")
   scan(
     project:                          "Example.xcodeproj",
     scheme:                           "Example",
@@ -8,6 +29,6 @@ lane :test do
     clean:                            true,
     result_bundle:                    true,
     code_coverage:                    true,
-    devices:                          ['iPhone 17 Pro']
+    device:                           device
   )
 end
