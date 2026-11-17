@@ -7,10 +7,10 @@ Pod::Spec.new do |s|
 
       This version now includes full Apple Silicon simulator support (arm64) and can be distributed as either source code or pre-built XCFramework.
     DESC
-    s.homepage         = 'https://github.com/DebugSwift/DebugSwift'
+    s.homepage         = 'https://github.com/uaipi/DebugSwift'
     s.license          = { :type => 'MIT', :file => 'LICENSE' }
     s.author           = { 'Matheus Gois' => 'matheusgoislimasilva@gmail.com' }
-    s.source           = { :git => 'https://github.com/DebugSwift/DebugSwift.git', :tag => s.version.to_s }
+    s.source           = { :git => 'https://github.com/uaipi/DebugSwift.git', :tag => s.version.to_s }
   
     s.ios.deployment_target = '16.0'
     s.swift_version = '5.7'

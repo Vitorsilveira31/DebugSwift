@@ -35,6 +35,21 @@ class App : Application() {
 
 Add `DebugSwiftOkHttpInterceptor()` to each OkHttp client whose traffic should be captured or controlled by Network Injection. Request delays, injected failures, HTTP statuses, and response modifier rules apply to requests sent through those clients. Wrap WebSocket listeners with `DebugSwiftWebSocketListener(url, listener)`. The delegate receives an instrumented `WebSocket`, so ordinary outgoing `send` calls are captured; the listener's `sendText` and `sendBinary` helpers are available when code still holds the raw socket. Install `DebugSwiftWebViewClient` on host WebViews. Android cannot intercept every networking stack globally, so clients using a different stack need an equivalent integration hook.
 
+### Network capture by stack
+
+Android has no process-wide hook like iOS's `URLProtocol`, so each networking stack is covered only once the host wires it in:
+
+| Stack | Captured | Injection (delay, failure, status, rewrite) | What the host adds |
+| --- | --- | --- | --- |
+| OkHttp, and libraries built on it (Retrofit, Coil, Glide's OkHttp integration, Apollo Kotlin) | Method, URL, status, timing, headers, bodies | Yes | `DebugSwiftOkHttpInterceptor()` on each `OkHttpClient` |
+| Ktor with the OkHttp engine | Same as OkHttp | Yes | `engine { addInterceptor(DebugSwiftOkHttpInterceptor()) }` |
+| OkHttp WebSockets | Connection, frames in both directions | No | Wrap the listener in `DebugSwiftWebSocketListener(url, listener)` |
+| Swift `URLSession` (Foundation on Android) | Whatever the host records | Yes, through `NetworkInjection.apply` | Call `NetworkRecorder.shared.record(...)` when a request finishes, and wrap the call in `NetworkInjection.apply` |
+| WebView | URL and host of each load only; WebViewClient exposes no status, timing or bodies | No | `DebugSwiftWebViewClient` on each WebView |
+| `HttpURLConnection`, Volley, Cronet, Ktor CIO or Android engines | Not captured | No | Record each exchange yourself with `AndroidDebugTools.recordNetwork(...)`, or move the client to OkHttp |
+
+Every captured request goes through `DebugSwiftNetworkSanitizer` before it is listed, saved or exported; set its rules from Swift with `DebugSwiftAndroidRuntime.configureNetworkSanitizer(_:)` or from Kotlin with `DebugSwiftNetworkSanitizer.configure(...)`.
+
 The runtime also exposes host hooks for custom actions and diagnostic values (`registerAction`, `registerInfo`), FCM tokens (`reportPushToken`), location (`reportLocation`), Room databases, and Realm projections (`DebugSwiftRealmRegistry.register`). Configure request thresholds with `AndroidDebugTools.setRequestThreshold(limit, windowSeconds)`, `setRequestTracking(enabled)`, `setThresholdBlocking(enabled)`, and `setThresholdAlert(emoji, message)`. Register endpoint limits with `setEndpointRequestThreshold(endpoint, limit, windowSeconds)` and remove them with `removeEndpointRequestThreshold(endpoint)`; inspect counts and logs with `getCurrentRequestCount(endpoint)` and `getThresholdLogs()`. Forward Activity touch events to `AndroidDebugTools.recordTouch(event)` and wrap a Compose subtree in `DebugSwiftComposeProbe` to collect those interface diagnostics.
 
 To share exported files from the Android system Sharesheet, merge the sample's `FileProvider` entry into the host app manifest and add `debugswift_file_paths.xml` under `res/xml`. Use authority `${applicationId}.debugswift.fileprovider`, disable provider export, enable URI grants, and expose only app-private `cache-path` and `files-path` locations. The sample manifest and resource file show the exact configuration. Export actions then open the native Android Sharesheet with a read-only content URI.
