@@ -36,7 +36,7 @@ final class TransitionPop: NSObject, UIViewControllerAnimatedTransitioning {
         containerView.addSubview(toVC.view)
         containerView.addSubview(fromVC.view)
 
-        let ballRect = FloatViewManager.shared.ballView.frame
+        let ballRect = FloatViewManager.shared.ballView.transitionFrame
         let startAnimationPath = UIBezierPath(roundedRect: toVC.view.bounds, cornerRadius: 0.1)
         let endAnimationPath = UIBezierPath(
             roundedRect: ballRect, cornerRadius: ballRect.size.height / 2
@@ -67,9 +67,11 @@ extension TransitionPop: CAAnimationDelegate {
             self?.transitionCtx?.completeTransition(true)
             self?.transitionCtx?.view(forKey: UITransitionContextViewKey.from)?.layer.mask = nil
             self?.transitionCtx?.view(forKey: UITransitionContextViewKey.to)?.layer.mask = nil
-            /// Show ball
+            /// Show the ball again, unless it was hidden before the debugger opened
             if FloatViewManager.shared.ballView.changeStatusInNextTransaction {
-                FloatViewManager.shared.ballView.show = true
+                if FloatViewManager.shared.ballView.restoresAfterDebugger {
+                    FloatViewManager.shared.ballView.show = true
+                }
             } else {
                 FloatViewManager.shared.ballView.changeStatusInNextTransaction = true
             }
