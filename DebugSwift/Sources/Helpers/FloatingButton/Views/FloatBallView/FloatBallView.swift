@@ -23,6 +23,9 @@ class FloatBallView: UIView {
     fileprivate var beginPoint: CGPoint?
 
     var changeStatusInNextTransaction = true
+    /// Whether the ball was on screen when the debugger opened, so closing the debugger brings it back.
+    /// An app that opens the debugger without the ball, from a shake for example, keeps it hidden.
+    var restoresAfterDebugger = false
     private var pendingAnimationWorkItem: DispatchWorkItem?
 
     lazy var label: UILabel = buildLabel()
@@ -58,6 +61,18 @@ class FloatBallView: UIView {
 
     var isShowing: Bool {
         WindowManager.window.contains(self) == true
+    }
+
+    /// Where the debugger opens from and closes into: the ball, or the middle of the window without one.
+    var transitionFrame: CGRect {
+        guard !show, !restoresAfterDebugger else { return frame }
+        let bounds = WindowManager.window.bounds
+        return CGRect(
+            x: bounds.midX - frame.width / 2,
+            y: bounds.midY - frame.height / 2,
+            width: frame.width,
+            height: frame.height
+        )
     }
 
     override func didMoveToSuperview() {

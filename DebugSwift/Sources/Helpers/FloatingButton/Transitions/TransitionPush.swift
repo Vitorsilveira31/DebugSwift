@@ -40,7 +40,7 @@ final class TransitionPush: NSObject, UIViewControllerAnimatedTransitioning {
         containerView.addSubview(fromVC.view)
         containerView.addSubview(toVC.view)
 
-        let ballRect = FloatViewManager.shared.ballView.frame
+        let ballRect = FloatViewManager.shared.ballView.transitionFrame
         let startAnimationPath = UIBezierPath(
             roundedRect: ballRect,
             cornerRadius: ballRect.size.height / 2
@@ -65,6 +65,7 @@ final class TransitionPush: NSObject, UIViewControllerAnimatedTransitioning {
         maskLayer.add(basicAnimation, forKey: "pathAnimation")
         /// Hidden ball
         if FloatViewManager.shared.ballView.changeStatusInNextTransaction {
+            FloatViewManager.shared.ballView.restoresAfterDebugger = FloatViewManager.shared.ballView.show
             FloatViewManager.shared.ballView.show = false
         } else {
             FloatViewManager.shared.ballView.changeStatusInNextTransaction = true
