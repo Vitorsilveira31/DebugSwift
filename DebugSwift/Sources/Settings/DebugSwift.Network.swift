@@ -89,6 +89,13 @@ extension DebugSwift {
         /// Whether to redact sensitive credentials (e.g. Authorization, Cookie) when copying cURL commands.
         /// Defaults to `true` for security.
         public var redactCurlCredentials = true
+
+        /// Rules that mask credentials and personal data in HAR exports and copied cURL commands:
+        /// headers, query parameters, the URL password, and JSON or form body fields.
+        /// Exports skip it only when redaction is turned off for that export.
+        ///
+        ///     DebugSwift.Network.shared.sanitizer.bodyKeys.insert("cpf")
+        public var sanitizer = NetworkSanitizer.default
         
         // MARK: - Threshold Limiter API
         

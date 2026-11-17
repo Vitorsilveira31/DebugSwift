@@ -16,30 +16,31 @@ enum HARExportAdapter {
 
     /// Convert one `HttpModel` into a `HARCapture`. The UIKit-bound `HttpModel` can't
     /// cross into the pure encoder, so this mapping is the seam that keeps the
-    /// encoder UIKit-free and macOS-testable. Redaction is on by default to avoid
-    /// leaking credentials into exports.
-    static func capture(from model: HttpModel, redact: Bool = true) -> HARCapture {
+    /// encoder UIKit-free and macOS-testable. Redaction is on by default and runs the
+    /// configured `NetworkSanitizer`, which masks headers, query parameters and body fields.
+    static func capture(
+        from model: HttpModel,
+        redact: Bool = true,
+        sanitizer: NetworkSanitizer = DebugSwift.Network.shared.sanitizer
+    ) -> HARCapture {
         let request = HARRequest(
             method: model.method ?? "GET",
             url: model.url?.absoluteString ?? "",
-            headers: redact
-                ? HAREncoder.redactHeaders(stringHeaders(model.requestHeaderFields))
-                : stringHeaders(model.requestHeaderFields),
+            headers: stringHeaders(model.requestHeaderFields),
             body: bodyString(model.requestData)
         )
         let response = HARResponse(
             status: Int(model.statusCode ?? "0") ?? 0,
-            headers: redact
-                ? HAREncoder.redactHeaders(stringHeaders(model.responseHeaderFields))
-                : stringHeaders(model.responseHeaderFields),
+            headers: stringHeaders(model.responseHeaderFields),
             body: bodyString(model.responseData)
         )
-        return HARCapture(
+        let capture = HARCapture(
             request: request,
             response: response,
             startedDateTime: Date(),
             time: Double(model.totalDuration ?? "0") ?? 0
         )
+        return redact ? sanitizer.sanitize(capture) : capture
     }
 
     /// Export the models as a HAR 1.2 JSON file and present the share sheet,
