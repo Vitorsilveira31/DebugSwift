@@ -34,6 +34,9 @@ enum WindowManager {
     }()
 
     static func presentDebugger() {
+        if !FloatViewManager.isShowingDebuggerView {
+            FeatureHandling.applyPendingPanelReload()
+        }
         guard !FloatViewManager.isShowingDebuggerView,
               let viewController = FloatViewManager.shared.floatViewController
         else { return }

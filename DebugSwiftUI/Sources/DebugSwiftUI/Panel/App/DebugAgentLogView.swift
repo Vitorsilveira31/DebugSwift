@@ -7,6 +7,11 @@ struct DebugAgentEntry: Decodable {
     let message: String
 }
 
+struct DebugAgentSnapshotResult: Decodable {
+    let path: String
+    let message: String
+}
+
 struct DebugAgentLogState: Decodable {
     let enabled: Bool
     let session: String
@@ -42,6 +47,14 @@ struct DebugAgentLogView: View {
                 Section {
                     Button("Share the log file") {
                         status = DebugSwiftAndroidRuntime.perform(featureID: "agent_debug_log", actionID: "export")
+                    }
+                    Button("Write snapshot") {
+                        switch DebugResourceClient.fetch("app.agentlog.snapshot", as: DebugAgentSnapshotResult.self) {
+                        case let .success(result):
+                            status = "\(result.message)\n\(result.path)"
+                        case let .failure(error):
+                            status = error.message
+                        }
                     }
                     Button("Clear the log", role: .destructive) {
                         status = DebugSwiftAndroidRuntime.perform(featureID: "agent_debug_log", actionID: "clear")

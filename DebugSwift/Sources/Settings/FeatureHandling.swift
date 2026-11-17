@@ -21,7 +21,7 @@ enum FeatureHandling {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             MainActor.assumeIsolated {
                 DebugSwift.App.shared.defaultControllers.removeAll(where: { !featuresToShow.contains($0.controllerType) })
-                FloatViewManager.setup(TabBarController())
+                installPanel()
             }
         }
     }
@@ -38,9 +38,37 @@ enum FeatureHandling {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             MainActor.assumeIsolated {
                 DebugSwift.App.shared.defaultControllers.removeAll(where: { features.contains($0.controllerType) })
-                FloatViewManager.setup(TabBarController())
+                installPanel()
             }
         }
+    }
+
+    private static var isPanelInstalled = false
+
+    /// Hands the floating ball the screen it opens: the host's `panelProvider`, or the UIKit tab bar.
+    static func installPanel() {
+        FloatViewManager.setup(DebugSwift.App.shared.panelProvider?() ?? TabBarController())
+        isPanelInstalled = true
+    }
+
+    /// Rebuilds the panel after `panelProvider` changes. Before setup has run there is nothing to
+    /// rebuild, and setup will read the provider itself; while the debugger is open the swap waits.
+    static func reloadPanelIfInstalled() {
+        guard isPanelInstalled else { return }
+        guard !FloatViewManager.isShowingDebuggerView else {
+            pendingPanelReload = true
+            return
+        }
+        installPanel()
+    }
+
+    private static var pendingPanelReload = false
+
+    /// Called before the debugger opens, to apply a provider set while it was last open.
+    static func applyPendingPanelReload() {
+        guard pendingPanelReload else { return }
+        pendingPanelReload = false
+        installPanel()
     }
 
     static func setupMethods(_ methodsToDisable: [DebugSwiftSwizzleFeature]) {

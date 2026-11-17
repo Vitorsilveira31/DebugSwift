@@ -854,13 +854,22 @@ object AndroidDebugTools {
         source: String = "http"
     ) {
         val graphOperation = graphqlOperation(requestBody)
+        // Mask before storing: the list, the history file, HAR, cURL and the agent log all read
+        // this record. Only replay needs the original request, so it stays in memory alone.
+        val sanitizer = DebugSwiftNetworkSanitizer
+        val requestType = headerValue(requestHeaders, "Content-Type")
+        val responseType = headerValue(responseHeaders, "Content-Type")
+        val safeUrl = sanitizer.sanitizeUrl(url)
         val record = NetworkRecord(
-                System.currentTimeMillis(), method, url, status, durationMs,
-                requestBytes, responseBytes, requestHeaders, responseHeaders,
-                requestBody.take(32_000), responseBody.take(64_000),
-                DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty(),
+                System.currentTimeMillis(), method, safeUrl, status, durationMs,
+                requestBytes, responseBytes,
+                sanitizer.sanitizeHeaders(requestHeaders), sanitizer.sanitizeHeaders(responseHeaders),
+                sanitizer.sanitizeBody(requestBody, requestType).take(32_000),
+                sanitizer.sanitizeBody(responseBody, responseType).take(64_000),
+                sanitizer.sanitizeBody(DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty(), "application/json"),
                 error, graphOperation, source
             )
+        rememberReplayRequest(record.id, ReplayRequest(url, requestHeaders, requestBody))
         networkRecords.add(record)
         trim(networkRecords)
         if (isPersistableNetworkRecord(record)) {
@@ -871,10 +880,10 @@ object AndroidDebugTools {
         appendAgentEntry(
             kind = "network",
             location = "OkHttp/$source",
-            message = "$method $url ($status)",
+            message = "$method $safeUrl ($status)",
             data = mapOf(
                 "method" to method,
-                "url" to url,
+                "url" to safeUrl,
                 "status" to status,
                 "durationMs" to durationMs,
                 "requestBytes" to requestBytes,
@@ -883,8 +892,25 @@ object AndroidDebugTools {
             )
         )
         recordThresholdRequest(url)
-        publishEvent("network", "$method $url ($status, ${durationMs}ms)")
+        publishEvent("network", "$method $safeUrl ($status, ${durationMs}ms)")
     }
+
+    /** The unmasked request behind a stored record, kept in memory only so replay can resend it. */
+    private data class ReplayRequest(
+        val url: String,
+        val headers: Map<String, List<String>>,
+        val body: String
+    )
+
+    private val replayRequests = object : LinkedHashMap<String, ReplayRequest>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ReplayRequest>?): Boolean = size > 500
+    }
+
+    private fun rememberReplayRequest(id: String, request: ReplayRequest) {
+        synchronized(replayRequests) { replayRequests[id] = request }
+    }
+
+    private fun replayRequest(record: NetworkRecord): ReplayRequest? = synchronized(replayRequests) { replayRequests[record.id] }
 
     fun setRequestDelay(milliseconds: Long) {
         requestDelayMs = milliseconds.coerceIn(0L, 60_000L)
@@ -1866,16 +1892,17 @@ object AndroidDebugTools {
                 val record = NetworkRecord(
                         timestamp = row.optLong("timestamp"),
                         method = row.optString("method"),
-                        url = row.optString("url"),
+                        url = DebugSwiftNetworkSanitizer.sanitizeUrl(row.optString("url")),
                         status = row.optInt("status"),
                         durationMs = row.optLong("durationMs"),
                         requestBytes = row.optLong("requestBytes"),
                         responseBytes = row.optLong("responseBytes"),
-                        requestHeaders = decodeHeaders(row.optJSONObject("requestHeaders")),
-                        responseHeaders = decodeHeaders(row.optJSONObject("responseHeaders")),
-                        requestBody = row.optString("requestBody"),
-                        responseBody = row.optString("responseBody"),
-                        decryptedResponseBody = row.optString("decryptedResponseBody"),
+                        // Files written before capture was masked hold raw values; mask them on load.
+                        requestHeaders = DebugSwiftNetworkSanitizer.sanitizeHeaders(decodeHeaders(row.optJSONObject("requestHeaders"))),
+                        responseHeaders = DebugSwiftNetworkSanitizer.sanitizeHeaders(decodeHeaders(row.optJSONObject("responseHeaders"))),
+                        requestBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("requestBody"), headerValue(decodeHeaders(row.optJSONObject("requestHeaders")), "Content-Type")),
+                        responseBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("responseBody"), headerValue(decodeHeaders(row.optJSONObject("responseHeaders")), "Content-Type")),
+                        decryptedResponseBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("decryptedResponseBody"), "application/json"),
                         error = row.optString("error"),
                         graphqlOperation = row.optString("graphqlOperation"),
                         source = row.optString("source", "http"),
@@ -1887,6 +1914,8 @@ object AndroidDebugTools {
                 }
             }
             trimNetworkHistory()
+            // Rewrite the file so raw values from older versions do not stay on disk.
+            persistNetworkHistory()
         }.onFailure { error ->
             log("Could not read saved network history: ${error.message}", Log.WARN)
         }
@@ -2357,11 +2386,16 @@ object AndroidDebugTools {
 
     private fun replayNetworkRecord(record: NetworkRecord): String {
         val method = record.method.uppercase(Locale.ROOT)
+        // Records loaded from the history file only have masked values, so their credentials are not resent.
+        val original = replayRequest(record)
+        val replayUrl = original?.url ?: record.url
+        val replayHeaders = original?.headers ?: record.requestHeaders
+        val replayBody = original?.body ?: record.requestBody
         val requestBody = if (method == "GET" || method == "HEAD") null else
-            record.requestBody.toRequestBody(headerValue(record.requestHeaders, "Content-Type")?.toMediaTypeOrNull())
+            replayBody.toRequestBody(headerValue(replayHeaders, "Content-Type")?.toMediaTypeOrNull())
         val request = runCatching {
-            Request.Builder().url(record.url).apply {
-                record.requestHeaders.forEach { (name, values) -> values.forEach { addHeader(name, it) } }
+            Request.Builder().url(replayUrl).apply {
+                replayHeaders.forEach { (name, values) -> values.forEach { addHeader(name, it) } }
             }.method(method, requestBody).build()
         }.getOrElse { return "Could not replay request: ${it.message ?: "invalid request"}" }
         val started = SystemClock.elapsedRealtime()
@@ -2369,15 +2403,15 @@ object AndroidDebugTools {
             override fun onFailure(call: Call, error: IOException) {
                 recordNetwork(
                     method = method,
-                    url = record.url,
+                    url = replayUrl,
                     status = 0,
                     durationMs = SystemClock.elapsedRealtime() - started,
-                    requestBytes = record.requestBody.toByteArray(StandardCharsets.UTF_8).size.toLong(),
+                    requestBytes = replayBody.toByteArray(StandardCharsets.UTF_8).size.toLong(),
                     responseBytes = 0,
-                    requestBody = record.requestBody,
+                    requestBody = replayBody,
                     responseBody = "",
                     error = error.localizedMessage ?: "Replay failed",
-                    requestHeaders = record.requestHeaders,
+                    requestHeaders = replayHeaders,
                     source = record.source
                 )
             }
@@ -2387,21 +2421,22 @@ object AndroidDebugTools {
                     val bytes = it.body?.bytes() ?: ByteArray(0)
                     recordNetwork(
                         method = method,
-                        url = record.url,
+                        url = replayUrl,
                         status = it.code,
                         durationMs = SystemClock.elapsedRealtime() - started,
-                        requestBytes = record.requestBody.toByteArray(StandardCharsets.UTF_8).size.toLong(),
+                        requestBytes = replayBody.toByteArray(StandardCharsets.UTF_8).size.toLong(),
                         responseBytes = bytes.size.toLong(),
-                        requestBody = record.requestBody,
+                        requestBody = replayBody,
                         responseBody = String(bytes, StandardCharsets.UTF_8),
-                        requestHeaders = record.requestHeaders,
+                        requestHeaders = replayHeaders,
                         responseHeaders = it.headers.toMultimap(),
                         source = record.source
                     )
                 }
             }
         })
-        return "Request replay started. Its response will appear in the request list."
+        val note = if (original == null) " Masked credentials from the saved history are not resent." else ""
+        return "Request replay started. Its response will appear in the request list.$note"
     }
 
     private fun filteredWebSocketConnections(): List<WebSocketConnectionRecord> {
@@ -2752,6 +2787,59 @@ object AndroidDebugTools {
             .put("appFileCount", appFiles.size)
             .put("appFileBytes", appFiles.sumOf { it.length() })
             .toString()
+    }
+
+    /**
+     * Writes `agent-snapshot.json` next to the agent log: app, device, current resource use and the
+     * latest requests. Same schema as the Swift `AgentSnapshot` (Documentation/AGENT-SNAPSHOT.md).
+     * Stored records are already sanitized, so their URLs go out as they are.
+     */
+    fun writeAgentSnapshot(): JSONObject {
+        val context = appContext ?: return JSONObject().put("error", "Android runtime has not been installed.")
+        val sample = JSONObject(performanceSampleJSON())
+        val packageInfo = runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
+        val build = packageInfo?.let { if (Build.VERSION.SDK_INT >= 28) it.longVersionCode else @Suppress("DEPRECATION") it.versionCode.toLong() }
+        val network = JSONArray()
+        networkRecords.toList().filter { it.source == "http" }.takeLast(50).forEach { record ->
+            network.put(JSONObject()
+                .put("method", record.method)
+                .put("url", record.url)
+                .put("status", record.status)
+                .put("durationMs", record.durationMs)
+                .apply { if (record.error.isNotEmpty()) put("error", record.error) })
+        }
+        val logFile = File(context.filesDir, AGENT_LOG_FILENAME)
+        val snapshot = JSONObject()
+            .put("schemaVersion", 1)
+            .put("generatedAt", System.currentTimeMillis())
+            .put("platform", "android")
+            .put("app", JSONObject()
+                .put("bundleId", context.packageName)
+                .put("version", packageInfo?.versionName.orEmpty())
+                .put("build", build?.toString().orEmpty()))
+            .put("device", JSONObject()
+                .put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
+                .put("osVersion", "Android ${Build.VERSION.RELEASE}"))
+            .put("metrics", JSONObject()
+                .put("cpuPercent", sample.optDouble("cpuPercent", 0.0))
+                .put("memoryBytes", sample.optLong("usedMemory").toDouble())
+                .put("fps", sample.optDouble("fps", 0.0)))
+            .put("network", network)
+            .put("agentLog", JSONObject()
+                .put("path", logFile.absolutePath)
+                .put("enabled", agentLogEnabled)
+                .put("sessionId", agentLogSessionID))
+        val file = File(context.filesDir, "agent-snapshot.json")
+        return runCatching {
+            file.writeText(snapshot.toString(2))
+            appendAgentEntry(
+                kind = "lifecycle",
+                location = "AgentDebugLog.writeSnapshot",
+                message = "agent snapshot written",
+                data = mapOf("path" to file.absolutePath)
+            )
+            JSONObject().put("path", file.absolutePath).put("message", "Snapshot written to ${file.name}.")
+        }.getOrElse { JSONObject().put("error", "Could not write the snapshot: ${it.message}") }
     }
 
     /** Structured state for the Push Notifications screen. */

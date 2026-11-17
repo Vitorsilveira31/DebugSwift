@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import UIKit
 
 // MARK: - AgentDebugLog
 
@@ -157,6 +158,10 @@ final class AgentDebugLog: @unchecked Sendable {
         Agent session id:
           \(sessionId)
 
+        Snapshot (current state, written on demand):
+          \(currentLogPath().deletingLastPathComponent().appendingPathComponent(AgentSnapshot.fileName).path)
+          Schema: Documentation/AGENT-SNAPSHOT.md in the DebugSwift repository.
+
         Each line is an NDJSON object with fields:
           sessionId, location, message, data, kind,
           hypothesisId, runId, timestamp (ms since epoch).
@@ -261,6 +266,76 @@ final class AgentDebugLog: @unchecked Sendable {
     func contents() -> String {
         let url = currentLogPath()
         return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    // MARK: - Snapshot
+
+    /// Writes `agent-snapshot.json` next to the NDJSON log: app, device, current CPU and memory,
+    /// and the latest requests with sanitized URLs. Schema: `Documentation/AGENT-SNAPSHOT.md`.
+    @MainActor
+    @discardableResult
+    func writeSnapshot() throws -> URL {
+        let logPath = currentLogPath()
+        let info = Bundle.main.infoDictionary ?? [:]
+        let sanitizer = DebugSwift.Network.shared.sanitizer
+        let requests = HttpDatasource.shared.httpModels.suffix(AgentSnapshot.defaultRequestLimit).map { model in
+            AgentSnapshot.Request(
+                method: model.method ?? "GET",
+                url: sanitizer.sanitize(url: model.url?.absoluteString ?? ""),
+                status: Int(model.statusCode ?? "") ?? 0,
+                durationMs: Self.milliseconds(fromDuration: model.totalDuration),
+                error: model.errorLocalizedDescription ?? model.errorDescription
+            )
+        }
+        var metrics: [String: Double] = ["cpuPercent": BatteryMonitor.currentCPUUsage()]
+        if let memory = Self.residentMemoryBytes() {
+            metrics["memoryBytes"] = memory
+        }
+        metrics["activeLeaks"] = Double(PerformanceLeakDetector.shared.leaks.filter(\.isActive).count)
+        let snapshot = AgentSnapshot(
+            platform: "ios",
+            app: [
+                "bundleId": Bundle.main.bundleIdentifier ?? "",
+                "version": info["CFBundleShortVersionString"] as? String ?? "",
+                "build": info["CFBundleVersion"] as? String ?? ""
+            ],
+            device: [
+                "model": UIDevice.current.model,
+                "osVersion": "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
+            ],
+            metrics: metrics,
+            network: Array(requests),
+            agentLog: AgentSnapshot.AgentLog(
+                path: logPath.path,
+                enabled: enabled,
+                sessionId: ProcessInfo.processInfo.environment["AGENT_DEBUG_SESSION_ID"] ?? ""
+            )
+        )
+        let url = try snapshot.write(toDirectory: logPath.deletingLastPathComponent())
+        record(
+            kind: .lifecycle,
+            location: "AgentDebugLog.writeSnapshot",
+            message: "agent snapshot written",
+            data: ["path": url.path]
+        )
+        return url
+    }
+
+    /// `HttpModel.totalDuration` reads like "0.1234 (s)".
+    static func milliseconds(fromDuration text: String?) -> Int {
+        let number = text?.split(separator: " ").first.flatMap { Double($0) } ?? 0
+        return Int((number * 1000).rounded())
+    }
+
+    private static func residentMemoryBytes() -> Double? {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? Double(info.resident_size) : nil
     }
 
     // MARK: - Console mirror

@@ -49,6 +49,7 @@ object DebugSwiftAppAPI {
                 "app.push.state" -> JSONObject(AndroidDebugTools.pushStateJSON())
                 "app.push.token" -> JSONObject().put("token", AndroidDebugTools.pushTokenValue())
                 "app.agentlog.state" -> JSONObject(AndroidDebugTools.agentLogStateJSON())
+                "app.agentlog.snapshot" -> AndroidDebugTools.writeAgentSnapshot()
                 "app.realm" -> realm()
                 "app.libraries" -> libraries(context)
                 "app.crashes" -> crashes(context)
