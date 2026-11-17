@@ -3,10 +3,9 @@ DebugSwift
 </h1>
 
 <p align="center">
-<img src="https://img.shields.io/badge/Platforms-iOS%2016.0+-blue.svg"/>
-<img src="https://img.shields.io/github/v/release/DebugSwift/DebugSwift?style=flat&label=Swift%20Package%20Index&color=red"/>    
-<img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FDebugSwift%2FDebugSwift%2Fbadge%3Ftype%3Dswift-versions"/>
-<img src="https://img.shields.io/github/license/DebugSwift/DebugSwift?style=flat"/>
+<img src="https://img.shields.io/badge/Platforms-iOS%2017.0+%20%7C%20Android-blue.svg"/>
+<img src="https://img.shields.io/badge/Swift-6.0+-orange.svg"/>
+<img src="https://img.shields.io/github/license/uaipi/DebugSwift?style=flat"/>
 </p>
 <p align="center">
 <a href="https://trendshift.io/repositories/12656" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12656" alt="DebugSwift%2FDebugSwift | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
@@ -28,6 +27,20 @@ DebugSwift
 <img width="1970" alt="Image" src="https://github.com/user-attachments/assets/a435a660-a4b2-4a3f-852e-a7bf0709e75e" />
 <img width="1970" alt="Image" src="https://github.com/user-attachments/assets/15f34de1-214f-4bc3-95bc-b25efc2d383e" />
 
+## About this fork
+
+This is [uaipi/DebugSwift](https://github.com/uaipi/DebugSwift), a fork of [DebugSwift/DebugSwift](https://github.com/DebugSwift/DebugSwift) that brings the toolkit to Android through [Skip Fuse](https://skip.tools) while keeping most of the code in Swift. What the fork adds:
+
+- **DebugSwiftCore**: Foundation-only network types (recorder, HAR and cURL export, GraphQL parser, injection rules, sanitizer, agent snapshot) that compile for iOS and Android.
+- **DebugSwiftUI**: one SwiftUI debug panel for both platforms. On Android, Skip Fuse runs the Swift natively and renders it with Compose; Kotlin covers only what Swift cannot reach.
+- **Android runtime**: crash, ANR, frame, network, storage, push and log capture, reached from Swift over JNI, plus a sample app in `Example/Android`.
+- **Data protection**: credentials and personal data are masked in headers, query strings, URL passwords and JSON or form bodies before they are stored or exported. See [Sensitive data](#sensitive-data).
+- **Agent support**: an NDJSON event log and an on-demand state snapshot that coding agents can read. See [Debugging with coding agents](#debugging-with-coding-agents).
+
+The [parity audit](Documentation/PARITY-AUDIT.md) tracks where the Android version stands against iOS.
+
+The fork publishes no releases or tags yet, so install it from the `main` branch. The upstream package, its CocoaPods trunk pod and its prebuilt XCFramework do not contain the fork's changes.
+
 ## 📋 Table of Contents
 
 - [🚀 Features](#features)
@@ -46,13 +59,25 @@ DebugSwift
 
 The Swift package exports `DebugSwift`, `DebugSwiftCore` and `DebugSwiftUI`. `DebugSwiftUI` is a Skip Fuse module: `DebugPanel` and the five area screens are plain SwiftUI that runs natively on iOS and Android. UIKit representables host the iOS-only inspectors, Android platform services live in Kotlin inside the same module, and Swift reaches them over JNI. Call `DebugSwiftAndroidRuntime.install()` at launch on Android to start crash, ANR, frame and network capture early; opening the panel installs it too.
 
-Build the Android sample with `skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android`. Android networking capture and request injection require the host to add the provided OkHttp interceptor (or a matching hook for its networking stack). Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented in [the Android sample guide](Example/Android/README.md).
+Build the Android sample with `skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android`. Android networking capture and request injection require the host to add the provided OkHttp interceptor (or a matching hook for its networking stack); [the Android sample guide](Example/Android/README.md#network-capture-by-stack) lists what each stack needs. Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented there too.
+
+### One panel on iOS too
+
+On iOS the floating ball opens the UIKit tab bar by default. To try the shared SwiftUI panel, the one Android shows, add the `DebugSwiftUI` product and switch the ball over after setup. Screens not yet rewritten in SwiftUI open their UIKit version inside the panel:
+
+```swift
+import DebugSwiftUI
+
+DebugSwift().setup().show()
+DebugSwiftSharedPanel.useForFloatingBall()
+// DebugSwiftSharedPanel.useUIKitPanel() goes back to the tab bar.
+```
 
 ## DebugSwiftCore (Skip Fuse)
 
 `DebugSwiftCore` is a Foundation-only product with no UIKit, so it builds natively for iOS and for Android through Skip Fuse. It holds the network types that do not depend on a UI or a networking stack: HAR and cURL export, the GraphQL parser, injection and rewrite rules, URL pattern matching, and `NetworkRecorder`.
 
-Feed the recorder from whatever transport the app uses; it keeps a bounded history, masks `Authorization`, `Cookie` and `Set-Cookie` on ingestion, and truncates large bodies:
+Feed the recorder from whatever transport the app uses; it keeps a bounded history, masks credentials on ingestion (see [Sensitive data](#sensitive-data)), and truncates large bodies:
 
 ```swift
 import DebugSwiftCore
@@ -73,6 +98,50 @@ for await _ in await NetworkRecorder.shared.changes() {
 `DebugSwift` re-exports the module, so existing `import DebugSwift` code keeps compiling. A dynamic library exports its public symbols, so add the dependency only to debug builds: have the package manifest drop it for store builds, then confirm the release binary has no `DebugSwiftCore` symbols.
 
 Run the Core tests on the macOS host without building the UIKit target: `swift build --build-system native --product DebugSwiftPackageTests && swift test --build-system native --skip-build`.
+
+## Sensitive data
+
+Captured traffic often carries secrets outside the headers: `?access_token=` in a URL, `user:password@` in a host, an OAuth token in a fragment, a password in a login body. `NetworkSanitizer` masks all of them before a request is stored or exported, on both platforms:
+
+| Where | Masked by default |
+|---|---|
+| Headers | `Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`, `X-API-Key`, `X-Auth-Token`, `X-Access-Token`, `X-CSRF-Token` |
+| Query string and form-style fragment | `access_token`, `refresh_token`, `id_token`, `token`, `api_key`, `apikey`, `password`, `secret`, `client_secret`, `signature`, `sig`, `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token` |
+| JSON (any depth) and `x-www-form-urlencoded` bodies | `password`, `passwd`, `new_password`, `old_password`, `access_token`, `refresh_token`, `id_token`, `token`, `client_secret`, `secret`, `api_key`, `apikey`, `card_number`, `cvv`, `cvc`, `ssn` |
+| URL user info | the password |
+
+Names match ignoring case, `_` and `-`, so `accessToken` and `Access-Token` match `access_token`. Add your own fields, or a redactor for formats the rules do not parse:
+
+```swift
+var sanitizer = NetworkSanitizer.default
+sanitizer.bodyKeys.formUnion(["cpf", "birth_date"])
+sanitizer.queryParameters.insert("session")
+sanitizer.customBodyRedactor = { body, contentType in body } // runs after the built-in rules
+
+// Every capture path, on iOS and Android (DebugSwiftUI):
+await DebugSwiftAndroidRuntime.configureNetworkSanitizer(sanitizer)
+// iOS UIKit exports only (DebugSwift):
+DebugSwift.Network.shared.sanitizer = sanitizer
+```
+
+Where it applies:
+
+- **iOS**: HAR export and copied cURL commands. The in-app request list shows the raw request, as before; turn `redactCurlCredentials` off to copy a raw cURL.
+- **Android**: on capture. The request list, the saved network history, HAR, cURL and the agent log only ever see masked values. Replay keeps the original request in memory so it still authenticates; history entries loaded after a restart replay without their masked credentials. History files written by older versions are masked and rewritten on the next launch.
+- **`NetworkRecorder`** (both): on ingestion. `customBodyRedactor` runs only here and in the iOS exports, not in the Kotlin capture.
+
+## Debugging with coding agents
+
+DebugSwift writes two files a coding agent can read from the app's sandbox:
+
+- `agent-debug.ndjson`, a timeline of network calls, console output, crashes and events, one JSON object per line. Turn it on with the `agentDebugLog` beta feature on iOS or the Agent Debug Log screen on Android.
+- `agent-snapshot.json`, the app's state at one moment: app and device, CPU and memory, the latest 50 requests with sanitized URLs, and where the log lives. Write it from the Agent Debug Log screen, or from code, for example in a test failure handler:
+
+```swift
+let url = try DebugSwift.App.writeAgentSnapshot()
+```
+
+Pull them from a simulator with `xcrun simctl get_app_container booted <bundle-id> data` (both are in `Documents`), or from an Android device with `adb exec-out run-as <package> cat files/agent-snapshot.json`. The snapshot schema is in [Documentation/AGENT-SNAPSHOT.md](Documentation/AGENT-SNAPSHOT.md).
 
 ## Features
 
@@ -122,30 +191,28 @@ Add to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/DebugSwift/DebugSwift.git", from: "1.0.0")
+    .package(url: "https://github.com/uaipi/DebugSwift.git", branch: "main")
 ]
 ```
 
-Or add through Xcode: `File` > `Add Package Dependencies` > Enter URL:
+Then add the product you need to your target: `DebugSwift` (iOS UIKit tools), `DebugSwiftCore` (Foundation-only network types) or `DebugSwiftUI` (the shared panel, required on Android).
+
+Or add through Xcode: `File` > `Add Package Dependencies` > Enter URL, then pick the `main` branch:
 ```
-https://github.com/DebugSwift/DebugSwift
+https://github.com/uaipi/DebugSwift
 ```
 
 ### 🎯 CocoaPods
 
-#### Option 1: Source Distribution (Standard)
+CocoaPods installs the iOS UIKit tools (`DebugSwift` with `DebugSwiftCore` compiled in). The shared SwiftUI panel and Android support need Swift Package Manager.
+
 Add to your `Podfile`:
 
 ```ruby
-pod 'DebugSwift'
+pod 'DebugSwift', :git => 'https://github.com/uaipi/DebugSwift.git', :branch => 'main'
 ```
 
-#### Option 2: XCFramework Distribution (Faster Builds) ⚡
-Add to your `Podfile`:
-
-```ruby
-pod 'DebugSwift', :http => 'https://github.com/DebugSwift/DebugSwift/releases/latest/download/DebugSwift.xcframework.zip'
-```
+`pod 'DebugSwift'` without `:git`, and the prebuilt XCFramework from the upstream releases page, install the upstream project without this fork's changes.
 
 ### 🍎 Apple Silicon Support
 
@@ -295,8 +362,8 @@ pod 'DebugSwift', '~> 1.8.1'
 # Swift Package Manager - update to latest
 ```
 
-#### Solution 2: Use XCFramework Distribution (Recommended)
-For faster builds and guaranteed architecture compatibility:
+#### Solution 2: Use the upstream XCFramework
+The upstream project publishes a prebuilt XCFramework. It does not include this fork's changes, and the fork does not publish one yet:
 
 ```ruby
 pod 'DebugSwift', :http => 'https://github.com/DebugSwift/DebugSwift/releases/latest/download/DebugSwift.xcframework.zip'

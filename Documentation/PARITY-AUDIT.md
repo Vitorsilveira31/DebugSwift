@@ -11,9 +11,10 @@ How each Android entry is rated:
   input field). It runs, but it is not the iOS experience.
 - **Gap**: the iOS capability does not exist on Android yet.
 
-The state below was measured on an Android 17 emulator by opening every entry of the Voltrace debug
-panel: 52 of 52 entries opened without crashing the app. This says the screens load and render;
-it does not say each button does what the iOS one does.
+The state below was measured on an Android 17 emulator by opening every entry of a host app's debug
+panel. That run covered 52 entries and all of them opened without crashing the app; the panel now
+has 53 (see the summary), so one entry has not been through that check. Opening a screen says it
+loads and renders; it does not say each button does what the iOS one does.
 
 ## Summary
 
@@ -41,8 +42,8 @@ Android has 53 entries and every one has a dedicated screen.
   all threads, retained Activities with a GC recheck, StrictMode violations, memory warning
   simulation and the on-screen widget.
 - Push: a simulator that posts real notifications (scenarios, templates, behavior options, a live
-  history with per-entry actions), and the registration token with a copy button; Voltrace reports
-  its Firebase token to it.
+  history with per-entry actions), and the registration token with a copy button; the host app
+  reports its Firebase token to it.
 - Installed libraries from the process maps and from the APK, the agent debug log with capture on and
   off and the newest entries, and the Realm browser for what the host registers.
 - Floating debug button: a draggable button over the app that opens the panel. The setting and the
@@ -59,7 +60,7 @@ Android has 53 entries and every one has a dedicated screen.
    verbatim, so the screen prints control characters (and crashes `uiautomator` when it reads them).
    The exit record should show reason, description, time and a decoded abort message only.
 2. **Swift traffic is invisible to the Kotlin network tools.** Fixed. Capture on Android hooks OkHttp and
-   WebView. An app whose networking is Swift (Foundation on Android, like Voltrace) never reaches
+   WebView. An app whose networking is Swift (Foundation on Android) never reaches
    them, so HTTP, GraphQL, HAR, history and thresholds look empty even while requests happen. The
    Core-based inspector (`NetworkInspectorView`) does see that traffic.
 3. **Network injection cannot touch Swift networking.** Fixed; the host wraps its transport call in `NetworkInjection.apply`.

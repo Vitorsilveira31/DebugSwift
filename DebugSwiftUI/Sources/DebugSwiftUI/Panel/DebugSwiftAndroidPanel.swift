@@ -1,3 +1,4 @@
+import DebugSwiftCore
 import Foundation
 
 import SwiftUI
@@ -1188,6 +1189,12 @@ public enum DebugSwiftAndroidRuntime {
         DebugSwift().setup()
         isIOSDebuggerPrepared = true
     }
+
+    /// Records that the host already ran `DebugSwift().setup()`, so the hosted UIKit screens do not run it again.
+    @MainActor
+    static func markIOSDebuggerPrepared() {
+        isIOSDebuggerPrepared = true
+    }
     #endif
 
     /// Starts the Android runtime (crash and ANR capture, frame monitor, network history). Call it once
@@ -1202,6 +1209,28 @@ public enum DebugSwiftAndroidRuntime {
         return installed
         #else
         return false
+        #endif
+    }
+
+    /// Sets the rules that mask credentials and personal data in captured traffic, on every capture
+    /// path: the shared `NetworkRecorder`, the iOS HAR and cURL exports, and on Android the OkHttp
+    /// capture, its saved history and its exports. `customBodyRedactor` runs only for Swift capture.
+    public static func configureNetworkSanitizer(_ sanitizer: NetworkSanitizer) async {
+        await NetworkRecorder.shared.setSanitizer(sanitizer)
+        #if os(iOS)
+        await MainActor.run { DebugSwift.Network.shared.sanitizer = sanitizer }
+        #elseif os(Android)
+        let rules: [String: [String]] = [
+            "headers": sanitizer.headers.sorted(),
+            "queryParameters": sanitizer.queryParameters.sorted(),
+            "bodyKeys": sanitizer.bodyKeys.sorted()
+        ]
+        var payload: [String: Any] = rules
+        payload["redactsURLPassword"] = sanitizer.redactsURLPassword
+        if let data = try? JSONSerialization.data(withJSONObject: payload),
+           let json = String(data: data, encoding: .utf8) {
+            DebugSwiftNativeBridge.configureNetworkSanitizer(json)
+        }
         #endif
     }
 

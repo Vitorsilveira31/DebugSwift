@@ -278,4 +278,28 @@ final class HARExportTests: XCTestCase {
         let redactedCurl = HARExportAdapter.copyCURL(model)
         XCTAssertTrue(redactedCurl.contains("-H 'Authorization: <redacted>'"))
     }
+
+    func testCopyCURL_masksQueryTokensAndBodyFields() {
+        let model = makeHttpModel()
+        model.url = URL(string: "https://example.com/login?access_token=abc&page=1")
+        model.requestData = "{\"password\":\"hunter2\"}".data(using: .utf8)
+
+        let curl = HARExportAdapter.copyCURL(model, redact: true)
+
+        XCTAssertTrue(curl.contains("access_token=%3Credacted%3E&page=1"))
+        XCTAssertTrue(curl.contains("<redacted>"))
+        XCTAssertFalse(curl.contains("hunter2"))
+        XCTAssertFalse(curl.contains("abc"))
+    }
+
+    func testCapture_usesTheConfiguredSanitizer() {
+        let model = makeHttpModel()
+        model.requestData = "{\"cpf\":\"123\"}".data(using: .utf8)
+        var sanitizer = NetworkSanitizer.default
+        sanitizer.bodyKeys.insert("cpf")
+
+        let capture = HARExportAdapter.capture(from: model, sanitizer: sanitizer)
+
+        XCTAssertEqual(capture.request.body, "{\"cpf\":\"<redacted>\"}")
+    }
 }

@@ -134,6 +134,7 @@ final class AgentDebugLogViewController: BaseController {
         stackView.addArrangedSubview(makeSectionHeader("Actions"))
         stackView.addArrangedSubview(makeActionButton("Copy instructions", action: #selector(copyDescriptionTapped)))
         stackView.addArrangedSubview(makeActionButton("Share log file", action: #selector(shareTapped)))
+        stackView.addArrangedSubview(makeActionButton("Write snapshot", action: #selector(snapshotTapped)))
         stackView.addArrangedSubview(makeActionButton("Clear log", action: #selector(clearTapped)))
         stackView.addArrangedSubview(makeActionButton("Refresh", action: #selector(refreshTapped)))
     }
@@ -275,6 +276,16 @@ final class AgentDebugLogViewController: BaseController {
         log.clear()
         showToast(message: "Log cleared")
         refresh()
+    }
+
+    @objc private func snapshotTapped() {
+        do {
+            let url = try log.writeSnapshot()
+            refresh()
+            showToast(message: "Snapshot written to \(url.lastPathComponent)")
+        } catch {
+            showToast(message: "Could not write the snapshot: \(error.localizedDescription)")
+        }
     }
 
     @objc private func refreshTapped() {

@@ -1,0 +1,74 @@
+name: Core tests and Android build
+
+# The iOS Example suite runs in danger.yml. This workflow covers what that one does not:
+# the Foundation-only Core tests and the Android build of the Skip Fuse modules.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: DebugSwiftCore tests (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build the test product
+        # The native build system builds only what the tests need, so the UIKit target is skipped.
+        run: swift build --build-system native --product DebugSwiftPackageTests
+
+      - name: Run the tests
+        run: swift test --build-system native --skip-build
+
+  android-build:
+    name: Android sample (Skip Fuse)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Skip
+        run: brew install skiptools/skip/skip
+
+      - name: Install the Swift Android SDK matching the host toolchain
+        run: |
+          version=$(swift --version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)
+          echo "Host Swift $version"
+          skip android sdk install --version "$version"
+          skip android sdk list
+
+      - name: Export and build the Android sample
+        run: skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android
+
+      - name: Upload the build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: skip-android-build
+          path: build/skip-android
+          if-no-files-found: ignore
+          retention-days: 7
