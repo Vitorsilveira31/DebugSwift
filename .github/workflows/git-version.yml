@@ -144,25 +144,23 @@ jobs:
         
         echo "RC base version: ${RC_BASE_VERSION}"
         
-        # Find existing RC tags for this version
-        EXISTING_RCS=$(git tag -l "rc-${MAJOR}.${NEXT_MINOR}.*" | sort -V)
-        
-        if [ -z "$EXISTING_RCS" ]; then
-          # First RC for this version
-          RC_TAG="rc-${RC_BASE_VERSION}"
-          echo "Creating first RC: $RC_TAG"
-        else
-          # Get the last RC tag and increment patch
-          LAST_RC=$(echo "$EXISTING_RCS" | tail -1)
-          echo "Last RC tag: $LAST_RC"
-          
-          # Extract patch version from last RC (rc-1.12.5 -> 5)
-          RC_PATCH=$(echo $LAST_RC | sed 's/rc-//' | cut -d. -f3)
-          NEXT_RC_PATCH=$((RC_PATCH + 1))
-          
-          RC_TAG="rc-${MAJOR}.${NEXT_MINOR}.${NEXT_RC_PATCH}"
-          echo "Creating next RC: $RC_TAG"
+        # Release candidates are SemVer pre-releases of the next version (1.1.0-rc.1, 1.1.0-rc.2, ...),
+        # so Swift Package Manager can resolve them. Numbering continues after the older rc-X.Y.Z
+        # tags, each of which counts as one candidate for the same version.
+        LAST_RC_NUMBER=0
+        for tag in $(git tag -l "${RC_BASE_VERSION}-rc.*"); do
+          number="${tag#"${RC_BASE_VERSION}-rc."}"
+          case "$number" in
+            ''|*[!0-9]*) continue ;;
+          esac
+          if [ "$number" -gt "$LAST_RC_NUMBER" ]; then LAST_RC_NUMBER="$number"; fi
+        done
+        if [ "$LAST_RC_NUMBER" -eq 0 ]; then
+          LAST_RC_NUMBER=$(git tag -l "rc-${MAJOR}.${NEXT_MINOR}.*" | wc -l | tr -d ' ')
         fi
+
+        RC_TAG="${RC_BASE_VERSION}-rc.$((LAST_RC_NUMBER + 1))"
+        echo "Creating RC: $RC_TAG"
         
         echo "Final RC tag: $RC_TAG"
         echo "rc_tag=$RC_TAG" >> $GITHUB_OUTPUT

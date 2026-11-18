@@ -39,7 +39,7 @@ This is [uaipi/DebugSwift](https://github.com/uaipi/DebugSwift), a fork of [Debu
 
 The [parity audit](Documentation/PARITY-AUDIT.md) tracks where the Android version stands against iOS.
 
-Each merge to `main` publishes a release candidate tagged `rc-X.Y.Z` on the [releases page](https://github.com/uaipi/DebugSwift/releases). Those tags are not semantic versions, so Swift Package Manager cannot resolve them with a version requirement: install from the `main` branch, or pin the commit a tag points to. The upstream package, its CocoaPods trunk pod and its prebuilt XCFramework do not contain the fork's changes.
+Each merge to `main` publishes a release candidate of the next version, tagged `X.Y.Z-rc.N` (for example `1.1.0-rc.2`), on the [releases page](https://github.com/uaipi/DebugSwift/releases). Swift Package Manager picks a pre-release only when the requirement names one, so depend on `from: "1.1.0-rc.2"` to follow the candidates, or on the `main` branch. Final versions such as `1.1.0` come from the manual release workflow. The older `rc-1.1.0` tag is not a semantic version and Swift Package Manager ignores it. The upstream package, its CocoaPods trunk pod and its prebuilt XCFramework do not contain the fork's changes.
 
 ## 📋 Table of Contents
 
