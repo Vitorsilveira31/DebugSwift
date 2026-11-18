@@ -41,8 +41,10 @@ jobs:
 
     - name: Extract version from tag
       id: extract_version
+      env:
+        # Passed through the environment, not interpolated into the script, so the input is data.
+        TAG_NAME: ${{ github.event.inputs.tag_name }}
       run: |
-        TAG_NAME="${{ github.event.inputs.tag_name }}"
         # Remove 'v' prefix if present
         VERSION=$(echo "$TAG_NAME" | sed 's/^v//')
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT

@@ -1,6 +1,6 @@
 name: Core tests and Android build
 
-# The iOS Example suite runs in danger.yml. This workflow covers what that one does not:
+# The iOS Example suite runs in ios-tests.yml. This workflow covers what that one does not:
 # the Foundation-only Core tests and the Android build of the Skip Fuse modules.
 on:
   pull_request:

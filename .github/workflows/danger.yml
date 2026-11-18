@@ -1,62 +1,59 @@
-name: CI and Danger
+name: Danger
 
+# pull_request_target gives this workflow a token that can comment on pull requests, including
+# those from forks. In exchange it must never run the pull request's code: it checks out the base
+# branch (the default for this event), so the Dangerfile and every tool it builds come from code
+# already merged, and Danger reads the pull request only as data through the GitHub API.
+# Building and testing the pull request happens in ios-tests.yml and platforms.yml, which use the
+# pull_request event with a read-only token.
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, edited, assigned, unassigned]
     branches:
       - main
-  pull_request_review:
-    types: [submitted]
+
+permissions: {}
+
+concurrency:
+  group: danger-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  ci:
-    name: CI Build, Tests & Danger
-    if: |
-      github.event.pull_request.head.repo.full_name == github.repository ||
-      (github.event_name == 'pull_request_review' && github.event.review.state == 'approved') ||
-      contains(github.event.pull_request.labels.*.name, 'run-ci')
+  danger:
+    name: Danger
     permissions:
       contents: read
       pull-requests: write
       issues: write
       statuses: write
     runs-on: macos-latest
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Checkout the base branch
+        # Do not add a ref: the pull request's head would run with this job's write token.
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set up Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          # The package and the Example need iOS 17 and Swift 6; use the image's newest Xcode
-          # so its simulators match what the test lane picks.
-          xcode-version: latest-stable
-
-      - name: Run Fastlane tests
+      - name: Fetch the Danger package
         env:
-          # fastlane fails to decode xcodebuild output without a UTF-8 locale.
-          LANG: en_US.UTF-8
-          LC_ALL: en_US.UTF-8
+          # Pinned: this code is built and run with the write token.
+          DANGER_SWIFT_REPO: https://github.com/DebugSwift/DangerSwift
+          DANGER_SWIFT_SHA: 40173f82d65ee135cfd08bbb154fd49989a93e06
         run: |
-          cd Example
-          bundle install
-          bundle exec fastlane test
-      
-      - name: Setup Danger
-        run: |
-          git clone https://github.com/DebugSwift/DangerSwift && rm -rf DangerSwift/.git Readme.md
-          mv DangerSwift/* .
+          git init -q .danger
+          git -C .danger fetch -q --depth 1 "$DANGER_SWIFT_REPO" "$DANGER_SWIFT_SHA"
+          git -C .danger checkout -q FETCH_HEAD
+          cp Dangerfile.swift .danger/
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
 
-      - name: Danger Stage
+      - name: Run Danger
+        working-directory: .danger
         run: |
           npm install -g danger@13.0.10
           swift build
