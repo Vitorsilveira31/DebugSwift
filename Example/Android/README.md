@@ -16,6 +16,17 @@ The export directory contains debug and release APK/AAB artifacts. Install the d
 adb install -r build/skip-android/DebugSwiftAndroidSample-debug.apk
 ```
 
+## Run the instrumented tests
+
+`Android/app/src/androidTest` drives the panel on a device: it checks the area list, a console message logged from Swift, a captured request with its token masked, and a saved crash report. With an emulator or device connected, run:
+
+```sh
+cd Example/Android/Android
+ANDROID_HOME=~/Library/Android/sdk gradle connectedDebugAndroidTest
+```
+
+Set `ANDROID_SERIAL` to pick one device when several are connected. CI builds the APKs for x86_64 with `SKIP_EXPORT_ARCHS=x86_64 gradle assembleDebug assembleDebugAndroidTest`, then runs them on a Linux emulator with `run-instrumented-tests.sh`.
+
 ## Add the debugger to an Android host app
 
 The `DebugSwiftAndroid` product is part of the repository’s root Swift package. Add the DebugSwift repository as a Swift package dependency, add the `DebugSwiftUI` product, and use `DebugSwiftAndroidPanel()` as the app’s shared SwiftUI root. The sample package and Android Activity show how Skip generates the Compose host.
