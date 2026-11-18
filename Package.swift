@@ -25,8 +25,8 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/skiptools/skip.git", from: "1.9.11"),
-        .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
-        .package(url: "https://source.skip.tools/skip-fuse-ui.git", from: "1.0.0")
+        .package(url: "https://github.com/skiptools/skip-fuse.git", from: "1.0.0"),
+        .package(url: "https://github.com/skiptools/skip-fuse-ui.git", from: "1.0.0")
     ],
     targets: [
         // Foundation-only, no UIKit: compiles natively for iOS and Android (Skip Fuse).
