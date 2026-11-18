@@ -38,6 +38,10 @@ android {
         // applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
         // versionCode = CURRENT_PROJECT_VERSION
         // versionName = MARKETING_VERSION
+
+        // Instrumented tests in src/androidTest; the runner keeps the crash test's probe from
+        // ending the test process.
+        testInstrumentationRunner = "debug.swift.android.sample.DebugSwiftTestRunner"
     }
 
     buildFeatures {
@@ -87,4 +91,17 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
+}
+
+dependencies {
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(testLibs.androidx.test.runner)
+    androidTestImplementation(testLibs.androidx.test.rules)
+    androidTestImplementation(testLibs.androidx.test.ext.junit)
+    // The Compose test artifacts bring Espresso 3.5, which fails on current Android versions.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+    // Puts the activities ActivityScenario launches into the app's own manifest. Left only in the
+    // test APK they run in another process, and closing each test waits 45 seconds for a timeout.
+    debugImplementation(testLibs.androidx.test.core)
 }

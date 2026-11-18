@@ -72,3 +72,73 @@ jobs:
           path: build/skip-android
           if-no-files-found: ignore
           retention-days: 7
+
+  android-test-apks:
+    name: Android instrumented test APKs
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Skip
+        run: brew install skiptools/skip/skip
+
+      - name: Install the Swift Android SDK matching the host toolchain
+        run: |
+          version=$(swift --version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)
+          skip android sdk install --version "$version"
+
+      - name: Build the sample and its instrumented tests for x86_64
+        # GitHub's Apple silicon runners cannot run an Android emulator, so the tests run on an
+        # x86_64 emulator in the next job, on Linux with KVM.
+        working-directory: Example/Android/Android
+        env:
+          SKIP_EXPORT_ARCHS: x86_64
+        run: gradle assembleDebug assembleDebugAndroidTest --console=plain
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: android-test-apks
+          path: |
+            Example/Android/.build/Android/app/outputs/apk/debug/app-debug.apk
+            Example/Android/.build/Android/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 3
+
+  android-instrumented-tests:
+    name: Android instrumented tests (emulator)
+    needs: android-test-apks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: android-test-apks
+          path: apks
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run the tests on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: Example/Android/Android/run-instrumented-tests.sh apks
