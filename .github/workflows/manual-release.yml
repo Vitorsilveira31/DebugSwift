@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: 'Tag name for the release (e.g., v1.0.0)'
+        description: 'SemVer tag for the release, without a v prefix (e.g., 1.1.0)'
         required: true
       release_name:
         description: 'Release name'
