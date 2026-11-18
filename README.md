@@ -39,7 +39,7 @@ This is [uaipi/DebugSwift](https://github.com/uaipi/DebugSwift), a fork of [Debu
 
 The [parity audit](Documentation/PARITY-AUDIT.md) tracks where the Android version stands against iOS.
 
-The fork publishes no releases or tags yet, so install it from the `main` branch. The upstream package, its CocoaPods trunk pod and its prebuilt XCFramework do not contain the fork's changes.
+Each merge to `main` publishes a release candidate tagged `rc-X.Y.Z` on the [releases page](https://github.com/uaipi/DebugSwift/releases). Those tags are not semantic versions, so Swift Package Manager cannot resolve them with a version requirement: install from the `main` branch, or pin the commit a tag points to. The upstream package, its CocoaPods trunk pod and its prebuilt XCFramework do not contain the fork's changes.
 
 ## 📋 Table of Contents
 

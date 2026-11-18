@@ -1,17 +1,14 @@
 // MARK: Imports
 
 import Danger
-import DangerSwiftCoverage
-import DangerXCodeSummary
 import Foundation
 
 // MARK: Validate
 
+// This file runs from the base branch with a token that can comment (see danger.yml), so it checks
+// only what the GitHub API reports about the pull request. Tests, coverage and SwiftLint need the
+// pull request's code and run in ios-tests.yml instead.
 Validator.shared.validate()
-
-// MARK: Lint
-
-SwiftLint.lint(configFile: ".swiftlint.yml")
 
 // MARK: Validation rules
 
@@ -43,7 +40,6 @@ internal class Validator {
     internal func validate() {
         checkSize()
         checkDescription()
-        checkUnitTest()
         checkAssignee()
         checkModifiedFiles()
         checkFails()
@@ -78,23 +74,6 @@ internal class DescriptionValidator {
     }
 }
 
-internal class UnitTestValidator {
-    // MARK: Lifecycle
-    // Private initializer and shared instance for UnitTestValidator.
-
-    private init() {}
-    internal static let shared = UnitTestValidator()
-    private var danger = Danger()
-
-    // Methods
-    // Methods for unit test validation.
-
-    internal func validate() {
-        checkUnitTestSummary()
-        checkUnitTestCoverage()
-    }
-}
-
 // MARK: Validator Methods
 // Extension with methods for Validator class.
 
@@ -113,10 +92,6 @@ fileprivate extension Validator {
 
     func checkDescription() {
         DescriptionValidator.shared.validate()
-    }
-
-    func checkUnitTest() {
-        UnitTestValidator.shared.validate()
     }
 
     func checkAssignee() {
@@ -175,27 +150,5 @@ fileprivate extension Danger.File {
 
     var isDangerfile: Bool {
         self == "Dangerfile.swift"
-    }
-}
-
-// MARK: UnitTestValidator Methods
-// Extension with methods for UnitTestValidator class.
-
-fileprivate extension UnitTestValidator {
-    func checkUnitTestSummary() {
-        let file = "build/reports/errors.json"
-        if FileManager.default.fileExists(atPath: file) {
-            let summary = XCodeSummary(filePath: file) { result in
-                result.category != .warning
-            }
-            summary.report()
-        }
-    }
-
-    func checkUnitTestCoverage() {
-        Coverage.xcodeBuildCoverage(
-            .xcresultBundle("Example/fastlane/test_output/Example.xcresult"),
-            minimumCoverage: 70
-        )
     }
 }
