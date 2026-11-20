@@ -135,7 +135,7 @@ one and can be retired.
 | oslog_console (Logcat) | Dedicated | level and text filters |
 | device_info, custom_info, custom_actions | Dedicated | key/value rows and run buttons. Host actions in Swift already have a route through `DebugTool` and `DebugActionGroup` |
 | push_simulator | Dedicated | permission, send, scenarios, templates, behavior options and history; posts real notifications |
-| push_token | Dedicated | shows the token the app reports with `DebugSwiftAndroidRuntime.reportPushToken` and copies it |
+| push_token | Dedicated | shows the token the app reports with `DebugSwiftRuntime.reportPushToken` and copies it |
 | deep_links | Dedicated | opens any URI as a link intent |
 | location | Dedicated | mock position for the GPS, network and fused providers (the app must be the chosen mock location app) |
 | loaded_libraries | Dedicated | process maps plus the native libraries packed in the APK |

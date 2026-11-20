@@ -23,7 +23,7 @@ struct DebugDeepLinksView: View {
             }
         }
         .navigationTitle("Deep Links")
-        .onAppear { lastLink = DebugSwiftAndroidRuntime.snapshot(featureID: "deep_links") }
+        .onAppear { lastLink = DebugSwiftRuntime.snapshot(featureID: "deep_links") }
     }
 
     func open() {

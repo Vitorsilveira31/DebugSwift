@@ -19,14 +19,17 @@
 #   SIM_ID      UDID of the simulator (default: first booted device)
 #   BUNDLE_ID   bundle identifier of the app (default: Example's)
 #   SCHEME      Xcode scheme to build (default: Example)
-#   PROJECT     path to the .xcodeproj (default: Example/Example.xcodeproj)
+#   PROJECT     path to the .xcodeproj (default: Example/Darwin/Example.xcodeproj)
+#   SKIP_ACTION what the Xcode "Run skip gradle" phase does with Android: none (default),
+#               build, or launch (runs the same app on the open Android emulator too)
 #   DERIVED     derived-data path (default: a sibling of the project)
 
 # ── Config (all overridable) ─────────────────────────────────────────────
 SIM_ID     ?= $(shell xcrun simctl list devices booted -j | python3 -c 'import sys,json; d=json.load(sys.stdin)["devices"]; u=[x["udid"] for v in d.values() for x in v if x["state"]=="Booted"]; print(u[0] if u else "")')
 BUNDLE_ID  ?= com.maatheusgois.debugswift.Example
 SCHEME     ?= Example
-PROJECT    ?= Example/Example.xcodeproj
+PROJECT    ?= Example/Darwin/Example.xcodeproj
+SKIP_ACTION ?= none
 CONFIG     ?= Debug
 DERIVED    ?= $(PWD)/build/DerivedData
 
@@ -46,6 +49,9 @@ build: ## Build the scheme for the simulator
 		-configuration $(CONFIG) \
 		-destination 'platform=iOS Simulator,id=$(SIM_ID)' \
 		-derivedDataPath $(DERIVED) \
+		-skipPackagePluginValidation \
+		-skipMacroValidation \
+		SKIP_ACTION=$(SKIP_ACTION) \
 		build 2>&1 | tail -5
 
 install: ## Install the built app to the booted simulator

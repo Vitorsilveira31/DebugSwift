@@ -46,7 +46,7 @@ struct DebugAgentLogView: View {
                 }
                 Section {
                     Button("Share the log file") {
-                        status = DebugSwiftAndroidRuntime.perform(featureID: "agent_debug_log", actionID: "export")
+                        status = DebugSwiftRuntime.perform(featureID: "agent_debug_log", actionID: "export")
                     }
                     Button("Write snapshot") {
                         switch DebugResourceClient.fetch("app.agentlog.snapshot", as: DebugAgentSnapshotResult.self) {
@@ -57,7 +57,7 @@ struct DebugAgentLogView: View {
                         }
                     }
                     Button("Clear the log", role: .destructive) {
-                        status = DebugSwiftAndroidRuntime.perform(featureID: "agent_debug_log", actionID: "clear")
+                        status = DebugSwiftRuntime.perform(featureID: "agent_debug_log", actionID: "clear")
                         load()
                     }
                     if !status.isEmpty {
@@ -93,7 +93,7 @@ struct DebugAgentLogView: View {
 
     func set(_ on: Bool, current: Bool) {
         guard on != current else { return }
-        status = DebugSwiftAndroidRuntime.perform(featureID: "agent_debug_log", actionID: "toggle")
+        status = DebugSwiftRuntime.perform(featureID: "agent_debug_log", actionID: "toggle")
         load()
     }
 

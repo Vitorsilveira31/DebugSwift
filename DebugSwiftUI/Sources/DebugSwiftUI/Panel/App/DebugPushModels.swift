@@ -52,7 +52,7 @@ struct DebugPushState: Decodable {
 @MainActor
 enum DebugPush {
     static func act(_ actionID: String, _ value: String = "") -> String {
-        DebugSwiftAndroidRuntime.perform(featureID: "push_simulator", actionID: actionID, value: value)
+        DebugSwiftRuntime.perform(featureID: "push_simulator", actionID: actionID, value: value)
     }
 
     static func setOption(_ key: String, _ value: String) -> String {

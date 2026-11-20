@@ -34,7 +34,7 @@ struct DebugPushTokenView: View {
             }
             if !hasToken {
                 Section {
-                    Text(verbatim: "The app reports its token with DebugSwiftAndroidRuntime.reportPushToken(_:) when it learns it. Notification permission and Google services must be available.")
+                    Text(verbatim: "The app reports its token with DebugSwiftRuntime.reportPushToken(_:) when it learns it. Notification permission and Google services must be available.")
                         .font(.caption)
                         .foregroundColor(Color.secondary)
                 }

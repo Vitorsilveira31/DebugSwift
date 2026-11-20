@@ -13,7 +13,7 @@ struct DebugCustomActionsView: View {
             }
             ForEach(0..<titles.count, id: \.self) { index in
                 Button(titles[index]) {
-                    status = DebugSwiftAndroidRuntime.perform(
+                    status = DebugSwiftRuntime.perform(
                         featureID: "custom_actions",
                         actionID: "run_custom",
                         value: titles[index],
@@ -31,7 +31,7 @@ struct DebugCustomActionsView: View {
     }
 
     func load() {
-        titles = DebugSwiftAndroidRuntime.snapshot(featureID: "custom_actions")
+        titles = DebugSwiftRuntime.snapshot(featureID: "custom_actions")
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map(String.init)
             .filter { !$0.hasPrefix("No custom actions") }

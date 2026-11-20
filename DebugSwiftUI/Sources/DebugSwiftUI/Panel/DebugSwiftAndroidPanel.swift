@@ -445,7 +445,7 @@ struct DebugSwiftGridOverlaySettingsView: View {
             }
         }
         .navigationTitle("Grid overlay")
-        .onAppear { settings = DebugSwiftAndroidRuntime.gridOverlaySettings() }
+        .onAppear { settings = DebugSwiftRuntime.gridOverlaySettings() }
     }
 
     func colorButton(_ index: Int) -> some View {
@@ -464,7 +464,7 @@ struct DebugSwiftGridOverlaySettingsView: View {
         var updated = settings
         change(&updated)
         settings = updated
-        _ = DebugSwiftAndroidRuntime.setGridOverlaySettings(updated)
+        _ = DebugSwiftRuntime.setGridOverlaySettings(updated)
     }
 }
 
@@ -512,12 +512,12 @@ struct DebugSwiftInterfaceSettingView: View {
                     get: { isEnabled },
                     set: { enabled in
                         isEnabled = enabled
-                        DebugSwiftAndroidRuntime.setInterfaceSetting(featureID: featureID, enabled: enabled)
+                        DebugSwiftRuntime.setInterfaceSetting(featureID: featureID, enabled: enabled)
                     }
                 ))
             }
         }
-        .onAppear { isEnabled = DebugSwiftAndroidRuntime.interfaceSettingIsEnabled(featureID: featureID) }
+        .onAppear { isEnabled = DebugSwiftRuntime.interfaceSettingIsEnabled(featureID: featureID) }
     }
 }
 
@@ -615,7 +615,7 @@ struct DebugSwiftNetworkThresholdView: View {
                 Button("Refresh") { refresh() }
                 Button("Clear History", role: ButtonRole.destructive) { confirmsHistoryClear = true }
                 Button("Export Logs") {
-                    statusMessage = DebugSwiftAndroidRuntime.perform(featureID: "network_thresholds", actionID: "export")
+                    statusMessage = DebugSwiftRuntime.perform(featureID: "network_thresholds", actionID: "export")
                 }
             }
 
@@ -647,7 +647,7 @@ struct DebugSwiftNetworkThresholdView: View {
     }
 
     private func apply(_ actionID: String, value: String = "") {
-        statusMessage = DebugSwiftAndroidRuntime.perform(
+        statusMessage = DebugSwiftRuntime.perform(
             featureID: "network_thresholds",
             actionID: actionID,
             value: value
@@ -670,7 +670,7 @@ struct DebugSwiftNetworkThresholdView: View {
     }
 
     private func refresh() {
-        let rows = DebugSwiftAndroidRuntime.snapshot(featureID: "network_thresholds").components(separatedBy: "\n")
+        let rows = DebugSwiftRuntime.snapshot(featureID: "network_thresholds").components(separatedBy: "\n")
         let settings = rows.first?.components(separatedBy: "|") ?? []
         if settings.count >= 7, settings[0] == "threshold" {
             trackingEnabled = settings[1] == "true"
@@ -824,7 +824,7 @@ struct DebugSwiftSecurityAuditView: View {
     }
 
     private func refresh() {
-        audit = DebugSwiftAndroidRuntime.securityAuditSnapshot()
+        audit = DebugSwiftRuntime.securityAuditSnapshot()
         hasRun = true
     }
 }
@@ -912,7 +912,7 @@ struct DebugSwiftConsoleView: View {
     }
 
     private func refresh() {
-        let snapshot = DebugSwiftAndroidRuntime.snapshot(featureID: "console")
+        let snapshot = DebugSwiftRuntime.snapshot(featureID: "console")
         guard let data = snapshot.data(using: .utf8),
               let messages = try? JSONDecoder().decode([String].self, from: data) else {
             entries = []
@@ -924,7 +924,7 @@ struct DebugSwiftConsoleView: View {
     }
 
     private func perform(_ actionID: String, value: String = "") {
-        statusMessage = DebugSwiftAndroidRuntime.perform(
+        statusMessage = DebugSwiftRuntime.perform(
             featureID: "console",
             actionID: actionID,
             value: value
@@ -938,7 +938,7 @@ struct DebugSwiftIOSNativeInterfaceHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        DebugSwiftRuntime.prepareIOSDebugger()
         return DebugSwift.debugInterfaceViewController(for: featureID) ?? UIViewController()
     }
 
@@ -949,7 +949,7 @@ struct DebugSwiftIOSNativeResourceHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        DebugSwiftRuntime.prepareIOSDebugger()
         return DebugSwift.debugResourceViewController(for: featureID) ?? UIViewController()
     }
 
@@ -960,7 +960,7 @@ struct DebugSwiftIOSNativeAppHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        DebugSwiftRuntime.prepareIOSDebugger()
         return DebugSwift.debugAppViewController(for: featureID) ?? UIViewController()
     }
 
@@ -971,7 +971,7 @@ struct DebugSwiftIOSNativeNetworkHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        DebugSwiftRuntime.prepareIOSDebugger()
         return DebugSwift.debugNetworkViewController(for: featureID) ?? UIViewController()
     }
 
@@ -982,7 +982,7 @@ struct DebugSwiftIOSNativePerformanceHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        DebugSwiftRuntime.prepareIOSDebugger()
         return DebugSwift.debugPerformanceViewController(for: featureID) ?? UIViewController()
     }
 
@@ -1010,7 +1010,7 @@ struct DebugSwiftFeatureDetail: View {
                         if actionID == "refresh" {
                             refresh()
                         } else {
-                            output = DebugSwiftAndroidRuntime.perform(featureID: feature.id, actionID: actionID, value: command)
+                            output = DebugSwiftRuntime.perform(featureID: feature.id, actionID: actionID, value: command)
                         }
                     }
                 }
@@ -1031,7 +1031,7 @@ struct DebugSwiftFeatureDetail: View {
     }
 
     func refresh() {
-        output = DebugSwiftAndroidRuntime.snapshot(featureID: feature.id)
+        output = DebugSwiftRuntime.snapshot(featureID: feature.id)
     }
 
     var actionIDs: [String] {
@@ -1178,15 +1178,39 @@ struct DebugSwiftFeatureDetail: View {
     }
 }
 
-/// Platform facade used by the shared panel and by Android host integrations.
-public enum DebugSwiftAndroidRuntime {
+@available(*, deprecated, renamed: "DebugSwiftRuntime")
+public typealias DebugSwiftAndroidRuntime = DebugSwiftRuntime
+
+/// DebugSwift's entry point on iOS and Android: one `install` at launch, and the panel to show.
+///
+///     DebugSwiftRuntime.install(actions: [...], betaFeatures: [.agentDebugLog])
+///     .sheet(isPresented: $showsDebugger) { DebugSwiftRuntime.panel { showsDebugger = false } }
+///
+/// On iOS it sets up the DebugSwift debugger and makes its floating ball open the shared panel. On
+/// Android it starts the Kotlin runtime (crash, ANR, frame and log capture), the capture of Swift
+/// `URLSession` traffic, and the floating button.
+public enum DebugSwiftRuntime {
+    /// Beta features, by the same names on both platforms. Android turns them on from the panel.
+    public enum BetaFeature: String, CaseIterable, Sendable {
+        case swiftUIRenderTracking
+        case networkSessionPersistence
+        /// Writes network, crash, console and debug events to an NDJSON file a coding agent can read.
+        case agentDebugLog
+    }
+
+    @MainActor static var panelTitle = "Debug"
+    @MainActor static var panelTools: [DebugTool] = []
+    @MainActor static var panelActions: [DebugActionGroup] = []
+    @MainActor static var panelInfo: [DebugInfoGroup] = []
+
     #if os(iOS)
     @MainActor private static var isIOSDebuggerPrepared = false
+    @MainActor private static var isIOSFloatingBallVisible = false
 
     @MainActor
-    static func prepareIOSDebugger() {
+    static func prepareIOSDebugger(betaFeatures: [BetaFeature] = []) {
         guard !isIOSDebuggerPrepared else { return }
-        DebugSwift().setup()
+        DebugSwift().setup(enableBetaFeatures: betaFeatures.compactMap { DebugSwiftBetaFeature(rawValue: $0.rawValue) })
         isIOSDebuggerPrepared = true
     }
 
@@ -1197,19 +1221,86 @@ public enum DebugSwiftAndroidRuntime {
     }
     #endif
 
-    /// Starts the Android runtime (crash and ANR capture, frame monitor, network history). Call it once
-    /// at launch from the host app; opening the panel installs it too, so it is safe to call twice.
-    /// Does nothing on iOS, where `DebugSwift().setup()` plays this role.
+    /// Starts DebugSwift. Call it once at launch; calling it again only updates the panel's content.
+    ///
+    /// - Parameters:
+    ///   - title: The panel's title.
+    ///   - tools: The host's own screens, listed at the top of the panel.
+    ///   - actions: Buttons that run host code, for example "Clear user data".
+    ///   - info: Read-only rows, for example the API URL.
+    ///   - betaFeatures: Features still in beta to turn on (iOS; Android turns them on from the panel).
+    ///   - showsFloatingButton: Shows the floating button that opens the panel.
+    /// - Returns: Whether the platform runtime is running.
     @discardableResult
-    public static func install() -> Bool {
+    @MainActor
+    public static func install(
+        title: String = "Debug",
+        tools: [DebugTool] = [],
+        actions: [DebugActionGroup] = [],
+        info: [DebugInfoGroup] = [],
+        betaFeatures: [BetaFeature] = [],
+        showsFloatingButton: Bool = true
+    ) -> Bool {
+        panelTitle = title
+        panelTools = tools
+        panelActions = actions
+        panelInfo = info
+        #if os(iOS)
+        prepareIOSDebugger(betaFeatures: betaFeatures)
+        DebugSwiftSharedPanel.useForFloatingBall(title: title, tools: tools, actions: actions, info: info)
+        isFloatingButtonVisible = showsFloatingButton
+        return true
+        #else
+        let installed = startRuntime()
+        isFloatingButtonVisible = showsFloatingButton
+        return installed
+        #endif
+    }
+
+    /// Starts the platform services without touching the panel's content. The panel calls it when it
+    /// opens, so a host that never called `install` still gets the Android runtime.
+    @discardableResult
+    @MainActor
+    static func startRuntime() -> Bool {
         #if os(Android)
         let installed = DebugSwiftNativeBridge.install()
         DebugSwiftNetworkForwarder.start()
-        Task { @MainActor in DebugFloatingButton.startListening() }
+        DebugSwiftURLSessionCapture.install()
+        DebugFloatingButton.startListening()
         return installed
         #else
         return false
         #endif
+    }
+
+    /// The debug panel with the content given to `install`. Present it as a sheet or a full screen.
+    @MainActor
+    public static func panel(onDone: (@MainActor () -> Void)? = nil) -> some View {
+        DebugSwiftRuntimePanel(onDone: onDone)
+    }
+
+    /// The floating ball on iOS, the floating button on Android. Both open the panel.
+    @MainActor
+    public static var isFloatingButtonVisible: Bool {
+        get {
+            #if os(iOS)
+            return isIOSFloatingBallVisible
+            #else
+            return DebugFloatingButton.isEnabled
+            #endif
+        }
+        set {
+            #if os(iOS)
+            isIOSFloatingBallVisible = newValue
+            if newValue {
+                DebugSwift().show()
+            } else {
+                DebugSwift().hide()
+            }
+            #else
+            DebugFloatingButton.setEnabled(newValue)
+            #endif
+        }
     }
 
     /// Sets the rules that mask credentials and personal data in captured traffic, on every capture

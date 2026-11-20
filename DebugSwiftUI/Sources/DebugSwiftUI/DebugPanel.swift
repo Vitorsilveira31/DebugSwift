@@ -80,7 +80,7 @@ public struct DebugPanel: View {
                 }
             }
             .navigationTitle(title)
-            .task { DebugSwiftAndroidRuntime.install() }
+            .task { DebugSwiftRuntime.startRuntime() }
             .toolbar {
                 if let onDone {
                     ToolbarItem(placement: .confirmationAction) {

@@ -27,12 +27,12 @@ struct DebugPerformanceWidgetView: View {
     }
 
     func refresh() {
-        isShown = DebugSwiftAndroidRuntime.snapshot(featureID: "performance_widget").hasPrefix("Widget is active")
+        isShown = DebugSwiftRuntime.snapshot(featureID: "performance_widget").hasPrefix("Widget is active")
     }
 
     func set(_ shown: Bool) {
         guard shown != isShown else { return }
-        status = DebugSwiftAndroidRuntime.perform(featureID: "performance_widget", actionID: "toggle")
+        status = DebugSwiftRuntime.perform(featureID: "performance_widget", actionID: "toggle")
         refresh()
     }
 }

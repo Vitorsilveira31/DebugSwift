@@ -28,7 +28,7 @@ struct DebugKeyValueView: View {
     }
 
     func load() {
-        rows = DebugSwiftAndroidRuntime.snapshot(featureID: featureID)
+        rows = DebugSwiftRuntime.snapshot(featureID: featureID)
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map { line in
                 guard let separator = line.range(of: ": ") else { return DebugKeyValueRow(name: String(line), value: "") }

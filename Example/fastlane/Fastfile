@@ -23,12 +23,15 @@ lane :test do
   device = test_device
   UI.message("Testing on #{device}")
   scan(
-    project:                          "Example.xcodeproj",
+    project:                          "Darwin/Example.xcodeproj",
     scheme:                           "Example",
     derived_data_path:                "fastlane/test_output",
     clean:                            true,
     result_bundle:                    true,
     code_coverage:                    true,
-    device:                           device
+    device:                           device,
+    # Trusts the Skip build plugin without the Xcode prompt, and skips the Run skip gradle phase:
+    # this lane tests iOS only; platforms.yml builds and tests the Android app.
+    xcargs:                           "-skipPackagePluginValidation -skipMacroValidation SKIP_ZERO=1"
   )
 end

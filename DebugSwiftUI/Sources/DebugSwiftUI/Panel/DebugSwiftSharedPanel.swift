@@ -18,7 +18,7 @@ public enum DebugSwiftSharedPanel {
         actions: [DebugActionGroup] = [],
         info: [DebugInfoGroup] = []
     ) {
-        DebugSwiftAndroidRuntime.markIOSDebuggerPrepared()
+        DebugSwiftRuntime.markIOSDebuggerPrepared()
         DebugSwift.App.shared.panelProvider = {
             DebugSwiftSharedPanelController(
                 rootView: AnyView(

@@ -236,13 +236,13 @@ struct DebugSwiftNetworkInjectionView: View {
                 Button("Import CSV") { showingCSVImporter = true }
                     .sheet(isPresented: $showingCSVImporter) {
                         DebugSwiftNetworkInjectionCSVImporter { csv in
-                            statusMessage = DebugSwiftAndroidRuntime.importNetworkInjectionRulesCSV(csv)
+                            statusMessage = DebugSwiftRuntime.importNetworkInjectionRulesCSV(csv)
                             loadSettings()
                         }
                     }
                 Spacer()
                 Button("Export CSV") {
-                    statusMessage = DebugSwiftAndroidRuntime.exportNetworkInjectionRulesCSV()
+                    statusMessage = DebugSwiftRuntime.exportNetworkInjectionRulesCSV()
                 }
             }
             if settings.rewrite.rules.contains(where: { $0.urlPattern == "*" }) {
@@ -404,7 +404,7 @@ struct DebugSwiftNetworkInjectionView: View {
     }
 
     private func loadSettings() {
-        let json = DebugSwiftAndroidRuntime.networkInjectionSettingsJSON()
+        let json = DebugSwiftRuntime.networkInjectionSettingsJSON()
         guard let data = json.data(using: .utf8),
               let decoded = try? JSONDecoder().decode(DebugSwiftNetworkInjectionSettings.self, from: data) else {
             statusMessage = "Could not load network injection settings."
@@ -419,7 +419,7 @@ struct DebugSwiftNetworkInjectionView: View {
             statusMessage = "Could not encode settings."
             return
         }
-        statusMessage = DebugSwiftAndroidRuntime.applyNetworkInjectionSettingsJSON(json)
+        statusMessage = DebugSwiftRuntime.applyNetworkInjectionSettingsJSON(json)
         loadSettings()
     }
 }

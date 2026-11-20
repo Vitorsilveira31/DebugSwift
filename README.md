@@ -5,7 +5,7 @@ DebugSwift
 <p align="center">
 <img src="https://img.shields.io/badge/Platforms-iOS%2017.0+%20%7C%20Android-blue.svg"/>
 <img src="https://img.shields.io/badge/Swift-6.0+-orange.svg"/>
-<img src="https://img.shields.io/github/license/uaipi/DebugSwift?style=flat"/>
+<img src="https://img.shields.io/github/license/Vitorsilveira31/DebugSwift?style=flat"/>
 </p>
 <p align="center">
 <a href="https://trendshift.io/repositories/12656" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12656" alt="DebugSwift%2FDebugSwift | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
@@ -29,17 +29,17 @@ DebugSwift
 
 ## About this fork
 
-This is [uaipi/DebugSwift](https://github.com/uaipi/DebugSwift), a fork of [DebugSwift/DebugSwift](https://github.com/DebugSwift/DebugSwift) that brings the toolkit to Android through [Skip Fuse](https://skip.tools) while keeping most of the code in Swift. What the fork adds:
+This is [Vitorsilveira31/DebugSwift](https://github.com/Vitorsilveira31/DebugSwift), a fork of [DebugSwift/DebugSwift](https://github.com/DebugSwift/DebugSwift) that brings the toolkit to Android through [Skip Fuse](https://skip.tools) while keeping most of the code in Swift. What the fork adds:
 
 - **DebugSwiftCore**: Foundation-only network types (recorder, HAR and cURL export, GraphQL parser, injection rules, sanitizer, agent snapshot) that compile for iOS and Android.
 - **DebugSwiftUI**: one SwiftUI debug panel for both platforms. On Android, Skip Fuse runs the Swift natively and renders it with Compose; Kotlin covers only what Swift cannot reach.
-- **Android runtime**: crash, ANR, frame, network, storage, push and log capture, reached from Swift over JNI, plus a sample app in `Example/Android`.
+- **Android runtime**: crash, ANR, frame, network, storage, push and log capture, reached from Swift over JNI, plus one Example app in `Example/` whose SwiftUI screens run on both iOS and Android.
 - **Data protection**: credentials and personal data are masked in headers, query strings, URL passwords and JSON or form bodies before they are stored or exported. See [Sensitive data](#sensitive-data).
 - **Agent support**: an NDJSON event log and an on-demand state snapshot that coding agents can read. See [Debugging with coding agents](#debugging-with-coding-agents).
 
 The [parity audit](Documentation/PARITY-AUDIT.md) tracks where the Android version stands against iOS.
 
-Each merge to `main` publishes a release candidate of the next version, tagged `X.Y.Z-rc.N` (for example `1.1.0-rc.2`), on the [releases page](https://github.com/uaipi/DebugSwift/releases). Swift Package Manager picks a pre-release only when the requirement names one, so depend on `from: "1.1.0-rc.2"` to follow the candidates, or on the `main` branch. Final versions such as `1.1.0` come from the manual release workflow. The older `rc-1.1.0` tag is not a semantic version and Swift Package Manager ignores it. The upstream package, its CocoaPods trunk pod and its prebuilt XCFramework do not contain the fork's changes.
+Each merge to `main` publishes a release candidate of the next version, tagged `X.Y.Z-rc.N` (for example `1.1.0-rc.2`), on the [releases page](https://github.com/Vitorsilveira31/DebugSwift/releases). Swift Package Manager picks a pre-release only when the requirement names one, so depend on `from: "1.1.0-rc.2"` to follow the candidates, or on the `main` branch. Final versions such as `1.1.0` come from the manual release workflow. The older `rc-1.1.0` tag is not a semantic version and Swift Package Manager ignores it. The upstream package, its CocoaPods trunk pod and its prebuilt XCFramework do not contain the fork's changes.
 
 ## 📋 Table of Contents
 
@@ -57,21 +57,27 @@ Each merge to `main` publishes a release candidate of the next version, tagged `
 
 ## Android with Skip
 
-The Swift package exports `DebugSwift`, `DebugSwiftCore` and `DebugSwiftUI`. `DebugSwiftUI` is a Skip Fuse module: `DebugPanel` and the five area screens are plain SwiftUI that runs natively on iOS and Android. UIKit representables host the iOS-only inspectors, Android platform services live in Kotlin inside the same module, and Swift reaches them over JNI. Call `DebugSwiftAndroidRuntime.install()` at launch on Android to start crash, ANR, frame and network capture early; opening the panel installs it too.
+The Swift package exports `DebugSwift`, `DebugSwiftCore` and `DebugSwiftUI`. `DebugSwiftUI` is a Skip Fuse module: `DebugPanel` and the five area screens are plain SwiftUI that runs natively on iOS and Android. UIKit representables host the iOS-only inspectors, Android platform services live in Kotlin inside the same module, and Swift reaches them over JNI. Swift `URLSession` requests on Android go to the HTTP Inspector and honor Network Injection rules, as on iOS: `URLSession.shared` needs nothing, and a session the app creates needs `DebugSwiftRuntime.configure(configuration)` before `URLSession(configuration:)` (a no-op on iOS).
 
-Build the Android sample with `skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android`. Android networking capture and request injection require the host to add the provided OkHttp interceptor (or a matching hook for its networking stack); [the Android sample guide](Example/Android/README.md#network-capture-by-stack) lists what each stack needs. Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented there too.
+The Example app is a single Skip project: open `Example/Darwin/Example.xcodeproj` and Run, and the same SwiftUI demos run on the iOS simulator and, through the Run skip gradle phase, on the open Android emulator. To build only the Android app, run `skip export --project Example --no-ios --android --arch aarch64 --dir build/skip-android`; [the Example guide](Example/README.md) has the details. Android networking capture and request injection require the host to add the provided OkHttp interceptor (or a matching hook for its networking stack); [the Example guide](Example/README.md#network-capture-by-stack) lists what each stack needs. Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented there too.
 
-### One panel on iOS too
+### One setup for iOS and Android
 
-On iOS the floating ball opens the UIKit tab bar by default. To try the shared SwiftUI panel, the one Android shows, add the `DebugSwiftUI` product and switch the ball over after setup. Screens not yet rewritten in SwiftUI open their UIKit version inside the panel:
+Add the `DebugSwiftUI` product and start DebugSwift once at launch, with the same code on both platforms:
 
 ```swift
 import DebugSwiftUI
 
-DebugSwift().setup().show()
-DebugSwiftSharedPanel.useForFloatingBall()
-// DebugSwiftSharedPanel.useUIKitPanel() goes back to the tab bar.
+DebugSwiftRuntime.install(
+    actions: [DebugActionGroup(title: "Session", actions: [.init(title: "Log out") { logOut() }])],
+    betaFeatures: [.agentDebugLog]
+)
+
+// Anywhere in SwiftUI, to open the panel yourself:
+.sheet(isPresented: $showsDebugger) { DebugSwiftRuntime.panel { showsDebugger = false } }
 ```
+
+On iOS this runs `DebugSwift().setup()`, shows the floating ball and makes it open the shared SwiftUI panel; screens not yet rewritten in SwiftUI open their UIKit version inside it. On Android it starts the runtime (crash, ANR, frame, log and `URLSession` capture) and shows the floating button. `DebugSwiftRuntime.isFloatingButtonVisible` hides or shows the button on both. iOS hosts that keep the UIKit tab bar can still call `DebugSwift().setup().show()` directly; `DebugSwiftSharedPanel.useUIKitPanel()` switches a shared-panel ball back to it.
 
 ## DebugSwiftCore (Skip Fuse)
 
@@ -119,7 +125,7 @@ sanitizer.queryParameters.insert("session")
 sanitizer.customBodyRedactor = { body, contentType in body } // runs after the built-in rules
 
 // Every capture path, on iOS and Android (DebugSwiftUI):
-await DebugSwiftAndroidRuntime.configureNetworkSanitizer(sanitizer)
+await DebugSwiftRuntime.configureNetworkSanitizer(sanitizer)
 // iOS UIKit exports only (DebugSwift):
 DebugSwift.Network.shared.sanitizer = sanitizer
 ```
@@ -191,7 +197,7 @@ Add to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/uaipi/DebugSwift.git", branch: "main")
+    .package(url: "https://github.com/Vitorsilveira31/DebugSwift.git", branch: "main")
 ]
 ```
 
@@ -199,7 +205,7 @@ Then add the product you need to your target: `DebugSwift` (iOS UIKit tools), `D
 
 Or add through Xcode: `File` > `Add Package Dependencies` > Enter URL, then pick the `main` branch:
 ```
-https://github.com/uaipi/DebugSwift
+https://github.com/Vitorsilveira31/DebugSwift
 ```
 
 ### 🎯 CocoaPods
@@ -209,7 +215,7 @@ CocoaPods installs the iOS UIKit tools (`DebugSwift` with `DebugSwiftCore` compi
 Add to your `Podfile`:
 
 ```ruby
-pod 'DebugSwift', :git => 'https://github.com/uaipi/DebugSwift.git', :branch => 'main'
+pod 'DebugSwift', :git => 'https://github.com/Vitorsilveira31/DebugSwift.git', :branch => 'main'
 ```
 
 `pod 'DebugSwift'` without `:git`, and the prebuilt XCFramework from the upstream releases page, install the upstream project without this fork's changes.

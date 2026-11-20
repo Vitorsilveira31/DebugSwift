@@ -352,7 +352,7 @@ struct DebugSwiftWebSocketInspectorView: View {
     }
 
     private func refresh() {
-        let json = DebugSwiftAndroidRuntime.webSocketInspectorSnapshot(
+        let json = DebugSwiftRuntime.webSocketInspectorSnapshot(
             connectionID: selectedConnectionID,
             query: "",
             direction: ""
@@ -433,13 +433,13 @@ struct DebugSwiftWebSocketInspectorView: View {
     }
 }
 
-private extension DebugSwiftAndroidRuntime {
+private extension DebugSwiftRuntime {
     @MainActor
     static func webSocketInspectorSnapshot(connectionID: String, query: String, direction: String) -> String {
         #if os(Android)
         return DebugSwiftNativeBridge.webSocketInspectorSnapshot(connectionID, query, direction)
         #elseif os(iOS)
-        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        DebugSwiftRuntime.prepareIOSDebugger()
         return DebugSwift.WebSocket.sharedInspectorSnapshotJSON(
             connectionID: connectionID,
             query: query,

@@ -27,7 +27,7 @@ struct DebugLinesView: View {
     }
 
     func load() {
-        lines = DebugSwiftAndroidRuntime.snapshot(featureID: featureID)
+        lines = DebugSwiftRuntime.snapshot(featureID: featureID)
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map(String.init)
     }
