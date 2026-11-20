@@ -129,13 +129,7 @@ final class DebugSwiftURLProtocol: URLProtocol {
     }
 
     private func resumeAfterDelay(_ wait: Int, task: URLSessionTask, decision: NetworkInjectionDecision, startedAt: Date) {
-        lock.lock()
-        let stillWaiting: Bool
-        if case .waiting(wait) = state { stillWaiting = true } else { stillWaiting = false }
-        lock.unlock()
-        if stillWaiting {
-            begin(task: task, decision: decision, startedAt: startedAt)
-        }
+        begin(task: task, decision: decision, startedAt: startedAt, afterWait: wait)
     }
 
     override func stopLoading() {
@@ -157,26 +151,36 @@ final class DebugSwiftURLProtocol: URLProtocol {
         }
     }
 
-    private func begin(task: URLSessionTask, decision: NetworkInjectionDecision?, startedAt: Date) {
+    /// Starts the request or answers it. `afterWait` is the delay that just ended, if any: only that
+    /// delay may still start the request, not an older one a suspension replaced.
+    private func begin(task: URLSessionTask, decision: NetworkInjectionDecision?, startedAt: Date, afterWait: Int? = nil) {
         let isDownload = task is URLSessionDownloadTask
         if let decision, let url = request.url,
            let outcome = NetworkInjection.immediateOutcome(of: decision, for: url) {
             switch outcome {
             case let .success((data, response)) where !isDownload:
-                guard move(to: .answering) else { return }
+                guard move(to: .answering, afterWait: afterWait) else { return }
                 answer(data: data, response: response, startedAt: startedAt)
                 return
             case let .failure(error):
-                guard move(to: .answering) else { return }
+                guard move(to: .answering, afterWait: afterWait) else { return }
                 fail(error, startedAt: startedAt)
                 return
+            case .success where decision.isBlocked:
+                // A download's file cannot come from an injected response, but a blocked one still
+                // must not reach the network: it fails instead.
+                guard move(to: .answering, afterWait: afterWait) else { return }
+                fail(URLError(.resourceUnavailable, userInfo: [
+                    NSLocalizedDescriptionKey: "Blocked by DebugSwift network rules."
+                ]), startedAt: startedAt)
+                return
             case .success:
-                // A download task's file cannot come from an injected response; it goes out as is.
+                // An injected HTTP error or rewrite cannot become a download file; it goes out as is.
                 break
             }
         }
         guard let foundationProtocol = Self.foundationProtocol(for: task) else {
-            guard move(to: .answering) else { return }
+            guard move(to: .answering, afterWait: afterWait) else { return }
             fail(URLError(.unsupportedURL), startedAt: startedAt)
             return
         }
@@ -189,16 +193,21 @@ final class DebugSwiftURLProtocol: URLProtocol {
             rewrite: rewrite
         )
         let foundation = foundationProtocol.init(task: task, cachedResponse: cachedResponse, client: observer)
-        guard move(to: .forwarding(foundation)) else { return }
+        guard move(to: .forwarding(foundation), afterWait: afterWait) else { return }
         foundation.startLoading()
     }
 
-    /// Moves on from idle or waiting; false once the request was stopped or already answered.
-    private func move(to next: State) -> Bool {
+    /// Moves on, checked and changed in one step under the lock. Without `afterWait` it moves from
+    /// idle; with it, only from that same wait. False once the request was stopped, answered, or
+    /// its delay was replaced.
+    private func move(to next: State, afterWait: Int? = nil) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        switch state {
-        case .idle, .waiting:
+        switch (state, afterWait) {
+        case (.idle, nil):
+            state = next
+            return true
+        case let (.waiting(current), wait?) where current == wait:
             state = next
             return true
         default:
@@ -246,13 +255,35 @@ final class DebugSwiftURLProtocol: URLProtocol {
         finish()
     }
 
-    /// The protocol Foundation would have picked for `task` had DebugSwift not been first.
+    /// The protocol Foundation would have picked for `task` had DebugSwift not been first: the
+    /// first one after DebugSwift's in the task's own session configuration, so a protocol the
+    /// host added (a mock, a custom transport) still answers. Foundation's defaults are the
+    /// fallback when the session cannot be read.
     private static func foundationProtocol(for task: URLSessionTask) -> URLProtocol.Type? {
         let capture = ObjectIdentifier(DebugSwiftURLProtocol.self)
-        let classes = URLSessionConfiguration.default.protocolClasses ?? []
+        let classes = session(of: task)?.configuration.protocolClasses
+            ?? URLSessionConfiguration.default.protocolClasses
+            ?? []
         return classes
             .compactMap { $0 as? URLProtocol.Type }
             .first { ObjectIdentifier($0) != capture && $0.canInit(with: task) }
+    }
+
+    /// The session a task belongs to. Foundation keeps it internal, so it is read through reflection.
+    private static func session(of task: URLSessionTask) -> URLSession? {
+        var mirror: Mirror? = Mirror(reflecting: task)
+        while let current = mirror {
+            if let value = current.children.first(where: { $0.label == "session" })?.value {
+                // Stored as an implicitly unwrapped optional: unwrap it before casting.
+                let wrapped = Mirror(reflecting: value)
+                if wrapped.displayStyle == .optional {
+                    return wrapped.children.first?.value as? URLSession
+                }
+                return value as? URLSession
+            }
+            mirror = current.superclassMirror
+        }
+        return nil
     }
 
     /// The task's work queue, where Foundation calls its protocols. It is internal to Foundation,
@@ -297,6 +328,9 @@ final class DebugSwiftURLProtocol: URLProtocol {
 private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @unchecked Sendable {
     /// What the inspector keeps of a body; the Android runtime trims it further.
     private static let inspectedBodyLimit = 1_048_576
+    /// The largest body handed to a decryptor. A decryptor needs the whole body (an authentication
+    /// tag is often at its end), so a longer one is not decrypted rather than decrypted in part.
+    private static let decryptedBodyLimit = 8 * 1_048_576
 
     private weak var capture: DebugSwiftURLProtocol?
     private let client: URLProtocolClient?
@@ -310,6 +344,8 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
     /// with a delegate; `async` and completion-handler tasks get it from `task.response`.
     private var responseReported = false
     private var body = Data()
+    /// The whole body for a decryptor, up to `decryptedBodyLimit`; nil once it grew past that.
+    private var fullBody: Data? = Data()
     private var recorded = false
 
     init(
@@ -357,6 +393,9 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
         lock.lock()
         if body.count < Self.inspectedBodyLimit {
             body.append(delivered.prefix(Self.inspectedBodyLimit - body.count))
+        }
+        if let current = fullBody {
+            fullBody = current.count + delivered.count <= Self.decryptedBodyLimit ? current + delivered : nil
         }
         lock.unlock()
         client?.urlProtocol(`protocol`, didLoad: delivered)
@@ -414,9 +453,16 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
         lock.lock()
         let response = self.response
         let body = self.body
+        let fullBody = self.fullBody
         lock.unlock()
         let http = response as? HTTPURLResponse
-        let decrypted = request.url.flatMap { DebugSwift.Network.shared.decryptedBody(body, for: $0) }
+        let decrypted: String? = if let fullBody, !fullBody.isEmpty {
+            request.url.flatMap { DebugSwift.Network.shared.decryptedBody(fullBody, for: $0) }
+        } else if fullBody == nil {
+            "Not decrypted: the response is larger than \(Self.decryptedBodyLimit / 1_048_576) MB."
+        } else {
+            nil
+        }
         DebugSwiftURLProtocol.record(request, startedAt: startedAt, outcome: .response(
             statusCode: http?.statusCode ?? 0,
             headers: DebugSwiftURLProtocol.headers(of: http),

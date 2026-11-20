@@ -119,7 +119,8 @@ public actor NetworkRecorder {
             url: clean.url,
             requestHeaders: clean.requestHeaders,
             requestBody: truncated(clean.requestBody),
-            outcome: outcome
+            outcome: outcome,
+            decryptedResponseBody: clean.decryptedResponseBody.map { String($0.utf8.prefix(bodyLimit)) ?? String($0.prefix(bodyLimit)) }
         )
     }
 

@@ -99,26 +99,28 @@ final class DebugSwiftPresentation {
     var isPresented = false
     /// A feature the panel opens directly, for example `measurement`.
     var route: String?
-    /// The `.debugSwiftPanel()` presenter on screen, if any. The newest one presents the panel.
-    private var presenter: UUID?
-    /// The host's own floating-button handler, put back when the presenter leaves the screen.
+    /// The `.debugSwiftPanel()` presenters on screen, oldest first. The newest one presents the panel.
+    private var presenters: [UUID] = []
+    /// The host's own floating-button handler, put back when the last presenter leaves the screen.
     private var hostTap: (@MainActor () -> Void)?
 
-    var isAttached: Bool { presenter != nil }
+    var isAttached: Bool { !presenters.isEmpty }
 
     /// Called by a `.debugSwiftPanel()` presenter when it appears: the floating button opens the
-    /// panel through it from now on.
+    /// panel through the presenters from now on.
     func attach(_ id: UUID) {
-        if presenter == nil { hostTap = DebugFloatingButton.onTap }
-        presenter = id
+        if presenters.isEmpty { hostTap = DebugFloatingButton.onTap }
+        presenters.removeAll { $0 == id }
+        presenters.append(id)
         DebugFloatingButton.onTap = { DebugSwiftPresentation.shared.present(route: nil) }
     }
 
-    /// Called when that presenter disappears. Only the presenter that attached last detaches, and
-    /// the handler the host had before comes back, so `present` never calls itself.
+    /// Called when a presenter disappears. Others still on screen keep presenting; when the last
+    /// one leaves, the handler the host had before comes back, so `present` never calls itself.
     func detach(_ id: UUID) {
-        guard presenter == id else { return }
-        presenter = nil
+        guard presenters.contains(id) else { return }
+        presenters.removeAll { $0 == id }
+        guard presenters.isEmpty else { return }
         DebugFloatingButton.onTap = hostTap
         hostTap = nil
     }
@@ -144,6 +146,8 @@ public class DebugSwift {
 
     @MainActor static var hiddenFeatures: [DebugSwiftFeature] = []
     nonisolated(unsafe) static var disabledMethods: [DebugSwiftSwizzleFeature] = []
+    /// True once `setup` ran, from the host or from `DebugSwiftRuntime.install`.
+    @MainActor static var isSetUp = false
     @MainActor static var enabledBetaFeatures: [DebugSwiftBetaFeature] = []
 
     /// Starts the Android runtime: crash, ANR, frame, log and network capture.
@@ -154,6 +158,7 @@ public class DebugSwift {
         disable methods: [DebugSwiftSwizzleFeature] = [],
         enableBetaFeatures betaFeatures: [DebugSwiftBetaFeature] = []
     ) -> Self {
+        Self.isSetUp = true
         Self.hiddenFeatures = features
         Self.disabledMethods = methods
         Self.enabledBetaFeatures = betaFeatures

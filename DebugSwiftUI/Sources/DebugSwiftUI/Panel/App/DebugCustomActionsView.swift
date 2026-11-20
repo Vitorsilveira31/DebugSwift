@@ -3,12 +3,13 @@ import SwiftUI
 import DebugSwift
 #endif
 
-/// One button on the Custom Actions screen. The id says where the action lives, so two actions
-/// with the same title in different groups stay apart.
-struct DebugCustomActionEntry: Identifiable, Equatable {
+/// One button on the Custom Actions screen. It keeps the action it was built from, so the button
+/// runs that action even if the host reorders or renames its actions before the tap.
+struct DebugCustomActionEntry: Identifiable {
     let id: String
     let section: String
     let title: String
+    let run: (() -> Void)?
 }
 
 extension DebugSwiftRuntime {
@@ -19,7 +20,7 @@ extension DebugSwiftRuntime {
         var entries: [DebugCustomActionEntry] = []
         for (groupIndex, group) in (DebugSwift.App.shared.customAction?() ?? []).enumerated() {
             for (actionIndex, action) in group.actions.enumerated() {
-                entries.append(.init(id: "app:\(groupIndex):\(actionIndex)", section: group.title, title: action.title))
+                entries.append(.init(id: "app:\(groupIndex):\(actionIndex)", section: group.title, title: action.title, run: action.action))
             }
         }
         #if os(Android)
@@ -28,33 +29,26 @@ extension DebugSwiftRuntime {
             .map(String.init)
             .filter { !$0.hasPrefix("No custom actions") }
         for title in registered {
-            entries.append(.init(id: "android:\(title)", section: "Android", title: title))
+            // Kotlin keeps its actions by title, which is unique there.
+            entries.append(.init(id: "android:\(title)", section: "Android", title: title, run: nil))
         }
         #endif
         return entries
     }
 
-    /// Runs the action an entry from `customActionEntries()` names.
+    /// Runs the action an entry from `customActionEntries()` holds.
     @MainActor
     static func runCustomAction(_ entry: DebugCustomActionEntry) -> String {
-        let parts = entry.id.split(separator: ":", maxSplits: 2).map(String.init)
-        if parts.first == "app", parts.count == 3, let groupIndex = Int(parts[1]), let actionIndex = Int(parts[2]) {
-            let groups = DebugSwift.App.shared.customAction?() ?? []
-            guard groups.indices.contains(groupIndex),
-                  groups[groupIndex].actions.indices.contains(actionIndex),
-                  groups[groupIndex].actions[actionIndex].title == entry.title,
-                  let run = groups[groupIndex].actions[actionIndex].action else {
-                return "The action '\(entry.title)' is no longer registered."
-            }
+        if let run = entry.run {
             run()
             return "Action '\(entry.title)' completed."
         }
         #if os(Android)
-        if parts.first == "android" {
+        if entry.id.hasPrefix("android:") {
             return DebugSwiftNativeBridge.perform("custom_actions", "run_custom", entry.title)
         }
         #endif
-        return "The action '\(entry.title)' is no longer registered."
+        return "The action '\(entry.title)' has nothing to run."
     }
 }
 

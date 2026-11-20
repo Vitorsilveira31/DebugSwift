@@ -1278,10 +1278,13 @@ public enum DebugSwiftRuntime {
         isFloatingButtonVisible = showsFloatingButton
         return true
         #else
-        // Later calls only update the panel's content: the setup made by the first one, or by the
-        // host through `DebugSwift().setup(...)`, stays. A first call that failed is tried again.
-        if !isAndroidSetUp {
+        // A setup the host already made with `DebugSwift().setup(...)`, or an earlier install, stays:
+        // later calls only update the panel's content. The runtime's own install is retried until
+        // it succeeds.
+        if !DebugSwift.isSetUp {
             DebugSwift().setup(enableBetaFeatures: betaFeatures)
+        }
+        if !isAndroidSetUp {
             isAndroidSetUp = DebugSwiftNativeBridge.install()
         }
         isFloatingButtonVisible = showsFloatingButton

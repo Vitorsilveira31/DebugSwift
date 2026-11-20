@@ -47,6 +47,21 @@ struct NetworkRecorderTests {
         }
     }
 
+    @Test func keepsTheDecryptedBodyMaskedAndTruncated() async {
+        let recorder = NetworkRecorder(bodyLimit: 40)
+        await recorder.record(NetworkRecord(
+            duration: 0.1,
+            method: "GET",
+            url: "https://example.test/secret",
+            outcome: .response(statusCode: 200, headers: [:], body: Data("ciphertext".utf8)),
+            decryptedResponseBody: #"{"password":"hunter2","note":"a long note that goes past the limit"}"#
+        ))
+        let stored = await recorder.snapshot()[0].decryptedResponseBody ?? ""
+        #expect(!stored.isEmpty)
+        #expect(!stored.contains("hunter2"))
+        #expect(stored.utf8.count <= 40)
+    }
+
     @Test func truncatesLongBodies() async {
         let recorder = NetworkRecorder(bodyLimit: 4)
         await recorder.record(record(requestBody: Data("abcdefgh".utf8), responseBody: Data("12345678".utf8)))

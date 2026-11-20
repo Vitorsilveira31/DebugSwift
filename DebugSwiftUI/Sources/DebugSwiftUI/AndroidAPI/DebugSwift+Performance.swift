@@ -80,8 +80,7 @@ extension DebugSwift {
                 detectionDelay: TimeInterval = 1,
                 callback: ((PerformanceLeak) -> Void)?
             ) {
-                PerformanceEvents.shared.leakCallback = callback
-                PerformanceEvents.shared.leakDelay = detectionDelay
+                PerformanceEvents.shared.setLeakDetection(callback: callback, delay: detectionDelay)
                 PerformanceEvents.shared.start()
             }
 
@@ -357,6 +356,14 @@ final class PerformanceEvents: @unchecked Sendable {
         set { locked { $0.ignoredSuperCallClasses = newValue } }
     }
 
+    /// Sets the callback and its delay in one step, so a poll never pairs one with the other's old value.
+    func setLeakDetection(callback: ((PerformanceLeak) -> Void)?, delay: TimeInterval) {
+        locked {
+            $0.leakCallback = callback
+            $0.leakDelay = delay
+        }
+    }
+
     func addLeakDataCallback(_ callback: @escaping (PerformanceManager.LeakData) -> Void) {
         locked { $0.leakDataCallbacks.append(callback) }
     }
@@ -376,7 +383,10 @@ final class PerformanceEvents: @unchecked Sendable {
     private func poll() {
         // Read the settings once, then call the host's callbacks without holding the lock.
         let settings = locked { $0 }
-        if !DebugSwift.disabledMethods.contains(.leaksDetector) {
+        // An event counts as reported only once someone was there to hear it: a leak found before
+        // any leak callback exists is reported when the first one is set.
+        let wantsLeaks = settings.leakCallback != nil || !settings.leakDataCallbacks.isEmpty
+        if wantsLeaks, !DebugSwift.disabledMethods.contains(.leaksDetector) {
             let leaks = DebugSwiftHost.object("performance.leaks")["candidates"] as? [[String: Any]] ?? []
             for leak in leaks {
                 let className = leak["className"] as? String ?? ""
@@ -390,7 +400,7 @@ final class PerformanceEvents: @unchecked Sendable {
                 settings.leakDataCallbacks.forEach { $0(PerformanceManager.LeakData(message: message, controller: className)) }
             }
         }
-        guard !DebugSwift.disabledMethods.contains(.superCallDetector) else { return }
+        guard settings.superCallCallback != nil, !DebugSwift.disabledMethods.contains(.superCallDetector) else { return }
         for violation in Self.superCallViolations() where markReported(violation.message, in: \.reportedSuperCalls) {
             settings.superCallCallback?(violation)
         }

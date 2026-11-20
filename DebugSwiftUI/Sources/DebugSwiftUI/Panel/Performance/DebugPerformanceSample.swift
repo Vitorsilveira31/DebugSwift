@@ -33,7 +33,8 @@ struct DebugMetricHistory {
         #if os(Android)
         // `timeWindowSeconds` can be set directly, below the 10-second floor its setters keep.
         let seconds = DebugSwift.Performance.Chart.timeWindowSeconds
-        return seconds.isFinite ? max(10, Int(seconds)) : 120
+        // Clamp before converting: a huge value would not fit in an Int. A day of samples at most.
+        return seconds.isFinite ? Int(min(max(seconds, 10), 86_400)) : 120
         #else
         60
         #endif

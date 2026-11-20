@@ -388,9 +388,10 @@ extension DebugSwift {
             DebugSwiftHost.call("push.remove", ["id": notificationId])
         }
 
+        /// Applies every option and the simulation switch together, or none of them if one is rejected.
         public static func updateConfiguration(_ config: NotificationConfiguration) {
-            DebugSwiftHost.call("push.enabled", ["enabled": config.isEnabled])
             DebugSwiftHost.call("push.config", [
+                "isEnabled": config.isEnabled,
                 "showInForeground": config.showInForeground,
                 "playSound": config.playSound,
                 "showBadge": config.showBadge,

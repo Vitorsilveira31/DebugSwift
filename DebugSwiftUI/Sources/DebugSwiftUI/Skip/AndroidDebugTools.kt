@@ -248,7 +248,13 @@ object AndroidDebugTools {
         val rewrite: RewriteInjectionSettings = RewriteInjectionSettings()
     )
 
+    /** Every change goes through the object's monitor (the writers are @Synchronized) and bumps the version. */
     @Volatile private var networkInjectionSettings = NetworkInjectionSettings()
+        set(value) {
+            field = value
+            networkInjectionVersion.incrementAndGet()
+        }
+    private val networkInjectionVersion = java.util.concurrent.atomic.AtomicLong(0)
 
     data class NetworkRecord(
         val timestamp: Long,
@@ -883,8 +889,9 @@ object AndroidDebugTools {
             )
         rememberReplayRequest(record.id, ReplayRequest(url, requestHeaders, requestBody))
         networkRecords.add(record)
-        trim(networkRecords)
+        // The WebView limit first, so a new WebView record does not push out an HTTP one.
         if (source == "webview") trimWebViewRecords()
+        trim(networkRecords)
         if (isPersistableNetworkRecord(record)) {
             networkHistoryRecords.add(record)
             trimNetworkHistory()
@@ -925,6 +932,7 @@ object AndroidDebugTools {
 
     private fun replayRequest(record: NetworkRecord): ReplayRequest? = synchronized(replayRequests) { replayRequests[record.id] }
 
+    @Synchronized
     fun setRequestDelay(milliseconds: Long) {
         requestDelayMs = milliseconds.coerceIn(0L, 60_000L)
         val current = networkInjectionSettings
@@ -938,6 +946,7 @@ object AndroidDebugTools {
         failNextRequest.set(true)
     }
 
+    @Synchronized
     fun setHTTPErrorInjection(statusCode: Int) {
         httpErrorCode = if (statusCode in 400..599) statusCode else 0
         val current = networkInjectionSettings
@@ -949,6 +958,7 @@ object AndroidDebugTools {
         ))
     }
 
+    @Synchronized
     fun addResponseRewrite(pattern: String, replacement: String) {
         val current = networkInjectionSettings
         val rule = NetworkRewriteRule(
@@ -969,6 +979,15 @@ object AndroidDebugTools {
 
     fun exportNetworkInjectionRulesCSV(): String {
         val context = appContext ?: return "Android runtime has not been installed."
+        val file = File(context.cacheDir, "response_modifier_rules_${System.currentTimeMillis()}.csv")
+        return runCatching {
+            file.writeText(networkInjectionRulesCSV(), Charsets.UTF_8)
+            shareExport(file, context)
+        }.getOrElse { "Could not export response modifier rules: ${it.message}" }
+    }
+
+    /** The response modifier rules as CSV, the format the iOS settings screen uses. No file, no sharing. */
+    fun networkInjectionRulesCSV(): String {
         val rows = mutableListOf("url_pattern,response_status_code,response_body,http_method")
         networkInjectionSettings.rewrite.rules.forEach { rule ->
             rows.add(listOf(
@@ -978,13 +997,10 @@ object AndroidDebugTools {
                 csvEscape(rule.httpMethod.orEmpty())
             ).joinToString(","))
         }
-        val file = File(context.cacheDir, "response_modifier_rules_${System.currentTimeMillis()}.csv")
-        return runCatching {
-            file.writeText(rows.joinToString("\n"), Charsets.UTF_8)
-            shareExport(file, context)
-        }.getOrElse { "Could not export response modifier rules: ${it.message}" }
+        return rows.joinToString("\n")
     }
 
+    @Synchronized
     fun importNetworkInjectionRulesCSV(csv: String): String {
         val (rows, parseError) = parseCSVRows(csv)
         if (parseError != null) return parseError
@@ -1093,6 +1109,7 @@ object AndroidDebugTools {
     }
 
     @JvmStatic
+    @Synchronized
     fun applyNetworkInjectionSettingsJSON(json: String): String {
         val parsed = runCatching { JSONObject(json) }.getOrElse {
             return "Settings are not valid JSON: ${it.message}"
@@ -1599,7 +1616,7 @@ object AndroidDebugTools {
     }
 
     fun webSocketOpened(webSocket: WebSocket, url: String, responseCode: Int) {
-        if (!webSocketMonitoringEnabled) return
+        if (!webSocketMonitoringEnabled || webSocket in clearedWebSockets) return
         val connection = findOrCreateWebSocketConnection(webSocket, url)
         connection.status = "Connected"
         connection.statusDetail = "HTTP $responseCode"
@@ -1614,47 +1631,56 @@ object AndroidDebugTools {
         type: String,
         payload: ByteArray
     ) {
-        if (!webSocketMonitoringEnabled) return
+        if (!webSocketMonitoringEnabled || webSocket in clearedWebSockets) return
         val connection = findOrCreateWebSocketConnection(webSocket, url)
         if (connection.status == "Connecting") connection.status = "Connected"
         recordWebSocketFrame(connection, direction, type, payload)
     }
 
     fun webSocketClosing(webSocket: WebSocket, url: String, code: Int, reason: String) {
-        if (!webSocketMonitoringEnabled && !webSocketByInstance.containsKey(webSocket)) return
-        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        val connection = webSocketConnectionForUpdate(webSocket, url) ?: return
         connection.status = "Closing"
         connection.statusDetail = listOf(code.toString(), reason).filter { it.isNotBlank() }.joinToString(" · ")
         connection.lastActivityAtMs = System.currentTimeMillis()
-        recordWebSocketEvent(connection, "closing", connection.statusDetail)
+        if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, "closing", connection.statusDetail)
     }
 
     fun webSocketClosed(webSocket: WebSocket, url: String, code: Int, reason: String) {
-        if (!webSocketMonitoringEnabled && !webSocketByInstance.containsKey(webSocket)) return
-        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        // Look the row up first: a socket whose row was cleared must not bring it back. It is over
+        // either way, so it is forgotten after.
+        val connection = webSocketConnectionForUpdate(webSocket, url)
+        clearedWebSockets.remove(webSocket)
+        if (connection == null) return
         connection.status = "Closed"
         connection.statusDetail = listOf(code.toString(), reason).filter { it.isNotBlank() }.joinToString(" · ")
         connection.lastActivityAtMs = System.currentTimeMillis()
         activeWebSockets.remove(connection.id, webSocket)
         webSocketByInstance.remove(webSocket, connection.id)
-        recordWebSocketEvent(connection, "closed", connection.statusDetail)
+        if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, "closed", connection.statusDetail)
     }
 
     fun webSocketFailed(webSocket: WebSocket, url: String, error: String, responseCode: Int?) {
-        if (!webSocketMonitoringEnabled && !webSocketByInstance.containsKey(webSocket)) return
-        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        // Look the row up first: a socket whose row was cleared must not bring it back. It is over
+        // either way, so it is forgotten after.
+        val connection = webSocketConnectionForUpdate(webSocket, url)
+        clearedWebSockets.remove(webSocket)
+        if (connection == null) return
         connection.status = "Error"
         connection.statusDetail = listOfNotNull(responseCode?.let { "HTTP $it" }, error).joinToString(" · ")
         connection.lastActivityAtMs = System.currentTimeMillis()
         activeWebSockets.remove(connection.id, webSocket)
         webSocketByInstance.remove(webSocket, connection.id)
-        recordWebSocketEvent(connection, "failed", connection.statusDetail)
+        if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, "failed", connection.statusDetail)
     }
 
     /** Backward-compatible text hook for hosts that record frames without the listener wrapper. */
     fun recordWebSocket(url: String, direction: String, payload: String) {
-        if (!webSocketMonitoringEnabled) return
         val normalizedDirection = direction.lowercase(Locale.ROOT)
+        if (!webSocketMonitoringEnabled) {
+            // Capture is off: only let a socket tracked before that close, never add a new one.
+            val terminal = normalizedDirection in setOf("closed", "failed", "error")
+            if (!terminal || legacyWebSocketIDs[url] == null) return
+        }
         val connection = findOrCreateLegacyWebSocketConnection(url)
         when (normalizedDirection) {
             "connected" -> {
@@ -1839,7 +1865,7 @@ object AndroidDebugTools {
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "har_export" -> networkRecords.filter { it.source == "http" }
             "webview_network" -> networkRecords.filter { it.source == "webview" }
-            "network_history" -> networkHistoryRecords.toList()
+            "network_history" -> liveHistoryRecords()
             else -> networkRecords.toList()
         }
         records.forEach { record ->
@@ -2058,7 +2084,7 @@ object AndroidDebugTools {
         val recordsForFeature = when (featureID) {
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "http" -> networkRecords.filter { it.source == "http" }
-            "network_history" -> networkHistoryRecords.toList()
+            "network_history" -> liveHistoryRecords()
             else -> networkRecords.toList()
         }
         val matchingRecords = recordsForFeature.filter { record ->
@@ -2090,7 +2116,7 @@ object AndroidDebugTools {
             "webview_network" -> networkRecords.filter { it.source == "webview" }
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "har_export" -> networkRecords.filter { it.source == "http" }
-            "network_history" -> networkHistoryRecords.toList()
+            "network_history" -> liveHistoryRecords()
             else -> networkRecords.filter { it.source == "http" }
         }
         val rows = JSONArray()
@@ -2199,6 +2225,7 @@ object AndroidDebugTools {
         return replayNetworkRecord(record)
     }
 
+    @Synchronized
     private fun importNetworkSessionAsRewriteRules(sessionID: String): String {
         val records = liveHistoryRecords().filter { it.sessionID == sessionID }.sortedBy { it.timestamp }
         if (records.isEmpty()) return "This session has no requests to import."
@@ -2353,7 +2380,7 @@ object AndroidDebugTools {
             "webview_network" -> networkRecords.filter { it.source == "webview" }
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "har_export" -> networkRecords.filter { it.source == "http" }
-            "network_history" -> networkHistoryRecords.toList()
+            "network_history" -> liveHistoryRecords()
             else -> networkRecords.filter { it.source == "http" }
         }
         val record = records.firstOrNull { it.id == requestID }
@@ -2678,7 +2705,26 @@ object AndroidDebugTools {
         return "Frame sent.\n\n${webSocketSnapshot()}"
     }
 
+    /** Sockets whose rows the history clear removed: their later callbacks do not bring the rows back. */
+    private val clearedWebSockets: MutableSet<WebSocket> =
+        java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(java.util.WeakHashMap<WebSocket, Boolean>()))
+
+    /**
+     * The row a closing, closed or failed callback updates. With capture on it is found or made; with
+     * capture off, or for a socket whose row was cleared, only a row that still exists is updated.
+     */
+    private fun webSocketConnectionForUpdate(webSocket: WebSocket, url: String): WebSocketConnectionRecord? {
+        if (webSocketMonitoringEnabled && webSocket !in clearedWebSockets) return findOrCreateWebSocketConnection(webSocket, url)
+        val id = webSocketByInstance[webSocket] ?: return null
+        return synchronized(webSocketConnections) { webSocketConnections.firstOrNull { it.id == id } }
+    }
+
     private fun clearWebSocketHistory(): String {
+        synchronized(webSocketConnections) {
+            clearedWebSockets.addAll(webSocketByInstance.keys)
+            webSocketByInstance.clear()
+            activeWebSockets.clear()
+        }
         webSocketConnections.clear()
         webSocketRecords.clear()
         legacyWebSocketIDs.clear()
@@ -3373,7 +3419,7 @@ object AndroidDebugTools {
             "console" -> File(context.cacheDir, "debugswift-console-${System.currentTimeMillis()}.txt").apply { writeText(consoleRecords.joinToString("\n")) }
             "oslog_console" -> File(context.cacheDir, "debugswift-logcat-${System.currentTimeMillis()}.txt").apply { writeText(logcatSnapshot()) }
             "network_thresholds" -> File(context.cacheDir, "debugswift-network-thresholds-${System.currentTimeMillis()}.txt").apply { writeText(getThresholdLogs()) }
-            "network_injection" -> File(context.cacheDir, "debugswift-rewrite-rules-${System.currentTimeMillis()}.csv").apply { writeText(exportNetworkInjectionRulesCSV()) }
+            "network_injection" -> File(context.cacheDir, "debugswift-rewrite-rules-${System.currentTimeMillis()}.csv").apply { writeText(networkInjectionRulesCSV()) }
             "agent_debug_log" -> File(context.filesDir, AGENT_LOG_FILENAME).takeIf { it.exists() }
             "crashes" -> File(context.cacheDir, "debugswift-crashes-${System.currentTimeMillis()}.txt").apply { writeText(crashRecords.joinToString("\n\n")) }
             "files" -> exportCurrentFile(context)
@@ -4248,6 +4294,22 @@ object AndroidDebugTools {
         return "Scenario '${parts[0]}' started.\n" + results.joinToString("\n")
     }
 
+    /** Why `setPushConfiguration` would reject this option, or null when it accepts it. Changes nothing. */
+    private fun pushConfigurationError(name: String, raw: String): String? {
+        val key = name.lowercase(Locale.ROOT).replace("_", "").replace("-", "")
+        val bool = raw.trim().toBooleanStrictOrNull()
+        return when (key) {
+            "showinforeground", "playsound", "showbadge", "autointeraction", "simulaterealpush" ->
+                if (bool == null) "$name must be true or false." else null
+            "interactiondelay" ->
+                if (raw.trim().toDoubleOrNull() in listOf(1.0, 2.0, 3.0, 5.0, 10.0)) null else "interactionDelay must be one of 1, 2, 3, 5, or 10 seconds."
+            "defaultsound" -> if (raw.isBlank()) "defaultSound cannot be empty. Use default, silent, or a raw resource name." else null
+            "maxhistorycount" ->
+                if (raw.trim().toIntOrNull() in listOf(50, 100, 200, 500, 1_000)) null else "maxHistoryCount must be 50, 100, 200, 500, or 1000."
+            else -> "Unknown notification option '$name'."
+        }
+    }
+
     private fun setPushConfiguration(context: Context, value: String): String {
         val parts = value.split("=", limit = 2).map { it.trim() }
         if (parts.size != 2 || parts[0].isBlank()) {
@@ -4301,6 +4363,8 @@ object AndroidDebugTools {
 
     private fun storePushTemplate(context: Context, template: PushNotificationTemplate): String {
         if (pushTemplates.any { it.name.equals(template.name, ignoreCase = true) }) return "A template named '${template.name}' already exists."
+        // Ids are unique too, so removeTemplate(id:) always finds the template it was given.
+        if (pushTemplates.any { it.id == template.id }) return "A template with id '${template.id}' already exists."
         pushTemplates.add(template)
         savePushTemplates(context)
         publishEvent("app", "Push notification template added: ${template.name}")
@@ -4794,6 +4858,7 @@ object AndroidDebugTools {
         strictModeOwned = false
     }
 
+    @Synchronized
     private fun clearInjectionRules() {
         requestDelayMs = 0L
         httpErrorCode = 0
@@ -5063,6 +5128,22 @@ object AndroidDebugTools {
             "network.threshold.logs" -> JSONObject().put("logs", getThresholdLogs()).toString()
             "network.threshold.export" -> ok(context?.let { export("network_thresholds", it) } ?: "Android runtime has not been installed.")
 
+            // Network injection: read with its version, write only if nothing changed in between.
+            "network.injection.get" -> JSONObject()
+                .put("version", networkInjectionVersion.get())
+                .put("settings", JSONObject(networkInjectionSettingsJSON()))
+                .toString()
+            "network.injection.set" -> synchronized(this) {
+                val expected = args.optLong("version", -1)
+                if (expected != networkInjectionVersion.get()) {
+                    fail("conflict")
+                } else {
+                    val message = applyNetworkInjectionSettingsJSON(args.optJSONObject("settings")?.toString() ?: "{}")
+                    if (message == "Network injection settings applied.") ok(message) else fail(message)
+                }
+            }
+            "network.injection.csv" -> JSONObject().put("csv", networkInjectionRulesCSV()).toString()
+
             // WebSocket
             "websocket.state" -> JSONObject()
                 .put("enabled", webSocketMonitoringEnabled)
@@ -5204,27 +5285,13 @@ object AndroidDebugTools {
             "push.remove" -> ok(removeSimulatedPushNotification(args.optString("id")))
             "push.config" -> {
                 val ctx = context ?: return fail("Android runtime has not been installed.")
-                // All or nothing: apply each option, and put every option back if one is rejected.
-                val saved = listOf<Any>(pushShowInForeground, pushPlaySound, pushShowBadge, pushAutoInteraction,
-                    pushInteractionDelaySeconds, pushSimulateRealPush, pushDefaultSound, pushMaxHistoryCount)
-                val rejected = args.keys().asSequence().toList().mapNotNull { key ->
-                    val result = setPushConfiguration(ctx, "$key=${args.get(key)}")
-                    result.takeUnless { it.startsWith("Notification configuration updated") }
-                }
-                if (rejected.isEmpty()) {
-                    ok("Notification configuration updated.")
-                } else {
-                    pushShowInForeground = saved[0] as Boolean
-                    pushPlaySound = saved[1] as Boolean
-                    pushShowBadge = saved[2] as Boolean
-                    pushAutoInteraction = saved[3] as Boolean
-                    pushInteractionDelaySeconds = saved[4] as Double
-                    pushSimulateRealPush = saved[5] as Boolean
-                    pushDefaultSound = saved[6] as String
-                    pushMaxHistoryCount = saved[7] as Int
-                    persistPushConfiguration(ctx)
-                    fail(rejected.joinToString(" "))
-                }
+                // Check every option first, with no side effect; apply them (and the switch) only if all pass.
+                val options = args.keys().asSequence().filter { it != "isEnabled" }.associateWith { args.get(it).toString() }
+                val rejected = options.mapNotNull { (key, value) -> pushConfigurationError(key, value) }
+                if (rejected.isNotEmpty()) return fail(rejected.joinToString(" "))
+                options.forEach { (key, value) -> setPushConfiguration(ctx, "$key=$value") }
+                if (args.has("isEnabled")) setPushSimulationEnabled(args.optBoolean("isEnabled"))
+                ok("Notification configuration updated.")
             }
             "push.scenario" -> ok(runPushNotificationScenario(args.optString("name")))
             "push.token" -> { reportPushToken(args.optString("token")); ok() }

@@ -38,6 +38,8 @@ object DebugSwiftViewDebugger3D {
     private var viewer: Viewer? = null
     /** Bumped by every presentation and dismissal; a capture from an older one is dropped. Main thread only. */
     private var generation = 0
+    /** The Activity whose floating button a capture or the viewer hid; it gets the button back. */
+    private var suppressed: java.lang.ref.WeakReference<Activity>? = null
 
     private class Layer(val rect: Rect, val depth: Int, val name: String, val isCompose: Boolean)
 
@@ -62,6 +64,7 @@ object DebugSwiftViewDebugger3D {
         val layers = mutableListOf<Layer>()
         // Capture the app as it is, without the floating button over it.
         DebugSwiftFloatingButton.setSuppressed(activity, true)
+        suppressed = java.lang.ref.WeakReference(activity)
         collect(decor, 0, layers)
         val screenshot = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
         val attach = attach@{
@@ -100,9 +103,9 @@ object DebugSwiftViewDebugger3D {
             (view.parent as? ViewGroup)?.removeView(view)
             viewer = null
         }
-        // Also covers a capture that was still waiting: its button suppression is lifted here.
-        AndroidDebugTools.foregroundActivityOrNull()?.let { DebugSwiftFloatingButton.setSuppressed(it, false) }
-        (view?.context as? Activity)?.let { DebugSwiftFloatingButton.setSuppressed(it, false) }
+        // The Activity the capture started on, even if another one is in front by now.
+        suppressed?.get()?.let { DebugSwiftFloatingButton.setSuppressed(it, false) }
+        suppressed = null
     }
 
     private fun collect(view: View, depth: Int, layers: MutableList<Layer>) {

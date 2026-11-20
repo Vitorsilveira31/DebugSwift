@@ -118,7 +118,8 @@ object DebugSwiftNetworkSanitizer {
         }
     }
 
-    private val KEY_VALUE = Regex("""(^|[\s&;,{"'])([A-Za-z0-9_.-]+)(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s&;,}]+)""")
+    // Quoted values may hold escaped quotes (`"a\"b"`), so the whole quoted value is masked.
+    private val KEY_VALUE = Regex("""(^|[\s&;,{"'])([A-Za-z0-9_.-]+)(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,}]+)""")
 
     private val USER_INFO = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*://)([^/?#@:]*):([^/?#@]*)@")
 

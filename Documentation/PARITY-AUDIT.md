@@ -62,12 +62,16 @@ Swift `URLSession` traffic on Android is captured and goes through Network Injec
 `URLSession.shared` needs nothing and a session the app creates needs
 `DebugSwift.Network.shared.injectIntoConfiguration(configuration)` (as on iOS) or
 `DebugSwiftRuntime.configure(configuration)`. The request is still sent by Foundation's own HTTP
-protocol, created for the same task, so the session's cookies, credentials, timeouts and cache,
+protocol, or by the next protocol the session itself lists (a host's mock, for example), created
+for the same task, so the session's cookies, credentials, timeouts and cache,
 the delegate's redirect and challenge decisions, data streamed to a data delegate and download
 files behave as without DebugSwift. Two limits: a rewrite that lets the request through replaces
 the response a completion handler or `async` call gets, but a data delegate still receives the
 real body, which Foundation streams to it directly; and download tasks honor delays and network
-failures, not rules that answer with an HTTP response. Swift `URLSessionWebSocketTask` sockets are
+failures, not rules that answer with an HTTP response. For a task read through a session delegate
+(no completion handler, no `async`), the inspector shows status, headers and timing but not the
+body: corelibs hands those chunks from its protocol straight to the session's delegate, which is
+fixed when the session is created. Swift `URLSessionWebSocketTask` sockets are
 not captured on Android; OkHttp sockets wrapped in `DebugSwiftWebSocketListener` are.
 
 ## Done so far (verified on an Android 17 emulator)
