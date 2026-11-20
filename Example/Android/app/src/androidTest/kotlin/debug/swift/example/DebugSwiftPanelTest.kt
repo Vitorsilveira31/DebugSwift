@@ -80,6 +80,40 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun decryptedBodiesAreMaskedLiveAndInSavedHistory() {
+        // A decrypted form body whose key is percent-encoded: `pass%77ord` is `password`.
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        AndroidDebugTools.recordNetwork(
+            method = "GET",
+            url = "https://api.example.test/decrypted-$marker",
+            status = 200,
+            durationMs = 5,
+            requestBytes = 0,
+            responseBytes = 10,
+            requestBody = "",
+            responseBody = "ciphertext",
+            decryptedResponseBody = "pass%77ord=hunter2-$marker&note=kept-$marker"
+        )
+        val live = AndroidDebugTools.networkInspectorSnapshotJSON("http")
+        assertTrue("This run's request is missing from the inspector", live.contains("decrypted-$marker"))
+        assertTrue("The decrypted body lost its other fields", live.contains("kept-$marker"))
+        assertTrue("The encoded password reached the inspector: $live", !live.contains("hunter2-$marker"))
+
+        // What a history reload reads back.
+        val history = java.io.File(
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
+            "debugswift-network-history.json"
+        )
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline && !(history.isFile && history.readText().contains("decrypted-$marker"))) {
+            Thread.sleep(200)
+        }
+        val saved = history.readText()
+        assertTrue("This run's request was not saved to history", saved.contains("decrypted-$marker"))
+        assertTrue("The encoded password reached saved history", !saved.contains("hunter2-$marker"))
+    }
+
+    @Test
     fun crashReportsShowAnUncaughtException() {
         // Reports from earlier runs are restored at launch, so this run's probe carries its own marker.
         val marker = java.util.UUID.randomUUID().toString().take(8)

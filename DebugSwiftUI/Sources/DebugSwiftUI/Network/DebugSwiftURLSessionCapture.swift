@@ -73,7 +73,9 @@ final class DebugSwiftURLProtocol: URLProtocol {
         case stopped
     }
 
-    private let lock = NSLock()
+    /// Recursive: an injected answer is delivered while holding it, and a client may stop the load
+    /// from inside one of those callbacks.
+    private let lock = NSRecursiveLock()
     private var state = State.idle
     private var waits = 0
 
@@ -215,12 +217,16 @@ final class DebugSwiftURLProtocol: URLProtocol {
         }
     }
 
-    /// True while this protocol may still report the answer it is giving.
-    private var isAnswering: Bool {
+    /// Runs one callback of an injected answer only while the load is still answering, holding the
+    /// lock so `stopLoading()` cannot slip in between the check and the callback. A stop made during
+    /// a callback, from any thread, prevents the ones after it.
+    @discardableResult
+    private func deliver(_ callback: () -> Void) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        if case .answering = state { return true }
-        return false
+        guard case .answering = state else { return false }
+        callback()
+        return true
     }
 
     private func finish() {
@@ -236,22 +242,26 @@ final class DebugSwiftURLProtocol: URLProtocol {
             headers: Self.headers(of: http),
             body: data
         ))
-        guard isAnswering else { return }
         let delegate = DebugSwift.Network.shared.delegate
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        delegate?.urlSession(self, didReceive: response)
-        client?.urlProtocol(self, didLoad: data)
-        delegate?.urlSession(self, didReceive: data)
-        client?.urlProtocolDidFinishLoading(self)
-        delegate?.didFinishLoading(self)
+        guard deliver({ client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed) }) else { return }
+        deliver { delegate?.urlSession(self, didReceive: response) }
+        guard deliver({ client?.urlProtocol(self, didLoad: data) }) else { return }
+        deliver { delegate?.urlSession(self, didReceive: data) }
+        guard deliver({ client?.urlProtocolDidFinishLoading(self) }) else { return }
+        deliver { delegate?.didFinishLoading(self) }
         finish()
     }
 
     private func fail(_ error: Error, startedAt: Date) {
         Self.record(request, startedAt: startedAt, outcome: .failure(description: error.localizedDescription))
-        guard isAnswering || task == nil else { return }
-        client?.urlProtocol(self, didFailWithError: error)
-        DebugSwift.Network.shared.delegate?.urlSession(self, didFailWithError: error)
+        if task == nil {
+            // Nothing was started, so there is nothing to stop: report the failure as it is.
+            client?.urlProtocol(self, didFailWithError: error)
+            DebugSwift.Network.shared.delegate?.urlSession(self, didFailWithError: error)
+            return
+        }
+        guard deliver({ client?.urlProtocol(self, didFailWithError: error) }) else { return }
+        deliver { DebugSwift.Network.shared.delegate?.urlSession(self, didFailWithError: error) }
         finish()
     }
 

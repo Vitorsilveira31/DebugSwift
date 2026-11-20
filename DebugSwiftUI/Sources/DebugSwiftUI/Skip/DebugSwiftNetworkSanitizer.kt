@@ -110,7 +110,10 @@ object DebugSwiftNetworkSanitizer {
         if (keys.isEmpty() || body.isEmpty()) return body
         sanitizeJson(body, keys)?.let { return it }
         return KEY_VALUE.replace(body) { match ->
-            if (normalize(match.groupValues[2]) in keys) {
+            // Keys can be percent-encoded, as in form bodies (`pass%77ord`): compare them decoded.
+            val name = match.groupValues[2]
+            val decoded = runCatching { URLDecoder.decode(name, StandardCharsets.UTF_8.name()) }.getOrDefault(name)
+            if (normalize(decoded) in keys) {
                 match.groupValues[1] + match.groupValues[2] + match.groupValues[3] + REDACTED
             } else {
                 match.value
@@ -119,7 +122,7 @@ object DebugSwiftNetworkSanitizer {
     }
 
     // Quoted values may hold escaped quotes (`"a\"b"`), so the whole quoted value is masked.
-    private val KEY_VALUE = Regex("""(^|[\s&;,{"'])([A-Za-z0-9_.-]+)(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,}]+)""")
+    private val KEY_VALUE = Regex("""(^|[\s&;,{"'])([A-Za-z0-9_.%+-]+)(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,}]+)""")
 
     private val USER_INFO = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*://)([^/?#@:]*):([^/?#@]*)@")
 
