@@ -359,7 +359,7 @@ object AndroidDebugTools {
         registerLifecycleCallbacks(applicationContext)
         seedForegroundActivity()
         DebugSwiftRecomposition.start()
-        installCrashHandler()
+        if (crashCaptureEnabled) installCrashHandler()
         startAnrWatchdog()
         startFrameMonitor()
         notificationExecutor.execute { ensureNotificationChannel(applicationContext) }
@@ -3509,9 +3509,31 @@ object AndroidDebugTools {
         })
     }
 
+    /** Off when the host passed `.crashManager` to `DebugSwift().setup(disable:)`. */
+    @Volatile var crashCaptureEnabled = true
+    private var crashHandler: Thread.UncaughtExceptionHandler? = null
+    private var handlerBeforeCrashCapture: Thread.UncaughtExceptionHandler? = null
+
+    /** Installs or removes DebugSwift's crash handler to match `crashCaptureEnabled`. */
+    @Synchronized
+    private fun applyCrashCapture() {
+        if (crashCaptureEnabled) {
+            if (crashHandler == null && appContext != null) installCrashHandler()
+        } else {
+            val installed = crashHandler ?: return
+            // Put the app's own handler back, unless someone installed another one after ours.
+            if (Thread.getDefaultUncaughtExceptionHandler() === installed) {
+                Thread.setDefaultUncaughtExceptionHandler(handlerBeforeCrashCapture)
+            }
+            crashHandler = null
+            handlerBeforeCrashCapture = null
+        }
+    }
+
     private fun installCrashHandler() {
         val original = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+        handlerBeforeCrashCapture = original
+        val handler = Thread.UncaughtExceptionHandler { thread, error ->
             val writer = StringWriter()
             error.printStackTrace(PrintWriter(writer))
             val record = "${timestamp()} · ${thread.name}\n${writer}"
@@ -3530,6 +3552,8 @@ object AndroidDebugTools {
             publishEvent("app", "Uncaught ${error.javaClass.simpleName}")
             original?.uncaughtException(thread, error)
         }
+        crashHandler = handler
+        Thread.setDefaultUncaughtExceptionHandler(handler)
     }
 
     private fun loadCrashHistory(context: Context) {
@@ -5057,6 +5081,11 @@ object AndroidDebugTools {
                 ok()
             }
             "console.enabled" -> { consoleCaptureEnabled = args.optBoolean("enabled", true); ok() }
+            "crash.enabled" -> {
+                crashCaptureEnabled = args.optBoolean("enabled", true)
+                applyCrashCapture()
+                ok()
+            }
             "console.share" -> ok(context?.let { export("console", it) } ?: "Android runtime has not been installed.")
 
             // Network

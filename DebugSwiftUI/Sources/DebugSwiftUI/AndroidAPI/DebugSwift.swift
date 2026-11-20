@@ -162,6 +162,8 @@ public class DebugSwift {
         Self.hiddenFeatures = features
         Self.disabledMethods = methods
         Self.enabledBetaFeatures = betaFeatures
+        // Before the runtime starts, so a disabled crash manager never installs its handler.
+        DebugSwiftHost.call("crash.enabled", ["enabled": !methods.contains(.crashManager)])
         DebugSwiftRuntime.startRuntime(capturesURLSession: !methods.contains(.network))
         // `.leaksDetector` and `.superCallDetector` are read by the leak and super-call watchers.
         DebugSwiftHost.call("console.enabled", ["enabled": !methods.contains(.console)])

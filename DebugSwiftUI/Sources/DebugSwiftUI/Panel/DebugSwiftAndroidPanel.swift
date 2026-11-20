@@ -59,12 +59,16 @@ struct DebugSwiftAndroidPanelContent: View {
     }
 
     var visibleAreas: [DebugSwiftArea] {
-        #if os(iOS)
+        DebugSwiftArea.visible
+    }
+}
+
+extension DebugSwiftArea {
+    /// The areas `DebugSwift().setup(hideFeatures:)` did not hide, on both platforms.
+    @MainActor
+    static var visible: [DebugSwiftArea] {
         let visibleIDs = Set(DebugSwift.availableDebugFeatures().map(\.rawValue))
-        return DebugSwiftArea.allCases.filter { visibleIDs.contains($0.id) }
-        #else
-        return DebugSwiftArea.allCases
-        #endif
+        return allCases.filter { visibleIDs.contains($0.id) }
     }
 }
 
