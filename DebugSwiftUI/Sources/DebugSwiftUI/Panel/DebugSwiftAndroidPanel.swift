@@ -1278,11 +1278,20 @@ public enum DebugSwiftRuntime {
         isFloatingButtonVisible = showsFloatingButton
         return true
         #else
-        DebugSwift().setup(enableBetaFeatures: betaFeatures)
+        // Later calls only update the panel's content: the setup made by the first one, or by the
+        // host through `DebugSwift().setup(...)`, stays. A first call that failed is tried again.
+        if !isAndroidSetUp {
+            DebugSwift().setup(enableBetaFeatures: betaFeatures)
+            isAndroidSetUp = DebugSwiftNativeBridge.install()
+        }
         isFloatingButtonVisible = showsFloatingButton
-        return DebugSwiftNativeBridge.install()
+        return isAndroidSetUp
         #endif
     }
+
+    #if os(Android)
+    @MainActor private static var isAndroidSetUp = false
+    #endif
 
     /// Starts the platform services without touching the panel's content. The panel calls it when it
     /// opens, so a host that never called `install` still gets the Android runtime.

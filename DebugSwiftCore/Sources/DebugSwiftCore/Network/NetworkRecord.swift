@@ -18,6 +18,9 @@ public struct NetworkRecord: Sendable, Equatable, Identifiable {
     public let requestHeaders: [String: String]
     public let requestBody: Data?
     public let outcome: Outcome
+    /// The response body as a decryptor read it, when the response was encrypted and a key or
+    /// decryptor applied. It travels with the record, so it is dropped when the record is.
+    public let decryptedResponseBody: String?
 
     public init(
         id: UUID = UUID(),
@@ -27,7 +30,8 @@ public struct NetworkRecord: Sendable, Equatable, Identifiable {
         url: String,
         requestHeaders: [String: String] = [:],
         requestBody: Data? = nil,
-        outcome: Outcome
+        outcome: Outcome,
+        decryptedResponseBody: String? = nil
     ) {
         self.id = id
         self.startedAt = startedAt
@@ -37,6 +41,7 @@ public struct NetworkRecord: Sendable, Equatable, Identifiable {
         self.requestHeaders = requestHeaders
         self.requestBody = requestBody
         self.outcome = outcome
+        self.decryptedResponseBody = decryptedResponseBody
     }
 
     public var statusCode: Int? {

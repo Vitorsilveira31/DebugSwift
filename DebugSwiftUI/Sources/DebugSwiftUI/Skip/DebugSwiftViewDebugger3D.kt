@@ -36,6 +36,8 @@ object DebugSwiftViewDebugger3D {
     private const val MAX_LAYERS = 800
     private val main = Handler(Looper.getMainLooper())
     private var viewer: Viewer? = null
+    /** Bumped by every presentation and dismissal; a capture from an older one is dropped. Main thread only. */
+    private var generation = 0
 
     private class Layer(val rect: Rect, val depth: Int, val name: String, val isCompose: Boolean)
 
@@ -54,6 +56,7 @@ object DebugSwiftViewDebugger3D {
 
     private fun present(activity: Activity) {
         dismiss()
+        val current = generation
         val decor = activity.window.decorView as? ViewGroup ?: return
         if (decor.width <= 0 || decor.height <= 0) return
         val layers = mutableListOf<Layer>()
@@ -61,7 +64,9 @@ object DebugSwiftViewDebugger3D {
         DebugSwiftFloatingButton.setSuppressed(activity, true)
         collect(decor, 0, layers)
         val screenshot = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
-        val attach = {
+        val attach = attach@{
+            // A later show() or a dismissal while this capture waited replaces it.
+            if (current != generation) return@attach
             val view = Viewer(activity, screenshot, layers)
             decor.addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             // The floating button lives in the same window; keep it out of the way while the viewer is open.
@@ -89,10 +94,15 @@ object DebugSwiftViewDebugger3D {
     }
 
     private fun dismiss() {
-        val view = viewer ?: return
-        (view.parent as? ViewGroup)?.removeView(view)
-        (view.context as? Activity)?.let { DebugSwiftFloatingButton.setSuppressed(it, false) }
-        viewer = null
+        generation++
+        val view = viewer
+        if (view != null) {
+            (view.parent as? ViewGroup)?.removeView(view)
+            viewer = null
+        }
+        // Also covers a capture that was still waiting: its button suppression is lifted here.
+        AndroidDebugTools.foregroundActivityOrNull()?.let { DebugSwiftFloatingButton.setSuppressed(it, false) }
+        (view?.context as? Activity)?.let { DebugSwiftFloatingButton.setSuppressed(it, false) }
     }
 
     private fun collect(view: View, depth: Int, layers: MutableList<Layer>) {
@@ -142,6 +152,8 @@ object DebugSwiftViewDebugger3D {
         private val buttonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC333333.toInt() }
         private val closeRect = RectF()
         private val maxDepth = (layers.maxOfOrNull { it.depth } ?: 0).coerceAtLeast(1)
+        /** Back to front, as drawn; hit testing walks it front to back. */
+        private val drawingOrder = layers.withIndex().sortedWith(compareBy({ it.value.depth }, { it.index })).map { it.value }
 
         private var rotationX = 18f
         private var rotationY = -32f
@@ -213,17 +225,22 @@ object DebugSwiftViewDebugger3D {
             return matrix
         }
 
+        /** The front-most layer whose projected shape covers the point, tested in screenshot coordinates. */
         private fun layerAt(x: Float, y: Float): Layer? {
-            val mapped = RectF()
-            return layers.sortedByDescending { it.depth }.firstOrNull { layer ->
-                transform(layer.depth).mapRect(mapped, RectF(layer.rect))
-                mapped.contains(x, y)
+            val inverse = Matrix()
+            val point = FloatArray(2)
+            return drawingOrder.asReversed().firstOrNull { layer ->
+                if (!transform(layer.depth).invert(inverse)) return@firstOrNull false
+                point[0] = x
+                point[1] = y
+                inverse.mapPoints(point)
+                layer.rect.contains(point[0].toInt(), point[1].toInt())
             }
         }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            for (layer in layers.sortedBy { it.depth }) {
+            for (layer in drawingOrder) {
                 canvas.save()
                 canvas.concat(transform(layer.depth))
                 canvas.drawBitmap(screenshot, layer.rect, layer.rect, bitmapPaint)

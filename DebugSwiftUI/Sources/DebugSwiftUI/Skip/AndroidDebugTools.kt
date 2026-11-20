@@ -345,6 +345,9 @@ object AndroidDebugTools {
         loadNetworkInjectionSettings(applicationContext)
         loadPushState(applicationContext)
         restoreAppearanceOverride(applicationContext)
+        // The retention window decides which saved requests load, so it is read first.
+        networkHistoryRetentionMs = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getLong(HISTORY_RETENTION_KEY, NETWORK_HISTORY_RETENTION_MS)
         loadNetworkHistory(applicationContext)
         loadCrashHistory(applicationContext)
         registerLifecycleCallbacks(applicationContext)
@@ -754,7 +757,7 @@ object AndroidDebugTools {
     }
 
     fun log(message: String, priority: Int = Log.DEBUG, tag: String = TAG) {
-        if (!consoleAccepts(message)) {
+        if (!consoleCaptureEnabled || !consoleAccepts(message)) {
             Log.println(priority, tag, message)
             return
         }
@@ -873,15 +876,15 @@ object AndroidDebugTools {
                 sanitizer.sanitizeHeaders(requestHeaders), sanitizer.sanitizeHeaders(responseHeaders),
                 sanitizer.sanitizeBody(requestBody, requestType).take(32_000),
                 sanitizer.sanitizeBody(responseBody, responseType).take(64_000),
-                sanitizer.sanitizeBody(
-                    decryptedResponseBody?.takeIf { it.isNotEmpty() } ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty(),
-                    "application/json"
-                ),
+                sanitizer.sanitizeText(
+                    decryptedResponseBody?.takeIf { it.isNotEmpty() } ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty()
+                ).take(64_000),
                 error, graphOperation, source
             )
         rememberReplayRequest(record.id, ReplayRequest(url, requestHeaders, requestBody))
         networkRecords.add(record)
         trim(networkRecords)
+        if (source == "webview") trimWebViewRecords()
         if (isPersistableNetworkRecord(record)) {
             networkHistoryRecords.add(record)
             trimNetworkHistory()
@@ -1360,7 +1363,8 @@ object AndroidDebugTools {
                 val emoji = if (endpointLimit == null) thresholdAlertEmoji else "⚠️"
                 val text = if (endpointLimit == null) thresholdAlertMessage else "Request limit exceeded!"
                 val message = "$emoji $text ($effectiveCount/$effectiveLimit)"
-                breach = ThresholdBreachRecord(now, effectiveCount, effectiveLimit, endpoint, message)
+                // Wall-clock time: the breach is shown with its date; `now` stays for the rate windows.
+                breach = ThresholdBreachRecord(System.currentTimeMillis(), effectiveCount, effectiveLimit, endpoint, message)
                 thresholdBreaches.add(breach!!)
                 while (thresholdBreaches.size > 1000) thresholdBreaches.removeAt(0)
             }
@@ -1617,6 +1621,7 @@ object AndroidDebugTools {
     }
 
     fun webSocketClosing(webSocket: WebSocket, url: String, code: Int, reason: String) {
+        if (!webSocketMonitoringEnabled && !webSocketByInstance.containsKey(webSocket)) return
         val connection = findOrCreateWebSocketConnection(webSocket, url)
         connection.status = "Closing"
         connection.statusDetail = listOf(code.toString(), reason).filter { it.isNotBlank() }.joinToString(" · ")
@@ -1625,6 +1630,7 @@ object AndroidDebugTools {
     }
 
     fun webSocketClosed(webSocket: WebSocket, url: String, code: Int, reason: String) {
+        if (!webSocketMonitoringEnabled && !webSocketByInstance.containsKey(webSocket)) return
         val connection = findOrCreateWebSocketConnection(webSocket, url)
         connection.status = "Closed"
         connection.statusDetail = listOf(code.toString(), reason).filter { it.isNotBlank() }.joinToString(" · ")
@@ -1635,6 +1641,7 @@ object AndroidDebugTools {
     }
 
     fun webSocketFailed(webSocket: WebSocket, url: String, error: String, responseCode: Int?) {
+        if (!webSocketMonitoringEnabled && !webSocketByInstance.containsKey(webSocket)) return
         val connection = findOrCreateWebSocketConnection(webSocket, url)
         connection.status = "Error"
         connection.statusDetail = listOfNotNull(responseCode?.let { "HTTP $it" }, error).joinToString(" · ")
@@ -1646,6 +1653,7 @@ object AndroidDebugTools {
 
     /** Backward-compatible text hook for hosts that record frames without the listener wrapper. */
     fun recordWebSocket(url: String, direction: String, payload: String) {
+        if (!webSocketMonitoringEnabled) return
         val normalizedDirection = direction.lowercase(Locale.ROOT)
         val connection = findOrCreateLegacyWebSocketConnection(url)
         when (normalizedDirection) {
@@ -1914,7 +1922,7 @@ object AndroidDebugTools {
                         responseHeaders = DebugSwiftNetworkSanitizer.sanitizeHeaders(decodeHeaders(row.optJSONObject("responseHeaders"))),
                         requestBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("requestBody"), headerValue(decodeHeaders(row.optJSONObject("requestHeaders")), "Content-Type")),
                         responseBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("responseBody"), headerValue(decodeHeaders(row.optJSONObject("responseHeaders")), "Content-Type")),
-                        decryptedResponseBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("decryptedResponseBody"), "application/json"),
+                        decryptedResponseBody = DebugSwiftNetworkSanitizer.sanitizeText(row.optString("decryptedResponseBody")).take(64_000),
                         error = row.optString("error"),
                         graphqlOperation = row.optString("graphqlOperation"),
                         source = row.optString("source", "http"),
@@ -2148,7 +2156,7 @@ object AndroidDebugTools {
 
     fun networkSessionRequestsSnapshotJSON(sessionID: String): String {
         val requests = JSONArray()
-        networkHistoryRecords
+        liveHistoryRecords()
             .filter { it.sessionID == sessionID }
             .sortedBy { it.timestamp }
             .forEach { requests.put(networkSessionRequestJSONObject(it)) }
@@ -2186,13 +2194,13 @@ object AndroidDebugTools {
     }
 
     fun replayNetworkSessionRequest(requestID: String): String {
-        val record = networkHistoryRecords.firstOrNull { it.id == requestID }
+        val record = liveHistoryRecords().firstOrNull { it.id == requestID }
             ?: return "This request is no longer available."
         return replayNetworkRecord(record)
     }
 
     private fun importNetworkSessionAsRewriteRules(sessionID: String): String {
-        val records = networkHistoryRecords.filter { it.sessionID == sessionID }.sortedBy { it.timestamp }
+        val records = liveHistoryRecords().filter { it.sessionID == sessionID }.sortedBy { it.timestamp }
         if (records.isEmpty()) return "This session has no requests to import."
 
         val rules = JSONArray()
@@ -2455,6 +2463,9 @@ object AndroidDebugTools {
             }
         })
         val note = if (original == null) " Masked credentials from the saved history are not resent." else ""
+        if (!networkAccepts(replayUrl)) {
+            return "Request replay started. The app's ignoredURLs or onlyURLs filters leave this URL out, so its response will not appear in the request list.$note"
+        }
         return "Request replay started. Its response will appear in the request list.$note"
     }
 
@@ -2954,7 +2965,7 @@ object AndroidDebugTools {
                 val now = SystemClock.elapsedRealtime()
                 val candidates = JSONArray()
                 destroyedActivities.filter { now - it.destroyedAtMs >= 5_000L && it.reference.get() != null }.forEach {
-                    candidates.put(JSONObject().put("className", it.className).put("ageSeconds", (now - it.destroyedAtMs) / 1000))
+                    candidates.put(JSONObject().put("id", System.identityHashCode(it).toString(16)).put("className", it.className).put("ageSeconds", (now - it.destroyedAtMs) / 1000))
                 }
                 result.put("destroyed", destroyedActivities.size).put("candidates", candidates)
             }
@@ -2983,16 +2994,23 @@ object AndroidDebugTools {
 
     /** Saves the call stacks of the main thread, or of every thread, for the Backtraces screen. */
     fun captureBacktrace(allThreads: Boolean, label: String? = null): String {
+        val (record, count) = captureBacktraceRecord(allThreads, label)
+        return if (record.isEmpty()) "No thread to capture." else "Captured $count thread${if (count == 1) "" else "s"}."
+    }
+
+    /** Captures and stores one backtrace, and returns the stored text with the number of threads. */
+    private fun captureBacktraceRecord(allThreads: Boolean, label: String?): Pair<String, Int> {
         val stacks = Thread.getAllStackTraces()
         val selected = if (allThreads) stacks.entries.sortedBy { it.key.name } else stacks.entries.filter { it.key === Looper.getMainLooper().thread }
         val body = selected.joinToString("\n\n") { (thread, frames) ->
             "Thread ${thread.name} (${thread.state})\n" + frames.joinToString("\n") { "    at $it" }
         }
         val scope = if (allThreads) "All ${selected.size} threads" else "Main thread"
-        backtraces.add("${timestamp()} · ${label?.let { "$it · $scope" } ?: scope}\n$body")
+        val record = "${timestamp()} · ${label?.let { "$it · $scope" } ?: scope}\n$body"
+        backtraces.add(record)
         trim(backtraces)
         publishEvent("performance", "Backtrace captured")
-        return "Captured ${selected.size} thread${if (selected.size == 1) "" else "s"}."
+        return record to selected.size
     }
 
     fun clearBacktraces() {
@@ -3331,7 +3349,7 @@ object AndroidDebugTools {
             "agent_debug_log" -> if (enabled) {
                 agentLogEnabled = true
             }
-            "thread_checker" -> if (enabled) enableStrictMode() else disableStrictMode()
+            "thread_checker" -> reconcileStrictMode()
             "network_thresholds" -> setThresholdBlocking(enabled)
             "network_injection" -> {
                 networkInjectionEnabled = enabled
@@ -3355,6 +3373,7 @@ object AndroidDebugTools {
             "console" -> File(context.cacheDir, "debugswift-console-${System.currentTimeMillis()}.txt").apply { writeText(consoleRecords.joinToString("\n")) }
             "oslog_console" -> File(context.cacheDir, "debugswift-logcat-${System.currentTimeMillis()}.txt").apply { writeText(logcatSnapshot()) }
             "network_thresholds" -> File(context.cacheDir, "debugswift-network-thresholds-${System.currentTimeMillis()}.txt").apply { writeText(getThresholdLogs()) }
+            "network_injection" -> File(context.cacheDir, "debugswift-rewrite-rules-${System.currentTimeMillis()}.csv").apply { writeText(exportNetworkInjectionRulesCSV()) }
             "agent_debug_log" -> File(context.filesDir, AGENT_LOG_FILENAME).takeIf { it.exists() }
             "crashes" -> File(context.cacheDir, "debugswift-crashes-${System.currentTimeMillis()}.txt").apply { writeText(crashRecords.joinToString("\n\n")) }
             "files" -> exportCurrentFile(context)
@@ -4699,14 +4718,36 @@ object AndroidDebugTools {
 
     private var previousThreadPolicy: android.os.StrictMode.ThreadPolicy? = null
     private var previousVmPolicy: android.os.StrictMode.VmPolicy? = null
+    /** True while the installed StrictMode policies are DebugSwift's. Main thread only. */
+    private var strictModeOwned = false
+
+    /**
+     * Makes StrictMode match the thread checker's switch, on the main thread and with the state as
+     * it is when that runs, so a change made in between is not undone. `reinstall` applies new options
+     * to a policy DebugSwift already installed.
+     */
+    private fun reconcileStrictMode(reinstall: Boolean = false) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { reconcileStrictMode(reinstall) }
+            return
+        }
+        val wanted = synchronized(enabledTools) { "thread_checker" in enabledTools }
+        when {
+            wanted && (!strictModeOwned || reinstall) -> enableStrictMode()
+            !wanted && strictModeOwned -> disableStrictMode()
+        }
+    }
 
     private fun enableStrictMode() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             mainHandler.post { enableStrictMode() }
             return
         }
-        if (previousThreadPolicy == null) previousThreadPolicy = android.os.StrictMode.getThreadPolicy()
-        if (previousVmPolicy == null) previousVmPolicy = android.os.StrictMode.getVmPolicy()
+        // Keep the app's own policies once, to put them back when the checker is turned off.
+        if (!strictModeOwned) {
+            previousThreadPolicy = android.os.StrictMode.getThreadPolicy()
+            previousVmPolicy = android.os.StrictMode.getVmPolicy()
+        }
         val threadPolicy = android.os.StrictMode.ThreadPolicy.Builder()
                 .detectAll()
         if (strictModeFlashScreen) threadPolicy.penaltyFlashScreen()
@@ -4736,6 +4777,7 @@ object AndroidDebugTools {
             vmPolicy.penaltyLog()
         }
         android.os.StrictMode.setVmPolicy(vmPolicy.build())
+        strictModeOwned = true
     }
 
     private fun disableStrictMode() {
@@ -4743,10 +4785,13 @@ object AndroidDebugTools {
             mainHandler.post { disableStrictMode() }
             return
         }
+        // Only put back what DebugSwift replaced; an app policy DebugSwift never touched stays.
+        if (!strictModeOwned) return
         android.os.StrictMode.setThreadPolicy(previousThreadPolicy ?: android.os.StrictMode.ThreadPolicy.LAX)
         android.os.StrictMode.setVmPolicy(previousVmPolicy ?: android.os.StrictMode.VmPolicy.LAX)
         previousThreadPolicy = null
         previousVmPolicy = null
+        strictModeOwned = false
     }
 
     private fun clearInjectionRules() {
@@ -4873,6 +4918,25 @@ object AndroidDebugTools {
     @Volatile var webSocketMonitoringEnabled = true
     @Volatile var webViewCaptureEnabled = true
     @Volatile var webViewMaxStoredRequests = 1000
+    /** Off when the host passed `.console` to `DebugSwift().setup(disable:)`; Logcat still gets the line. */
+    @Volatile var consoleCaptureEnabled = true
+    private const val HISTORY_RETENTION_KEY = "network_history_retention_ms"
+
+    /** Saved history inside the retention window: what every history read and action sees. */
+    private fun liveHistoryRecords(): List<NetworkRecord> {
+        val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
+        return networkHistoryRecords.filter { it.timestamp >= cutoff }
+    }
+
+    /** Keeps the newest `webViewMaxStoredRequests` WebView records; HTTP records are not affected. */
+    private fun trimWebViewRecords() {
+        val webView = networkRecords.filter { it.source == "webview" }
+        val excess = webView.size - webViewMaxStoredRequests
+        if (excess > 0) {
+            val dropped = webView.take(excess).map { it.id }.toSet()
+            networkRecords.removeAll { it.id in dropped }
+        }
+    }
     @Volatile private var strictModeFlashScreen = false
     @Volatile private var strictModeLog = false
     @Volatile private var strictModeIgnoredClasses: Set<String> = emptySet()
@@ -4912,6 +4976,7 @@ object AndroidDebugTools {
         val args = runCatching { JSONObject(arguments.ifBlank { "{}" }) }.getOrElse { JSONObject() }
         val context = appContext
         fun ok(message: String = "") = JSONObject().put("ok", true).put("message", message).toString()
+        fun fail(message: String) = JSONObject().put("ok", false).put("message", message).toString()
         return when (operation) {
             // Console
             "console.messages" -> JSONArray(consoleRecords.toList()).toString()
@@ -4926,6 +4991,7 @@ object AndroidDebugTools {
                 consoleOnlyLogs = stringList(args.optJSONArray("only"))
                 ok()
             }
+            "console.enabled" -> { consoleCaptureEnabled = args.optBoolean("enabled", true); ok() }
             "console.share" -> ok(context?.let { export("console", it) } ?: "Android runtime has not been installed.")
 
             // Network
@@ -4947,7 +5013,11 @@ object AndroidDebugTools {
             "network.sessionHistory" -> {
                 val days = args.optInt("retentionDays", 7).coerceIn(1, 365)
                 networkHistoryRetentionMs = days * 24L * 60 * 60 * 1_000
+                context?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()
+                    ?.putLong(HISTORY_RETENTION_KEY, networkHistoryRetentionMs)?.apply()
                 trimNetworkHistory()
+                // Rewrite the file now, so requests outside the new window cannot come back after a restart.
+                persistNetworkHistory()
                 ok()
             }
             "network.threshold.get" -> {
@@ -5012,14 +5082,17 @@ object AndroidDebugTools {
             // WebView
             "webview.config" -> {
                 if (args.has("enabled")) webViewCaptureEnabled = args.optBoolean("enabled")
-                if (args.has("maxStoredRequests")) webViewMaxStoredRequests = args.optInt("maxStoredRequests").coerceAtLeast(1)
+                if (args.has("maxStoredRequests")) {
+                    webViewMaxStoredRequests = args.optInt("maxStoredRequests").coerceAtLeast(1)
+                    trimWebViewRecords()
+                }
                 JSONObject().put("enabled", webViewCaptureEnabled).put("maxStoredRequests", webViewMaxStoredRequests).toString()
             }
 
             // Performance
             "performance.backtrace.capture" -> {
-                captureBacktrace(args.optBoolean("allThreads", false), args.optString("label").ifBlank { null })
-                backtraceJSON(backtraces.last()).toString()
+                val (record, _) = captureBacktraceRecord(args.optBoolean("allThreads", false), args.optString("label").ifBlank { null })
+                backtraceJSON(record).toString()
             }
             "performance.backtraces" -> JSONArray().also { array -> backtraces.toList().forEach { array.put(backtraceJSON(it)) } }.toString()
             "performance.backtraces.clear" -> { clearBacktraces(); ok() }
@@ -5033,17 +5106,15 @@ object AndroidDebugTools {
             "performance.threads.enabled" -> {
                 val enabled = args.optBoolean("enabled")
                 synchronized(enabledTools) { if (enabled) enabledTools.add("thread_checker") else enabledTools.remove("thread_checker") }
-                if (enabled) enableStrictMode() else disableStrictMode()
+                reconcileStrictMode()
                 ok()
             }
             "performance.threads.options" -> {
                 if (args.has("flashScreen")) strictModeFlashScreen = args.optBoolean("flashScreen")
                 if (args.has("log")) strictModeLog = args.optBoolean("log")
                 if (args.has("ignored")) strictModeIgnoredClasses = stringList(args.optJSONArray("ignored")).toSet()
-                if (synchronized(enabledTools) { "thread_checker" in enabledTools }) {
-                    disableStrictMode()
-                    enableStrictMode()
-                }
+                // Reinstalls the policy with the new options if the checker is on when this runs.
+                reconcileStrictMode(reinstall = true)
                 ok()
             }
             "performance.threads.clear" -> { threadViolations.clear(); ok() }
@@ -5100,30 +5171,60 @@ object AndroidDebugTools {
             "push.foreground" -> ok(simulateForegroundPushNotification(args.optString("id")))
             "push.background" -> ok(simulateBackgroundPushNotification(args.optString("id")))
             "push.addTemplate" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
                 val info = args.optJSONObject("userInfo")
                 val userInfo = info?.keys()?.asSequence()?.associateWith { info.optString(it) } ?: emptyMap()
-                ok(addPushNotificationTemplate(
-                    args.optString("name"),
+                val name = args.optString("name")
+                if (name.isBlank() || args.optString("title").isBlank() || args.optString("body").isBlank()) {
+                    return fail("Template name, title, and body cannot be empty.")
+                }
+                // The id the caller chose is the one stored, so removeTemplate(id:) finds the template.
+                val template = PushNotificationTemplate(
+                    args.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name,
                     args.optString("title"),
                     args.optString("body"),
                     args.optString("subtitle").ifEmpty { null },
                     if (args.isNull("badge") || !args.has("badge")) null else args.optInt("badge"),
                     args.optString("sound").ifEmpty { null },
                     args.optString("category").ifEmpty { null },
-                    userInfo
-                ))
+                    userInfo,
+                    false
+                )
+                storePushTemplate(ctx, template).let { if (it.endsWith("added.")) ok(it) else fail(it) }
             }
             "push.removeTemplate" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
                 val id = args.optString("id")
-                val name = pushTemplates.firstOrNull { it.id == id }?.name ?: id
-                ok(removePushNotificationTemplate(name))
+                val template = pushTemplates.firstOrNull { it.id == id } ?: return fail("No notification template with id '$id'.")
+                // Names are unique, so removing by this template's name removes exactly this one.
+                removePushTemplate(ctx, template.name).let { if (it.endsWith("removed.")) ok(it) else fail(it) }
             }
             "push.clearHistory" -> ok(clearPushNotificationHistory())
             "push.remove" -> ok(removeSimulatedPushNotification(args.optString("id")))
             "push.config" -> {
-                val keys = args.keys().asSequence().toList()
-                keys.forEach { key -> updatePushNotificationSetting(key, args.get(key).toString()) }
-                ok()
+                val ctx = context ?: return fail("Android runtime has not been installed.")
+                // All or nothing: apply each option, and put every option back if one is rejected.
+                val saved = listOf<Any>(pushShowInForeground, pushPlaySound, pushShowBadge, pushAutoInteraction,
+                    pushInteractionDelaySeconds, pushSimulateRealPush, pushDefaultSound, pushMaxHistoryCount)
+                val rejected = args.keys().asSequence().toList().mapNotNull { key ->
+                    val result = setPushConfiguration(ctx, "$key=${args.get(key)}")
+                    result.takeUnless { it.startsWith("Notification configuration updated") }
+                }
+                if (rejected.isEmpty()) {
+                    ok("Notification configuration updated.")
+                } else {
+                    pushShowInForeground = saved[0] as Boolean
+                    pushPlaySound = saved[1] as Boolean
+                    pushShowBadge = saved[2] as Boolean
+                    pushAutoInteraction = saved[3] as Boolean
+                    pushInteractionDelaySeconds = saved[4] as Double
+                    pushSimulateRealPush = saved[5] as Boolean
+                    pushDefaultSound = saved[6] as String
+                    pushMaxHistoryCount = saved[7] as Int
+                    persistPushConfiguration(ctx)
+                    fail(rejected.joinToString(" "))
+                }
             }
             "push.scenario" -> ok(runPushNotificationScenario(args.optString("name")))
             "push.token" -> { reportPushToken(args.optString("token")); ok() }

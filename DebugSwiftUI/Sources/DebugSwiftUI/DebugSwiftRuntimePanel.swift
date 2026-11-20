@@ -101,6 +101,7 @@ public extension View {
 struct DebugSwiftPanelPresenter: ViewModifier {
     #if os(Android)
     @State var presentation = DebugSwiftPresentation.shared
+    @State var id = UUID()
     #endif
 
     func body(content: Content) -> some View {
@@ -109,11 +110,8 @@ struct DebugSwiftPanelPresenter: ViewModifier {
             .sheet(isPresented: $presentation.isPresented, onDismiss: { presentation.route = nil }) {
                 DebugSwiftRuntime.panel { presentation.dismiss() }
             }
-            .onAppear {
-                presentation.isAttached = true
-                DebugFloatingButton.onTap = { DebugSwiftPresentation.shared.present(route: nil) }
-            }
-            .onDisappear { presentation.isAttached = false }
+            .onAppear { presentation.attach(id) }
+            .onDisappear { presentation.detach(id) }
         #else
         // iOS opens the debugger from its floating ball and `DebugSwift.App.presentDebugger()`.
         content

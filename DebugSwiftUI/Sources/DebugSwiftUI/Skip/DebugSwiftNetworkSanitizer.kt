@@ -101,6 +101,25 @@ object DebugSwiftNetworkSanitizer {
         }
     }
 
+    /**
+     * Masks text whose format is unknown, such as a decrypted body: as JSON when it parses, and
+     * otherwise every `key=value` or `key: value` pair whose key is a masked one.
+     */
+    fun sanitizeText(body: String): String {
+        val keys = bodyKeys
+        if (keys.isEmpty() || body.isEmpty()) return body
+        sanitizeJson(body, keys)?.let { return it }
+        return KEY_VALUE.replace(body) { match ->
+            if (normalize(match.groupValues[2]) in keys) {
+                match.groupValues[1] + match.groupValues[2] + match.groupValues[3] + REDACTED
+            } else {
+                match.value
+            }
+        }
+    }
+
+    private val KEY_VALUE = Regex("""(^|[\s&;,{"'])([A-Za-z0-9_.-]+)(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s&;,}]+)""")
+
     private val USER_INFO = Regex("^([a-zA-Z][a-zA-Z0-9+.-]*://)([^/?#@:]*):([^/?#@]*)@")
 
     private fun normalize(name: String): String = name.lowercase().filter { it != '_' && it != '-' }

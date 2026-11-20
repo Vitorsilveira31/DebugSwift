@@ -24,6 +24,14 @@ struct LeakView: View {
                     .foregroundColor(.black)
                     .multilineTextAlignment(.center)
                     .padding()
+                #if os(Android)
+                // The Android detector watches destroyed Activities, and this screen is not one.
+                Text("On Android, Performance → Leaks lists destroyed Activities that stay in memory. This helper object is not an Activity, so it does not show there; the iOS detector finds it.")
+                    .font(.caption)
+                    .foregroundColor(.black)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                #endif
             }
         }
         .navigationTitle("Memory Leak")

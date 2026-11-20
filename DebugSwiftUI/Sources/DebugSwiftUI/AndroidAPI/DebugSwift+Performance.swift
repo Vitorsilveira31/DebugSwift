@@ -227,7 +227,7 @@ public class PerformanceManager: @unchecked Sendable {
     }
 
     public func onLeakDetected(_ callback: @escaping (LeakData) -> Void) {
-        PerformanceEvents.shared.leakDataCallbacks.append(callback)
+        PerformanceEvents.shared.addLeakDataCallback(callback)
         PerformanceEvents.shared.start()
     }
 
@@ -291,20 +291,75 @@ extension DebugSwift.Performance {
 final class PerformanceEvents: @unchecked Sendable {
     static let shared = PerformanceEvents()
 
-    var leakCallback: ((PerformanceLeak) -> Void)?
-    var leakDataCallbacks: [(PerformanceManager.LeakData) -> Void] = []
-    var leakDelay: TimeInterval = 1
-    var superCallCallback: ((SuperCallViolation) -> Void)?
-    var backtraceCallback: ((CapturedBacktrace) -> Void)?
-    var ignoredWindowClassNames: [String] = []
-    var ignoredLeakClassNames: [String] = []
-    var ignoredViewClassNames: [String] = []
-    var ignoredSuperCallClasses: Set<String> = []
+    /// Everything the host sets and the poller reads, behind one lock.
+    private struct Configuration {
+        var leakCallback: ((PerformanceLeak) -> Void)?
+        var leakDataCallbacks: [(PerformanceManager.LeakData) -> Void] = []
+        var leakDelay: TimeInterval = 1
+        var superCallCallback: ((SuperCallViolation) -> Void)?
+        var backtraceCallback: ((CapturedBacktrace) -> Void)?
+        var ignoredWindowClassNames: [String] = []
+        var ignoredLeakClassNames: [String] = []
+        var ignoredViewClassNames: [String] = []
+        var ignoredSuperCallClasses: Set<String> = []
+    }
 
     private let lock = NSLock()
+    private var configuration = Configuration()
     private var task: Task<Void, Never>?
+    /// The destroyed Activities already reported, by instance: a later leak of the same class is new.
     private var reportedLeaks: Set<String> = []
     private var reportedSuperCalls: Set<String> = []
+
+    private func locked<T>(_ body: (inout Configuration) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&configuration)
+    }
+
+    var leakCallback: ((PerformanceLeak) -> Void)? {
+        get { locked { $0.leakCallback } }
+        set { locked { $0.leakCallback = newValue } }
+    }
+
+    var leakDelay: TimeInterval {
+        get { locked { $0.leakDelay } }
+        set { locked { $0.leakDelay = newValue } }
+    }
+
+    var superCallCallback: ((SuperCallViolation) -> Void)? {
+        get { locked { $0.superCallCallback } }
+        set { locked { $0.superCallCallback = newValue } }
+    }
+
+    var backtraceCallback: ((CapturedBacktrace) -> Void)? {
+        get { locked { $0.backtraceCallback } }
+        set { locked { $0.backtraceCallback = newValue } }
+    }
+
+    var ignoredWindowClassNames: [String] {
+        get { locked { $0.ignoredWindowClassNames } }
+        set { locked { $0.ignoredWindowClassNames = newValue } }
+    }
+
+    var ignoredLeakClassNames: [String] {
+        get { locked { $0.ignoredLeakClassNames } }
+        set { locked { $0.ignoredLeakClassNames = newValue } }
+    }
+
+    var ignoredViewClassNames: [String] {
+        get { locked { $0.ignoredViewClassNames } }
+        set { locked { $0.ignoredViewClassNames = newValue } }
+    }
+
+    var ignoredSuperCallClasses: Set<String> {
+        get { locked { $0.ignoredSuperCallClasses } }
+        set { locked { $0.ignoredSuperCallClasses = newValue } }
+    }
+
+    func addLeakDataCallback(_ callback: @escaping (PerformanceManager.LeakData) -> Void) {
+        locked { $0.leakDataCallbacks.append(callback) }
+    }
 
     func start() {
         lock.lock()
@@ -319,20 +374,25 @@ final class PerformanceEvents: @unchecked Sendable {
     }
 
     private func poll() {
-        let leaks = DebugSwiftHost.object("performance.leaks")["candidates"] as? [[String: Any]] ?? []
-        for leak in leaks {
-            let className = leak["className"] as? String ?? ""
-            let age = DebugSwiftHost.double(leak["ageSeconds"]) ?? 0
-            guard age >= leakDelay,
-                  !ignoredLeakClassNames.contains(where: { className.hasSuffix($0) }),
-                  markReported(className, in: \.reportedLeaks) else { continue }
-            let message = "\(className) was destroyed but is still in memory."
-            leakCallback?(PerformanceLeak(className: className, message: message))
-            leakDataCallbacks.forEach { $0(PerformanceManager.LeakData(message: message, controller: className)) }
+        // Read the settings once, then call the host's callbacks without holding the lock.
+        let settings = locked { $0 }
+        if !DebugSwift.disabledMethods.contains(.leaksDetector) {
+            let leaks = DebugSwiftHost.object("performance.leaks")["candidates"] as? [[String: Any]] ?? []
+            for leak in leaks {
+                let className = leak["className"] as? String ?? ""
+                let id = leak["id"] as? String ?? className
+                let age = DebugSwiftHost.double(leak["ageSeconds"]) ?? 0
+                guard age >= settings.leakDelay,
+                      !settings.ignoredLeakClassNames.contains(where: { className.hasSuffix($0) }),
+                      markReported(id, in: \.reportedLeaks) else { continue }
+                let message = "\(className) was destroyed but is still in memory."
+                settings.leakCallback?(PerformanceLeak(className: className, message: message))
+                settings.leakDataCallbacks.forEach { $0(PerformanceManager.LeakData(message: message, controller: className)) }
+            }
         }
-        guard DebugSwift.disabledMethods.contains(.superCallDetector) == false else { return }
+        guard !DebugSwift.disabledMethods.contains(.superCallDetector) else { return }
         for violation in Self.superCallViolations() where markReported(violation.message, in: \.reportedSuperCalls) {
-            superCallCallback?(violation)
+            settings.superCallCallback?(violation)
         }
     }
 

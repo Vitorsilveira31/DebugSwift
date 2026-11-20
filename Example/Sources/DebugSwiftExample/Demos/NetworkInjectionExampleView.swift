@@ -17,6 +17,8 @@ import FoundationNetworking
 struct NetworkInjectionExampleView: View {
     @State var responseText = "Tap a button to test network injection"
     @State var isLoading = false
+    /// The request whose result the screen shows; an older one that finishes later is ignored.
+    @State var currentRequest = 0
     @State var delayEnabled = false
     @State var failureEnabled = false
     @State var rewriteEnabled = false
@@ -42,14 +44,15 @@ struct NetworkInjectionExampleView: View {
             }
 
             Section {
-                Toggle("Enable Delay (2s)", isOn: $delayEnabled)
-                    .onChange(of: delayEnabled) { _, enabled in
-                        if enabled {
-                            DebugSwift.Network.shared.enableRequestDelay(2.0)
-                        } else {
-                            DebugSwift.Network.shared.disableRequestDelay()
-                        }
+                // The switches change the rules only when tapped, so reflecting a preset never replaces it.
+                Toggle("Enable Delay (2s)", isOn: Binding(get: { delayEnabled }, set: { enabled in
+                    delayEnabled = enabled
+                    if enabled {
+                        DebugSwift.Network.shared.enableRequestDelay(2.0)
+                    } else {
+                        DebugSwift.Network.shared.disableRequestDelay()
                     }
+                }))
                 Button("Test with Fixed 3s Delay") {
                     DebugSwift.Network.shared.enableRequestDelay(3.0)
                     send()
@@ -63,14 +66,14 @@ struct NetworkInjectionExampleView: View {
             }
 
             Section {
-                Toggle("Enable Failure (50%)", isOn: $failureEnabled)
-                    .onChange(of: failureEnabled) { _, enabled in
-                        if enabled {
-                            DebugSwift.Network.shared.enableFailureInjection(failureRate: 0.5, failureType: .timeout)
-                        } else {
-                            DebugSwift.Network.shared.disableFailureInjection()
-                        }
+                Toggle("Enable Failure (50%)", isOn: Binding(get: { failureEnabled }, set: { enabled in
+                    failureEnabled = enabled
+                    if enabled {
+                        DebugSwift.Network.shared.enableFailureInjection(failureRate: 0.5, failureType: .timeout)
+                    } else {
+                        DebugSwift.Network.shared.disableFailureInjection()
                     }
+                }))
                 Button("Test Timeout Error") {
                     DebugSwift.Network.shared.enableFailureInjection(failureRate: 1.0, failureType: .timeout)
                     send()
@@ -96,14 +99,14 @@ struct NetworkInjectionExampleView: View {
             }
 
             Section {
-                Toggle("Enable Rewrite", isOn: $rewriteEnabled)
-                    .onChange(of: rewriteEnabled) { _, enabled in
-                        if enabled {
-                            applyRewriteRule()
-                        } else {
-                            DebugSwift.Network.shared.disableResponseBodyRewrite()
-                        }
+                Toggle("Enable Rewrite", isOn: Binding(get: { rewriteEnabled }, set: { enabled in
+                    rewriteEnabled = enabled
+                    if enabled {
+                        applyRewriteRule()
+                    } else {
+                        DebugSwift.Network.shared.disableResponseBodyRewrite()
                     }
+                }))
                 Text("URL Wildcard Pattern")
                     .font(.subheadline)
                 TextField("https://api.example.com/path/*", text: $rewriteURLPattern)
@@ -132,9 +135,6 @@ struct NetworkInjectionExampleView: View {
                     DebugSwift.Network.shared.disableRequestDelay()
                     DebugSwift.Network.shared.disableFailureInjection()
                     DebugSwift.Network.shared.disableResponseBodyRewrite()
-                    delayEnabled = false
-                    failureEnabled = false
-                    rewriteEnabled = false
                     send()
                 }
                 .foregroundColor(.green)
@@ -149,22 +149,40 @@ struct NetworkInjectionExampleView: View {
             }
         }
         .navigationTitle("Network Injection")
+        // The rules can also change in the debug panel, so the switches read them when the screen shows.
+        .onAppear { syncSwitches() }
+    }
+
+    /// Shows in the switches whether each kind of injection is on, as the shared rules say.
+    private func syncSwitches() {
+        guard let data = DebugSwift.Network.shared.networkInjectionSettingsJSON().data(using: .utf8),
+              let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        func isOn(_ key: String) -> Bool {
+            (settings[key] as? [String: Any])?["isEnabled"] as? Bool ?? false
+        }
+        delayEnabled = isOn("delay")
+        failureEnabled = isOn("failure")
+        rewriteEnabled = isOn("rewrite")
     }
 
     private func send() {
-        Task { @MainActor in await makeRequest() }
+        syncSwitches()
+        currentRequest += 1
+        let request = currentRequest
+        Task { @MainActor in await makeRequest(request) }
     }
 
     @MainActor
-    private func makeRequest() async {
+    private func makeRequest(_ request: Int) async {
         isLoading = true
         responseText = "Making request..."
         let startTime = Date()
-        defer { isLoading = false }
+        defer { if request == currentRequest { isLoading = false } }
 
         do {
             let url = URL(string: "https://jsonplaceholder.typicode.com/todos/1")!
             let (data, response) = try await URLSession.shared.data(from: url)
+            guard request == currentRequest else { return }
             let duration = Date().timeIntervalSince(startTime)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             responseText = """
@@ -176,6 +194,7 @@ struct NetworkInjectionExampleView: View {
             \(String(data: data, encoding: .utf8) ?? "Unable to decode")
             """
         } catch {
+            guard request == currentRequest else { return }
             let duration = Date().timeIntervalSince(startTime)
             responseText = """
             ❌ Error

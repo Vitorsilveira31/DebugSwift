@@ -435,12 +435,60 @@ extension DebugSwift {
             }
         }
 
-        private static func updateInjection(_ change: @escaping @Sendable (inout DebugSwiftNetworkInjection) -> Void) {
-            Task { @MainActor in
-                var settings = DebugSwiftRuntime.networkInjection
-                change(&settings)
-                DebugSwiftRuntime.networkInjection = settings
+        private static let injectionLock = NSLock()
+
+        /// Reads the rules, changes them and applies them before returning, so a request started
+        /// right after the call already sees them. The lock keeps concurrent changes from losing
+        /// each other's edits.
+        private static func updateInjection(_ change: (inout DebugSwiftNetworkInjection) -> Void) {
+            injectionLock.lock()
+            defer { injectionLock.unlock() }
+            var settings = currentInjection()
+            change(&settings)
+            guard let data = try? JSONEncoder().encode(settings),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            _ = DebugSwiftNativeBridge.applyNetworkInjectionSettingsJSON(json)
+        }
+
+        private static func currentInjection() -> DebugSwiftNetworkInjection {
+            guard let data = DebugSwiftNativeBridge.networkInjectionSettingsJSON().data(using: .utf8),
+                  let settings = try? JSONDecoder().decode(DebugSwiftNetworkInjection.self, from: data) else {
+                return DebugSwiftNetworkInjection()
             }
+            return settings
+        }
+
+        // MARK: - Injection settings
+
+        /// The delay, failure and rewrite settings as JSON, the format the panel's form edits.
+        public func networkInjectionSettingsJSON() -> String {
+            DebugSwiftNativeBridge.networkInjectionSettingsJSON()
+        }
+
+        /// Applies settings produced by the shared SwiftUI form.
+        @discardableResult
+        public func applyNetworkInjectionSettingsJSON(_ json: String) -> Bool {
+            Self.injectionLock.lock()
+            defer { Self.injectionLock.unlock() }
+            return DebugSwiftNativeBridge.applyNetworkInjectionSettingsJSON(json) == "Network injection settings applied."
+        }
+
+        /// Exports response modifier rules in the CSV format the iOS settings screen uses.
+        public func responseRewriteRulesCSV() -> String {
+            DebugSwiftNativeBridge.exportNetworkInjectionRulesCSV()
+        }
+
+        /// Imports response modifier rules from CSV, updating existing URL and method pairs.
+        public func importResponseRewriteRulesCSV(_ csv: String) -> String {
+            Self.injectionLock.lock()
+            defer { Self.injectionLock.unlock() }
+            return DebugSwiftNativeBridge.importNetworkInjectionRulesCSV(csv)
+        }
+
+        /// Opens the share sheet for the exported response modifier CSV.
+        @MainActor
+        public func shareResponseRewriteRulesCSV() {
+            _ = DebugSwiftNativeBridge.perform("network_injection", "export", "")
         }
 
         // MARK: - History

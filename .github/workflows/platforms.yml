@@ -105,12 +105,18 @@ jobs:
           SKIP_EXPORT_ARCHS: x86_64
         run: gradle assembleDebug assembleDebugAndroidTest --console=plain
 
+      # upload-artifact keeps the folders below the paths' common parent, so both APKs are staged
+      # side by side first: run-instrumented-tests.sh expects them directly inside its folder.
+      - name: Stage the APKs for the emulator job
+        run: |
+          mkdir -p build/android-test-apks
+          cp Example/.build/Android/app/outputs/apk/debug/app-debug.apk build/android-test-apks/
+          cp Example/.build/Android/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk build/android-test-apks/
+
       - uses: actions/upload-artifact@v5
         with:
           name: android-test-apks
-          path: |
-            Example/.build/Android/app/outputs/apk/debug/app-debug.apk
-            Example/.build/Android/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          path: build/android-test-apks
           if-no-files-found: error
           retention-days: 3
 

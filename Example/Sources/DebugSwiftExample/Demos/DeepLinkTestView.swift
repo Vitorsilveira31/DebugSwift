@@ -33,7 +33,9 @@ struct DeepLinkTestView: View {
                     let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
                     if !items.isEmpty {
                         Section {
-                            ForEach(items, id: \.name) { item in
+                            // By position: a name can repeat, as in ?tag=a&tag=b.
+                            ForEach(items.indices, id: \.self) { index in
+                                let item = items[index]
                                 HStack {
                                     Text(item.name)
                                         .foregroundColor(.secondary)

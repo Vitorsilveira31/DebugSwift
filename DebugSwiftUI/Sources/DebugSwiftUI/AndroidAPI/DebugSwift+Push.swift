@@ -326,6 +326,7 @@ extension DebugSwift {
 
         public static func addTemplate(_ template: NotificationTemplate) {
             var arguments: [String: Any] = [
+                "id": template.id,
                 "name": template.name, "title": template.title, "body": template.body,
                 "subtitle": template.subtitle ?? "", "sound": template.sound ?? "",
                 "category": template.category ?? "", "userInfo": template.userInfo

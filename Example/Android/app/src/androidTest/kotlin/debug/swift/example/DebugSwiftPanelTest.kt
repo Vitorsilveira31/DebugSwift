@@ -81,16 +81,18 @@ class DebugSwiftPanelTest {
 
     @Test
     fun crashReportsShowAnUncaughtException() {
-        val thread = Thread({ throw CrashProbe("instrumented crash probe") }, "debugswift-crash-probe")
+        // Reports from earlier runs are restored at launch, so this run's probe carries its own marker.
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        val thread = Thread({ throw CrashProbe("instrumented crash probe $marker") }, "debugswift-crash-probe-$marker")
         thread.start()
         thread.join(5_000)
 
         val newest = AndroidDebugTools.crashReportsNewestFirst().firstOrNull().orEmpty()
-        assertTrue("The crash handler did not save the probe: $newest", newest.contains("instrumented crash probe"))
+        assertTrue("The crash handler did not save this run's probe: $newest", newest.contains("instrumented crash probe $marker"))
 
         open("App", "Crash Reports")
         // Each report is listed by its first line: the time and the thread that crashed.
-        waitFor(hasText("debugswift-crash-probe", substring = true))
+        waitFor(hasText("debugswift-crash-probe-$marker", substring = true))
     }
 
     /** Opens the debug panel from the button at the top of the demo list. */

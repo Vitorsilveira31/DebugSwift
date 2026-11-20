@@ -99,15 +99,37 @@ final class DebugSwiftPresentation {
     var isPresented = false
     /// A feature the panel opens directly, for example `measurement`.
     var route: String?
-    /// Set while a view with `.debugSwiftPanel()` is on screen to present the panel.
-    var isAttached = false
+    /// The `.debugSwiftPanel()` presenter on screen, if any. The newest one presents the panel.
+    private var presenter: UUID?
+    /// The host's own floating-button handler, put back when the presenter leaves the screen.
+    private var hostTap: (@MainActor () -> Void)?
+
+    var isAttached: Bool { presenter != nil }
+
+    /// Called by a `.debugSwiftPanel()` presenter when it appears: the floating button opens the
+    /// panel through it from now on.
+    func attach(_ id: UUID) {
+        if presenter == nil { hostTap = DebugFloatingButton.onTap }
+        presenter = id
+        DebugFloatingButton.onTap = { DebugSwiftPresentation.shared.present(route: nil) }
+    }
+
+    /// Called when that presenter disappears. Only the presenter that attached last detaches, and
+    /// the handler the host had before comes back, so `present` never calls itself.
+    func detach(_ id: UUID) {
+        guard presenter == id else { return }
+        presenter = nil
+        DebugFloatingButton.onTap = hostTap
+        hostTap = nil
+    }
 
     func present(route: String?) {
         self.route = route
         if isAttached {
             isPresented = true
-        } else {
-            DebugFloatingButton.onTap?()
+        } else if let hostTap = DebugFloatingButton.onTap {
+            // No presenter on screen: the host shows the panel itself (`DebugFloatingButton.onTap`).
+            hostTap()
         }
     }
 
@@ -136,6 +158,8 @@ public class DebugSwift {
         Self.disabledMethods = methods
         Self.enabledBetaFeatures = betaFeatures
         DebugSwiftRuntime.startRuntime(capturesURLSession: !methods.contains(.network))
+        // `.leaksDetector` and `.superCallDetector` are read by the leak and super-call watchers.
+        DebugSwiftHost.call("console.enabled", ["enabled": !methods.contains(.console)])
         if methods.contains(.webSocket) { DebugSwift.WebSocket.disableMonitoring() }
         if methods.contains(.wkWebView) { DebugSwift.WKWebView.shared.disable() }
         if betaFeatures.contains(.agentDebugLog) {
@@ -147,7 +171,12 @@ public class DebugSwift {
     /// Shows the floating button that opens the debugger.
     @discardableResult
     public func show() -> Self {
-        Task { @MainActor in DebugFloatingButton.setEnabled(true) }
+        if Thread.isMainThread {
+            // Right away, so a `hide()` made next on the main actor stays the last word.
+            MainActor.assumeIsolated { DebugFloatingButton.setEnabled(true) }
+        } else {
+            Task { @MainActor in DebugFloatingButton.setEnabled(true) }
+        }
         return self
     }
 

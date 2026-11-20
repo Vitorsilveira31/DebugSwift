@@ -31,7 +31,9 @@ struct DebugPerformanceSample: Decodable {
 struct DebugMetricHistory {
     static var capacity: Int {
         #if os(Android)
-        Int(DebugSwift.Performance.Chart.timeWindowSeconds)
+        // `timeWindowSeconds` can be set directly, below the 10-second floor its setters keep.
+        let seconds = DebugSwift.Performance.Chart.timeWindowSeconds
+        return seconds.isFinite ? max(10, Int(seconds)) : 120
         #else
         60
         #endif
@@ -41,6 +43,8 @@ struct DebugMetricHistory {
 
     mutating func append(_ value: Double) {
         values.append(value)
-        if values.count > Self.capacity { values.removeFirst(values.count - Self.capacity) }
+        // Read once: another thread can change the window between two reads.
+        let capacity = Self.capacity
+        if values.count > capacity { values.removeFirst(values.count - capacity) }
     }
 }

@@ -61,8 +61,14 @@ neither, `SwiftUIRender` overlays become the Compose render counts, `APNSToken.e
 Swift `URLSession` traffic on Android is captured and goes through Network Injection as on iOS:
 `URLSession.shared` needs nothing and a session the app creates needs
 `DebugSwift.Network.shared.injectIntoConfiguration(configuration)` (as on iOS) or
-`DebugSwiftRuntime.configure(configuration)`. Swift `URLSessionWebSocketTask` sockets are not
-captured on Android; OkHttp sockets wrapped in `DebugSwiftWebSocketListener` are.
+`DebugSwiftRuntime.configure(configuration)`. The request is still sent by Foundation's own HTTP
+protocol, created for the same task, so the session's cookies, credentials, timeouts and cache,
+the delegate's redirect and challenge decisions, data streamed to a data delegate and download
+files behave as without DebugSwift. Two limits: a rewrite that lets the request through replaces
+the response a completion handler or `async` call gets, but a data delegate still receives the
+real body, which Foundation streams to it directly; and download tasks honor delays and network
+failures, not rules that answer with an HTTP response. Swift `URLSessionWebSocketTask` sockets are
+not captured on Android; OkHttp sockets wrapped in `DebugSwiftWebSocketListener` are.
 
 ## Done so far (verified on an Android 17 emulator)
 
