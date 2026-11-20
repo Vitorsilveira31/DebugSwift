@@ -19,6 +19,23 @@ enum DebugSwiftNetworkForwarder {
             let error: String
             let requestHeaders: [String: String]
             let responseHeaders: [String: String]
+            let decryptedResponseBody: String
+        }
+
+        private static let decryptedLock = NSLock()
+        nonisolated(unsafe) private static var decryptedBodies: [UUID: String] = [:]
+
+        /// A response body a Swift decryptor read, shown next to the raw one in the inspector.
+        static func setDecryptedBody(_ body: String, for recordID: UUID) {
+            decryptedLock.lock()
+            decryptedBodies[recordID] = body
+            decryptedLock.unlock()
+        }
+
+        private static func takeDecryptedBody(for recordID: UUID) -> String {
+            decryptedLock.lock()
+            defer { decryptedLock.unlock() }
+            return decryptedBodies.removeValue(forKey: recordID) ?? ""
         }
 
         /// The task that watches the recorder; started once for the process.
@@ -65,6 +82,7 @@ enum DebugSwiftNetworkForwarder {
                 error: failureDescription(record),
                 requestHeaders: record.requestHeaders,
                 responseHeaders: responseHeaders(record),
+                decryptedResponseBody: takeDecryptedBody(for: record.id),
             )
             guard let data = try? JSONEncoder().encode(payload),
                   let json = String(data: data, encoding: .utf8) else { return }

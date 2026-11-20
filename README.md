@@ -61,23 +61,30 @@ The Swift package exports `DebugSwift`, `DebugSwiftCore` and `DebugSwiftUI`. `De
 
 The Example app is a single Skip project: open `Example/Darwin/Example.xcodeproj` and Run, and the same SwiftUI demos run on the iOS simulator and, through the Run skip gradle phase, on the open Android emulator. To build only the Android app, run `skip export --project Example --no-ios --android --arch aarch64 --dir build/skip-android`; [the Example guide](Example/README.md) has the details. Android networking capture and request injection require the host to add the provided OkHttp interceptor (or a matching hook for its networking stack); [the Example guide](Example/README.md#network-capture-by-stack) lists what each stack needs. Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented there too.
 
-### One setup for iOS and Android
+### One API for iOS and Android
 
-Add the `DebugSwiftUI` product and start DebugSwift once at launch, with the same code on both platforms:
+Add the `DebugSwiftUI` product. `import DebugSwiftUI` gives DebugSwift's whole API on both platforms, with the same names and signatures: on iOS it re-exports the DebugSwift module, and on Android it provides the same types on top of the Android runtime. The calls in the rest of this README work unchanged on Android.
 
 ```swift
 import DebugSwiftUI
 
-DebugSwiftRuntime.install(
-    actions: [DebugActionGroup(title: "Session", actions: [.init(title: "Log out") { logOut() }])],
-    betaFeatures: [.agentDebugLog]
-)
+// At launch:
+DebugSwiftRuntime.install(betaFeatures: [.agentDebugLog])
+DebugSwift.App.shared.customAction = {
+    [CustomAction(title: "Session", actions: [.init(title: "Log out") { logOut() }])]
+}
+DebugSwift.Network.shared.enableRequestDelay(2)
+DebugSwift.Performance.Backtrace.capture(label: "checkout")
 
-// Anywhere in SwiftUI, to open the panel yourself:
-.sheet(isPresented: $showsDebugger) { DebugSwiftRuntime.panel { showsDebugger = false } }
+// On the app's root view, so the floating button and DebugSwift.App.presentDebugger() open the panel:
+ContentView().debugSwiftPanel()
 ```
 
-On iOS this runs `DebugSwift().setup()`, shows the floating ball and makes it open the shared SwiftUI panel; screens not yet rewritten in SwiftUI open their UIKit version inside it. On Android it starts the runtime (crash, ANR, frame, log and `URLSession` capture) and shows the floating button. `DebugSwiftRuntime.isFloatingButtonVisible` hides or shows the button on both. iOS hosts that keep the UIKit tab bar can still call `DebugSwift().setup().show()` directly; `DebugSwiftSharedPanel.useUIKitPanel()` switches a shared-panel ball back to it.
+On iOS `install` runs `DebugSwift().setup()`, shows the floating ball and makes it open the shared SwiftUI panel; screens not yet rewritten in SwiftUI open their UIKit version inside it. On Android it starts the runtime (crash, ANR, frame, log and `URLSession` capture) and shows the floating button. `DebugSwiftRuntime.isFloatingButtonVisible` hides or shows the button on both, and `DebugSwiftRuntime.panel(onDone:)` returns the panel for a host that presents it itself.
+
+A few members take types that exist only on iOS (UIKit view controllers, Core Data, SwiftData); Android has a counterpart for each, such as `App.shared.customTools` for `customControllers` and `Resources.shared.registerDatabase(named:)` for `configureCoreData`. [The parity audit](Documentation/PARITY-AUDIT.md#public-api) lists them, and `APIParityCheck.swift` in the Example compiles every member of the API on both platforms. On Android, the View Hierarchy screen also shows the window in 3D.
+
+iOS hosts that keep the UIKit tab bar can still call `DebugSwift().setup().show()` directly; `DebugSwiftSharedPanel.useUIKitPanel()` switches a shared-panel ball back to it.
 
 ## DebugSwiftCore (Skip Fuse)
 

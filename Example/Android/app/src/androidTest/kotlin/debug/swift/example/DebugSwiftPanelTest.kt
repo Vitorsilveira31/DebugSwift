@@ -10,6 +10,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.rule.GrantPermissionRule
 import debug.swift.android.AndroidDebugTools
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -23,7 +24,18 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class DebugSwiftPanelTest {
-    @get:Rule
+    /**
+     * The app turns on push simulation at launch, which asks for the notification permission on
+     * Android 13 and newer. Granting it first keeps the system dialog from covering the app.
+     */
+    @get:Rule(order = 0)
+    val notifications: GrantPermissionRule = if (android.os.Build.VERSION.SDK_INT >= 33) {
+        GrantPermissionRule.grant(android.Manifest.permission.POST_NOTIFICATIONS)
+    } else {
+        GrantPermissionRule.grant()
+    }
+
+    @get:Rule(order = 1)
     val compose = createAndroidComposeRule<MainActivity>()
 
     @Test

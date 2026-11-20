@@ -1,13 +1,13 @@
 # DebugSwift Example
 
-One app for iOS and Android. Every screen is SwiftUI in the `DebugSwiftExample` module (`Sources/DebugSwiftExample`). On iOS it compiles natively; on Android [Skip Fuse](https://skip.dev) compiles the same Swift for Android and renders the SwiftUI as Compose. Both platforms open the same debug panel, the shared `DebugPanel` from `DebugSwiftUI`: from the toolbar's ladybug, from the "Open debug panel" row, from the floating ball on iOS, and from the floating button on Android (turned on in the panel).
+One app for iOS and Android. Every screen is SwiftUI in the `DebugSwiftExample` module (`Sources/DebugSwiftExample`). On iOS it compiles natively; on Android [Skip Fuse](https://skip.dev) compiles the same Swift for Android and renders the SwiftUI as Compose. Both platforms open the same debug panel, the shared `DebugPanel` from `DebugSwiftUI`: from the toolbar's ladybug, from the "Open debug panel" row, from the floating ball on iOS, and from the floating button on Android.
 
 | Path | What it is |
 | --- | --- |
 | `Package.swift`, `Skip.env` | The Skip package and the app's name, ids and version, shared by both hosts |
 | `Sources/DebugSwiftExample/Demos` | Demos that run on both platforms |
-| `Sources/DebugSwiftExample/iOS` | Demos that rely on iOS-only frameworks: MapKit, WebKit, Core Data, SwiftData, Hyperion, backtraces |
-| `Sources/DebugSwiftExample/Networking` | `ExampleNetworkRules`, the injection rules the Network Injection demo turns on |
+| `Sources/DebugSwiftExample/Debugger` | DebugSwift's setup, and `APIParityCheck`, which compiles every member of the API on both platforms |
+| `Sources/DebugSwiftExample/iOS` | Demos that rely on iOS-only frameworks: MapKit, WebKit, Core Data, SwiftData, Hyperion |
 | `Darwin/Example.xcodeproj` | The iOS host and the `ExampleTests` suite |
 | `Android/` | The Gradle host, its `Main.kt`, and the instrumented tests |
 
@@ -46,7 +46,7 @@ Set `ANDROID_SERIAL` to pick one device when several are connected. CI builds th
 
 ## Network demos on Android
 
-The demos use plain `URLSession`, as on iOS. On Android `DebugSwiftRuntime.install` puts DebugSwift's URL protocol into `URLSession.shared`, so its requests reach the HTTP Inspector and honor Network Injection rules; the TLS demo's own session gets the same through `DebugSwiftRuntime.configure(configuration)`. The Network Injection demo's rules replace the panel's rules for Swift requests until "Make Normal Request"; the panel's rules always apply to OkHttp traffic.
+The demos use plain `URLSession` and DebugSwift's iOS API, unchanged on Android. On Android `DebugSwiftRuntime.install` puts DebugSwift's URL protocol into `URLSession.shared`, so its requests reach the HTTP Inspector and honor Network Injection rules; the TLS demo's own session gets the same through `DebugSwiftRuntime.configure(configuration)`. The Network Injection demo sets its rules with `DebugSwift.Network.shared.enableRequestDelay`, `enableHTTPErrorInjection` and `enableResponseBodyRewrite`: they are the panel's rules on both platforms, so they show up in the panel's Network Injection screen and apply to OkHttp traffic on Android too.
 
 ## Add the debugger to an Android host app
 

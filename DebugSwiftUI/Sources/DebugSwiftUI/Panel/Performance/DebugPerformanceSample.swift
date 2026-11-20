@@ -26,9 +26,16 @@ struct DebugPerformanceSample: Decodable {
     }
 }
 
-/// The last readings of one metric, newest last, capped so the chart keeps a fixed width.
+/// The last readings of one metric, newest last, capped so the chart keeps a fixed width. Readings
+/// come once a second, so the cap is the chart's time window in seconds.
 struct DebugMetricHistory {
-    static let capacity = 60
+    static var capacity: Int {
+        #if os(Android)
+        Int(DebugSwift.Performance.Chart.timeWindowSeconds)
+        #else
+        60
+        #endif
+    }
 
     private(set) var values: [Double] = []
 

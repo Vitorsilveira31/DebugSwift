@@ -195,17 +195,40 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
             ]
             #endif
         case .app:
+            /// The same tool described for the platform it runs on.
+            func platform(_ ios: String, _ android: String) -> String {
+                #if os(Android)
+                android
+                #else
+                ios
+                #endif
+            }
             let features: [DebugSwiftTool] = [
                 .init("crashes", "Crash Reports", "Save uncaught application crashes with stack traces and timestamps."),
                 .init("console", "Console", "View, clear, and export messages written through the DebugSwift logger."),
-                .init("oslog_console", "System Log", "Browse this app's Android Logcat records, filter messages, and export the results."),
-                .init("device_info", "Device Info", "Inspect app version, Android version, device, display, and memory details."),
-                .init("push_token", "Push Token", "Register and display an app-provided Firebase Cloud Messaging token."),
+                .init("oslog_console", "System Log", platform(
+                    "Browse this app's OSLog entries, filter messages, and export the results.",
+                    "Browse this app's Android Logcat records, filter messages, and export the results."
+                )),
+                .init("device_info", "Device Info", platform(
+                    "Inspect app version, iOS version, device, display, and memory details.",
+                    "Inspect app version, Android version, device, display, and memory details."
+                )),
+                .init("push_token", "Push Token", platform(
+                    "Display the APNS device token the app registered.",
+                    "Register and display an app-provided Firebase Cloud Messaging token."
+                )),
                 .init("push_simulator", "Push Notifications", "Manage notification permissions, templates, test scenarios, settings, and delivery history."),
                 .init("custom_actions", "Custom Actions", "Register host-app actions and run them from the debugger."),
                 .init("custom_info", "Custom Info", "Display diagnostic values supplied by the host app."),
-                .init("deep_links", "Deep Links", "Inspect the current intent URI and registered app link information."),
-                .init("loaded_libraries", "Installed Libraries", "Inspect installed DEX splits, native library paths, ABIs, and the runtime class loader."),
+                .init("deep_links", "Deep Links", platform(
+                    "Open URLs and universal links in the app.",
+                    "Inspect the current intent URI and registered app link information."
+                )),
+                .init("loaded_libraries", "Installed Libraries", platform(
+                    "Inspect the frameworks and dynamic libraries loaded into the app.",
+                    "Inspect installed DEX splits, native library paths, ABIs, and the runtime class loader."
+                )),
                 .init("location", "Location", "Inspect the last location reported by the host app."),
                 .init("event_bus", "Event Timeline", "Browse network, performance, interface, app, and resource events."),
                 .init("agent_debug_log", "Agent Debug Log", "Stream app events, network activity, console messages, and crashes to an NDJSON file.")
@@ -270,6 +293,11 @@ struct DebugSwiftFeatureDestination: View {
             DebugSwiftNetworkInjectionView()
         } else if feature.id == "console" {
             DebugSwiftConsoleView()
+        } else if feature.id == "custom_actions" {
+            // The same screen as Android: one button per action from `DebugSwift.App.shared.customAction`.
+            DebugCustomActionsView()
+        } else if feature.id == "custom_info" {
+            DebugKeyValueView(featureID: feature.id, title: feature.title)
         } else if ["http", "graphql", "network_encryption", "har_export", "webview_network"].contains(feature.id) {
             DebugSwiftNetworkInspectorView(featureID: feature.id)
         } else if feature.id == "websocket" {
@@ -1190,14 +1218,6 @@ public typealias DebugSwiftAndroidRuntime = DebugSwiftRuntime
 /// Android it starts the Kotlin runtime (crash, ANR, frame and log capture), the capture of Swift
 /// `URLSession` traffic, and the floating button.
 public enum DebugSwiftRuntime {
-    /// Beta features, by the same names on both platforms. Android turns them on from the panel.
-    public enum BetaFeature: String, CaseIterable, Sendable {
-        case swiftUIRenderTracking
-        case networkSessionPersistence
-        /// Writes network, crash, console and debug events to an NDJSON file a coding agent can read.
-        case agentDebugLog
-    }
-
     @MainActor static var panelTitle = "Debug"
     @MainActor static var panelTools: [DebugTool] = []
     @MainActor static var panelActions: [DebugActionGroup] = []
@@ -1208,9 +1228,9 @@ public enum DebugSwiftRuntime {
     @MainActor private static var isIOSFloatingBallVisible = false
 
     @MainActor
-    static func prepareIOSDebugger(betaFeatures: [BetaFeature] = []) {
+    static func prepareIOSDebugger(betaFeatures: [DebugSwiftBetaFeature] = []) {
         guard !isIOSDebuggerPrepared else { return }
-        DebugSwift().setup(enableBetaFeatures: betaFeatures.compactMap { DebugSwiftBetaFeature(rawValue: $0.rawValue) })
+        DebugSwift().setup(enableBetaFeatures: betaFeatures)
         isIOSDebuggerPrepared = true
     }
 
@@ -1228,7 +1248,7 @@ public enum DebugSwiftRuntime {
     ///   - tools: The host's own screens, listed at the top of the panel.
     ///   - actions: Buttons that run host code, for example "Clear user data".
     ///   - info: Read-only rows, for example the API URL.
-    ///   - betaFeatures: Features still in beta to turn on (iOS; Android turns them on from the panel).
+    ///   - betaFeatures: Features still in beta to turn on.
     ///   - showsFloatingButton: Shows the floating button that opens the panel.
     /// - Returns: Whether the platform runtime is running.
     @discardableResult
@@ -1238,7 +1258,7 @@ public enum DebugSwiftRuntime {
         tools: [DebugTool] = [],
         actions: [DebugActionGroup] = [],
         info: [DebugInfoGroup] = [],
-        betaFeatures: [BetaFeature] = [],
+        betaFeatures: [DebugSwiftBetaFeature] = [],
         showsFloatingButton: Bool = true
     ) -> Bool {
         panelTitle = title
@@ -1247,13 +1267,20 @@ public enum DebugSwiftRuntime {
         panelInfo = info
         #if os(iOS)
         prepareIOSDebugger(betaFeatures: betaFeatures)
-        DebugSwiftSharedPanel.useForFloatingBall(title: title, tools: tools, actions: actions, info: info)
+        // The floating ball and `DebugSwift.App.presentDebugger()` open the same panel Android shows.
+        DebugSwift.App.shared.panelProvider = {
+            DebugSwiftSharedPanelController(
+                rootView: AnyView(DebugSwiftRuntimePanel(managesFloatingBall: false) {
+                    _ = DebugSwift.App.removeDebugger()
+                })
+            )
+        }
         isFloatingButtonVisible = showsFloatingButton
         return true
         #else
-        let installed = startRuntime()
+        DebugSwift().setup(enableBetaFeatures: betaFeatures)
         isFloatingButtonVisible = showsFloatingButton
-        return installed
+        return DebugSwiftNativeBridge.install()
         #endif
     }
 
@@ -1261,11 +1288,13 @@ public enum DebugSwiftRuntime {
     /// opens, so a host that never called `install` still gets the Android runtime.
     @discardableResult
     @MainActor
-    static func startRuntime() -> Bool {
+    static func startRuntime(capturesURLSession: Bool = true) -> Bool {
         #if os(Android)
         let installed = DebugSwiftNativeBridge.install()
         DebugSwiftNetworkForwarder.start()
-        DebugSwiftURLSessionCapture.install()
+        if capturesURLSession && !DebugSwift.disabledMethods.contains(.network) {
+            DebugSwiftURLSessionCapture.install()
+        }
         DebugFloatingButton.startListening()
         return installed
         #else
@@ -1382,7 +1411,20 @@ public enum DebugSwiftRuntime {
     @MainActor
     public static func snapshot(featureID: String) -> String {
         #if os(Android)
-        return DebugSwiftNativeBridge.snapshot(featureID)
+        let native = DebugSwiftNativeBridge.snapshot(featureID)
+        switch featureID {
+        case "custom_info":
+            // What the host set on `DebugSwift.App.shared.customInfo`, then what Kotlin registered.
+            let lines = (DebugSwift.App.shared.customInfo?() ?? []).flatMap { section in
+                [section.title] + section.infos.map { "  \($0.title): \($0.subtitle)" }
+            }
+            return lines.isEmpty ? native : (lines + (native.hasPrefix("No ") ? [] : [native])).joined(separator: "\n")
+        case "custom_actions":
+            let titles = (DebugSwift.App.shared.customAction?() ?? []).flatMap { $0.actions.map(\.title) }
+            return titles.isEmpty ? native : (titles + (native.hasPrefix("No ") ? [] : [native])).joined(separator: "\n")
+        default:
+            return native
+        }
         #else
         switch featureID {
         case "console":
@@ -1461,6 +1503,12 @@ public enum DebugSwiftRuntime {
     @MainActor
     public static func perform(featureID: String, actionID: String, value: String = "") -> String {
         #if os(Android)
+        if featureID == "custom_actions", actionID == "run_custom",
+           let action = (DebugSwift.App.shared.customAction?() ?? []).flatMap(\.actions).first(where: { $0.title == value }) {
+            guard let run = action.action else { return "No registered action named '\(value)'." }
+            run()
+            return "Action '\(value)' completed."
+        }
         return DebugSwiftNativeBridge.perform(featureID, actionID, value)
         #else
         if featureID == "console" {

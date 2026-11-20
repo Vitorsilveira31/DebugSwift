@@ -5,14 +5,15 @@
 //  Created by DebugSwift on 2026.
 //
 
+import DebugSwiftUI
 import Foundation
 import SwiftUI
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-/// Turns on delay, failure and response rewrite injection from code, then sends a request so the
-/// result is visible here and in the debug panel's HTTP Inspector.
+/// Turns on delay, failure and response rewrite injection with `DebugSwift.Network`, the same on iOS
+/// and Android, then sends a request so the result is visible here and in the HTTP Inspector.
 struct NetworkInjectionExampleView: View {
     @State var responseText = "Tap a button to test network injection"
     @State var isLoading = false
@@ -44,17 +45,17 @@ struct NetworkInjectionExampleView: View {
                 Toggle("Enable Delay (2s)", isOn: $delayEnabled)
                     .onChange(of: delayEnabled) { _, enabled in
                         if enabled {
-                            ExampleNetworkRules.setDelay(2.0)
+                            DebugSwift.Network.shared.enableRequestDelay(2.0)
                         } else {
-                            ExampleNetworkRules.clearDelay()
+                            DebugSwift.Network.shared.disableRequestDelay()
                         }
                     }
                 Button("Test with Fixed 3s Delay") {
-                    ExampleNetworkRules.setDelay(3.0)
+                    DebugSwift.Network.shared.enableRequestDelay(3.0)
                     send()
                 }
                 Button("Test with Random Delay (1-5s)") {
-                    ExampleNetworkRules.setDelay(min: 1.0, max: 5.0)
+                    DebugSwift.Network.shared.enableRequestDelay(min: 1.0, max: 5.0)
                     send()
                 }
             } header: {
@@ -65,29 +66,29 @@ struct NetworkInjectionExampleView: View {
                 Toggle("Enable Failure (50%)", isOn: $failureEnabled)
                     .onChange(of: failureEnabled) { _, enabled in
                         if enabled {
-                            ExampleNetworkRules.setFailure(.timeout, rate: 0.5)
+                            DebugSwift.Network.shared.enableFailureInjection(failureRate: 0.5, failureType: .timeout)
                         } else {
-                            ExampleNetworkRules.clearFailure()
+                            DebugSwift.Network.shared.disableFailureInjection()
                         }
                     }
                 Button("Test Timeout Error") {
-                    ExampleNetworkRules.setFailure(.timeout, rate: 1.0)
+                    DebugSwift.Network.shared.enableFailureInjection(failureRate: 1.0, failureType: .timeout)
                     send()
                 }
                 Button("Test Connection Lost") {
-                    ExampleNetworkRules.setFailure(.connectionLost, rate: 1.0)
+                    DebugSwift.Network.shared.enableFailureInjection(failureRate: 1.0, failureType: .connectionLost)
                     send()
                 }
                 Button("Test HTTP 404 Error") {
-                    ExampleNetworkRules.setHTTPError(statusCodes: [404], rate: 1.0)
+                    DebugSwift.Network.shared.enableHTTPErrorInjection(failureRate: 1.0, statusCodes: [404])
                     send()
                 }
                 Button("Test HTTP 500 Error") {
-                    ExampleNetworkRules.setHTTPError(statusCodes: [500], rate: 1.0)
+                    DebugSwift.Network.shared.enableHTTPErrorInjection(failureRate: 1.0, statusCodes: [500])
                     send()
                 }
                 Button("Test Random HTTP Errors") {
-                    ExampleNetworkRules.setHTTPError(statusCodes: [400, 401, 403, 404, 500, 502, 503], rate: 1.0)
+                    DebugSwift.Network.shared.enableHTTPErrorInjection(failureRate: 1.0, statusCodes: [400, 401, 403, 404, 500, 502, 503])
                     send()
                 }
             } header: {
@@ -100,7 +101,7 @@ struct NetworkInjectionExampleView: View {
                         if enabled {
                             applyRewriteRule()
                         } else {
-                            ExampleNetworkRules.clearRewrite()
+                            DebugSwift.Network.shared.disableResponseBodyRewrite()
                         }
                     }
                 Text("URL Wildcard Pattern")
@@ -123,12 +124,14 @@ struct NetworkInjectionExampleView: View {
 
             Section {
                 Button("Test Delay + Failure") {
-                    ExampleNetworkRules.setDelay(2.0)
-                    ExampleNetworkRules.setFailure(.timeout, rate: 1.0)
+                    DebugSwift.Network.shared.enableRequestDelay(2.0)
+                    DebugSwift.Network.shared.enableFailureInjection(failureRate: 1.0, failureType: .timeout)
                     send()
                 }
                 Button("Make Normal Request") {
-                    ExampleNetworkRules.reset()
+                    DebugSwift.Network.shared.disableRequestDelay()
+                    DebugSwift.Network.shared.disableFailureInjection()
+                    DebugSwift.Network.shared.disableResponseBodyRewrite()
                     delayEnabled = false
                     failureEnabled = false
                     rewriteEnabled = false
@@ -139,13 +142,11 @@ struct NetworkInjectionExampleView: View {
                 Text("Combined")
             }
 
-            #if os(Android)
             Section {
-                Text("On Android these rules apply to the Swift requests this app sends. Rules set in the debug panel → Network Injection apply to OkHttp traffic, and come back for Swift requests after Make Normal Request.")
+                Text("These rules are the panel's Network Injection rules: they show up there, and editing them there changes what these buttons set.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-            #endif
         }
         .navigationTitle("Network Injection")
     }
@@ -188,6 +189,6 @@ struct NetworkInjectionExampleView: View {
     private func applyRewriteRule() {
         let pattern = rewriteURLPattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !pattern.isEmpty else { return }
-        ExampleNetworkRules.setRewrite(urlPattern: pattern, body: rewriteResponseBody)
+        DebugSwift.Network.shared.enableResponseBodyRewrite(rules: [ResponseBodyRewriteRule(urlPattern: pattern, responseBody: rewriteResponseBody)])
     }
 }

@@ -12,8 +12,6 @@ import UserNotifications
 enum ExampleIOSSetup {
     static func run() {
         DiskWriteTracker.install()
-        DebugSwift.Network.configureSessionHistory(retentionDays: 14, batchSize: 1)
-        DebugSwift.PushNotification.enableSimulation()
         setupCoreData()
         setupSwiftData()
         requestPushNotificationPermissions()
@@ -48,10 +46,6 @@ enum ExampleIOSSetup {
                 DebugSwift.APNSToken.didFailToRegister(error: error)
             }
         }
-    }
-
-    static func clearNetworkHistory() {
-        DebugSwift.Network.shared.clearNetworkHistory()
     }
 
     /// Called by the iOS app delegate in `Darwin/Example/Main.swift`.

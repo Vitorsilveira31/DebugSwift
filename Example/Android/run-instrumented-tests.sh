@@ -9,7 +9,8 @@ set -eu
 apk_dir=${1:?pass the directory holding the APKs}
 runner=com.debugswift.example.test/debug.swift.example.DebugSwiftTestRunner
 
-adb install -r "$apk_dir/app-debug.apk"
+# -g grants the runtime permissions, such as notifications, that the app asks for at launch.
+adb install -r -g "$apk_dir/app-debug.apk"
 adb install -r "$apk_dir/app-debug-androidTest.apk"
 
 output=$(adb shell am instrument -w -r "$runner")

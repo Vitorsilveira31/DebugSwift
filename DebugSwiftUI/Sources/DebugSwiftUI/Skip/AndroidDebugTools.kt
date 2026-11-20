@@ -754,6 +754,10 @@ object AndroidDebugTools {
     }
 
     fun log(message: String, priority: Int = Log.DEBUG, tag: String = TAG) {
+        if (!consoleAccepts(message)) {
+            Log.println(priority, tag, message)
+            return
+        }
         val line = "${timestamp()} ${priorityName(priority)} $tag: $message"
         consoleRecords.add(line)
         trim(consoleRecords)
@@ -851,8 +855,11 @@ object AndroidDebugTools {
         error: String = "",
         requestHeaders: Map<String, List<String>> = emptyMap(),
         responseHeaders: Map<String, List<String>> = emptyMap(),
-        source: String = "http"
+        source: String = "http",
+        decryptedResponseBody: String? = null
     ) {
+        if (!networkAccepts(url)) return
+        if (source == "webview" && !webViewCaptureEnabled) return
         val graphOperation = graphqlOperation(requestBody)
         // Mask before storing: the list, the history file, HAR, cURL and the agent log all read
         // this record. Only replay needs the original request, so it stays in memory alone.
@@ -866,7 +873,10 @@ object AndroidDebugTools {
                 sanitizer.sanitizeHeaders(requestHeaders), sanitizer.sanitizeHeaders(responseHeaders),
                 sanitizer.sanitizeBody(requestBody, requestType).take(32_000),
                 sanitizer.sanitizeBody(responseBody, responseType).take(64_000),
-                sanitizer.sanitizeBody(DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty(), "application/json"),
+                sanitizer.sanitizeBody(
+                    decryptedResponseBody?.takeIf { it.isNotEmpty() } ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty(),
+                    "application/json"
+                ),
                 error, graphOperation, source
             )
         rememberReplayRequest(record.id, ReplayRequest(url, requestHeaders, requestBody))
@@ -1585,6 +1595,7 @@ object AndroidDebugTools {
     }
 
     fun webSocketOpened(webSocket: WebSocket, url: String, responseCode: Int) {
+        if (!webSocketMonitoringEnabled) return
         val connection = findOrCreateWebSocketConnection(webSocket, url)
         connection.status = "Connected"
         connection.statusDetail = "HTTP $responseCode"
@@ -1599,6 +1610,7 @@ object AndroidDebugTools {
         type: String,
         payload: ByteArray
     ) {
+        if (!webSocketMonitoringEnabled) return
         val connection = findOrCreateWebSocketConnection(webSocket, url)
         if (connection.status == "Connecting") connection.status = "Connected"
         recordWebSocketFrame(connection, direction, type, payload)
@@ -1886,7 +1898,7 @@ object AndroidDebugTools {
         if (!file.isFile) return
         runCatching {
             val rows = org.json.JSONObject(file.readText()).optJSONArray("requests") ?: return
-            val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+            val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
             for (index in 0 until rows.length()) {
                 val row = rows.getJSONObject(index)
                 val record = NetworkRecord(
@@ -1923,7 +1935,7 @@ object AndroidDebugTools {
 
     private fun persistNetworkHistory() {
         val context = appContext ?: return
-        val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+        val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
         val snapshot = networkHistoryRecords.filter { it.timestamp >= cutoff }
             .takeLast(MAX_NETWORK_HISTORY_RECORDS)
         persistenceExecutor.execute {
@@ -1974,7 +1986,7 @@ object AndroidDebugTools {
     }
 
     private fun trimNetworkHistory() {
-        val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+        val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
         networkHistoryRecords.removeAll { it.timestamp < cutoff || !isPersistableNetworkRecord(it) }
         while (networkHistoryRecords.size > MAX_NETWORK_HISTORY_RECORDS) networkHistoryRecords.removeAt(0)
     }
@@ -2097,13 +2109,20 @@ object AndroidDebugTools {
                 .put("error", record.error)
                 .put("graphqlOperation", record.graphqlOperation)
                 .put("source", record.source)
-                .put("isSuccess", record.error.isBlank()))
+                .put("isSuccess", isSuccessfulExchange(record)))
         }
         return JSONObject().put("requests", rows).toString()
     }
 
+    /**
+     * Matches iOS, where a 1xx, 3xx, 4xx or 5xx status marks the request as failed: only a 2xx
+     * response without a transport error counts as a success.
+     */
+    private fun isSuccessfulExchange(record: NetworkRecord): Boolean =
+        record.error.isBlank() && record.status in 200..299
+
     fun networkSessionHistorySnapshotJSON(): String {
-        val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+        val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
         val sessions = JSONArray()
         networkHistoryRecords.asSequence()
             .filter { it.timestamp >= cutoff }
@@ -2123,7 +2142,7 @@ object AndroidDebugTools {
             }
         return JSONObject()
             .put("sessions", sessions)
-            .put("retentionDays", NETWORK_HISTORY_RETENTION_MS / (24L * 60 * 60 * 1_000))
+            .put("retentionDays", networkHistoryRetentionMs / (24L * 60 * 60 * 1_000))
             .toString()
     }
 
@@ -2232,7 +2251,7 @@ object AndroidDebugTools {
             .put("error", record.error)
             .put("graphqlOperation", record.graphqlOperation)
             .put("source", record.source)
-            .put("isSuccess", record.error.isBlank())
+            .put("isSuccess", isSuccessfulExchange(record))
     }
 
     /** Structured connection and frame data for the shared SwiftUI WebSocket inspector. */
@@ -2855,8 +2874,10 @@ object AndroidDebugTools {
         val templates = JSONArray()
         pushTemplates.forEach {
             templates.put(
-                JSONObject().put("name", it.name).put("title", it.title).put("body", it.body)
-                    .put("subtitle", it.subtitle ?: JSONObject.NULL).put("isDefault", it.isDefault)
+                JSONObject().put("id", it.id).put("name", it.name).put("title", it.title).put("body", it.body)
+                    .put("subtitle", it.subtitle ?: JSONObject.NULL).put("badge", it.badge ?: JSONObject.NULL)
+                    .put("sound", it.sound ?: JSONObject.NULL).put("category", it.category ?: JSONObject.NULL)
+                    .put("userInfo", userInfo(it.userInfo)).put("isDefault", it.isDefault)
             )
         }
         val history = JSONArray()
@@ -2864,7 +2885,8 @@ object AndroidDebugTools {
             history.put(
                 JSONObject().put("id", it.id).put("title", it.title).put("body", it.body)
                     .put("subtitle", it.subtitle ?: JSONObject.NULL).put("badge", it.badge ?: JSONObject.NULL)
-                    .put("sound", it.sound ?: JSONObject.NULL).put("status", it.status).put("trigger", it.trigger)
+                    .put("sound", it.sound ?: JSONObject.NULL).put("category", it.category ?: JSONObject.NULL)
+                    .put("status", it.status).put("trigger", it.trigger)
                     .put("scheduledMs", it.scheduledAtMs).put("deliveredMs", it.deliveryAtMs ?: JSONObject.NULL)
                     .put("interaction", it.interactionType ?: JSONObject.NULL).put("userInfo", userInfo(it.userInfo))
             )
@@ -2874,6 +2896,7 @@ object AndroidDebugTools {
             .put("showInForeground", pushShowInForeground).put("playSound", pushPlaySound).put("showBadge", pushShowBadge)
             .put("autoInteraction", pushAutoInteraction).put("interactionDelay", pushInteractionDelaySeconds)
             .put("simulateRealPush", pushSimulateRealPush).put("maxHistory", pushMaxHistoryCount)
+            .put("defaultSound", pushDefaultSound)
             .put("templates", templates).put("history", history).toString()
     }
 
@@ -2959,13 +2982,14 @@ object AndroidDebugTools {
     }
 
     /** Saves the call stacks of the main thread, or of every thread, for the Backtraces screen. */
-    fun captureBacktrace(allThreads: Boolean): String {
+    fun captureBacktrace(allThreads: Boolean, label: String? = null): String {
         val stacks = Thread.getAllStackTraces()
         val selected = if (allThreads) stacks.entries.sortedBy { it.key.name } else stacks.entries.filter { it.key === Looper.getMainLooper().thread }
         val body = selected.joinToString("\n\n") { (thread, frames) ->
             "Thread ${thread.name} (${thread.state})\n" + frames.joinToString("\n") { "    at $it" }
         }
-        backtraces.add("${timestamp()} · ${if (allThreads) "All ${selected.size} threads" else "Main thread"}\n$body")
+        val scope = if (allThreads) "All ${selected.size} threads" else "Main thread"
+        backtraces.add("${timestamp()} · ${label?.let { "$it · $scope" } ?: scope}\n$body")
         trim(backtraces)
         publishEvent("performance", "Backtrace captured")
         return "Captured ${selected.size} thread${if (selected.size == 1) "" else "s"}."
@@ -4685,9 +4709,13 @@ object AndroidDebugTools {
         if (previousVmPolicy == null) previousVmPolicy = android.os.StrictMode.getVmPolicy()
         val threadPolicy = android.os.StrictMode.ThreadPolicy.Builder()
                 .detectAll()
+        if (strictModeFlashScreen) threadPolicy.penaltyFlashScreen()
+        if (strictModeLog) threadPolicy.penaltyLog()
         if (Build.VERSION.SDK_INT >= 28) {
             threadPolicy.penaltyListener(java.util.concurrent.Executor { command -> mainHandler.post(command) }) { violation ->
-                val detail = "${timestamp()} ${violation.javaClass.simpleName}\n${violation.stackTraceToString()}"
+                val stack = violation.stackTraceToString()
+                if (strictModeIgnoredClasses.any { stack.contains(it) }) return@penaltyListener
+                val detail = "${timestamp()} ${violation.javaClass.simpleName}\n$stack"
                 threadViolations.add(detail)
                 trim(threadViolations)
                 publishEvent("performance", "StrictMode ${violation.javaClass.simpleName}")
@@ -4833,6 +4861,275 @@ object AndroidDebugTools {
 
     private fun <T> trim(records: CopyOnWriteArrayList<T>) {
         while (records.size > MAX_RECORDS) records.removeAt(0)
+    }
+
+    // MARK: - Host API
+
+    // Options the Swift `DebugSwift` API sets on Android, named after their iOS counterparts.
+    @Volatile var consoleIgnoredLogs: List<String> = emptyList()
+    @Volatile var consoleOnlyLogs: List<String> = emptyList()
+    @Volatile var networkIgnoredURLs: List<String> = emptyList()
+    @Volatile var networkOnlyURLs: List<String> = emptyList()
+    @Volatile var webSocketMonitoringEnabled = true
+    @Volatile var webViewCaptureEnabled = true
+    @Volatile var webViewMaxStoredRequests = 1000
+    @Volatile private var strictModeFlashScreen = false
+    @Volatile private var strictModeLog = false
+    @Volatile private var strictModeIgnoredClasses: Set<String> = emptySet()
+    @Volatile private var superCallIgnoredClasses: Set<String> = emptySet()
+    @Volatile private var networkHistoryRetentionMs = NETWORK_HISTORY_RETENTION_MS
+
+    /** Whether a console line passes the host's `ignoredLogs` and `onlyLogs` filters. */
+    private fun consoleAccepts(message: String): Boolean {
+        if (consoleIgnoredLogs.any { it.isNotEmpty() && message.contains(it) }) return false
+        val only = consoleOnlyLogs.filter { it.isNotEmpty() }
+        return only.isEmpty() || only.any { message.contains(it) }
+    }
+
+    /** Whether a request passes the host's `ignoredURLs` and `onlyURLs` filters. */
+    private fun networkAccepts(url: String): Boolean {
+        if (networkIgnoredURLs.any { it.isNotEmpty() && url.contains(it) }) return false
+        val only = networkOnlyURLs.filter { it.isNotEmpty() }
+        return only.isEmpty() || only.any { url.contains(it) }
+    }
+
+    private fun backtraceJSON(capture: String): JSONObject {
+        val title = capture.substringBefore('\n')
+        return JSONObject()
+            .put("id", capture.hashCode().toUInt().toString(16) + "-" + title.hashCode().toUInt().toString(16))
+            .put("title", title)
+            .put("stack", capture.substringAfter('\n', ""))
+    }
+
+    private fun stringList(array: JSONArray?): List<String> =
+        if (array == null) emptyList() else (0 until array.length()).map { array.optString(it) }
+
+    /**
+     * The Swift `DebugSwift` API on Android: one JSON operation per iOS call, reached through
+     * `DebugSwiftNativeBridge.resource("host.<operation>", arguments)`.
+     */
+    fun hostAPI(operation: String, arguments: String): String {
+        val args = runCatching { JSONObject(arguments.ifBlank { "{}" }) }.getOrElse { JSONObject() }
+        val context = appContext
+        fun ok(message: String = "") = JSONObject().put("ok", true).put("message", message).toString()
+        return when (operation) {
+            // Console
+            "console.messages" -> JSONArray(consoleRecords.toList()).toString()
+            "console.remove" -> {
+                val index = args.optInt("index", -1)
+                if (index in consoleRecords.indices) consoleRecords.removeAt(index)
+                ok()
+            }
+            "console.clear" -> { consoleRecords.clear(); ok() }
+            "console.filters" -> {
+                consoleIgnoredLogs = stringList(args.optJSONArray("ignored"))
+                consoleOnlyLogs = stringList(args.optJSONArray("only"))
+                ok()
+            }
+            "console.share" -> ok(context?.let { export("console", it) } ?: "Android runtime has not been installed.")
+
+            // Network
+            "network.filters" -> {
+                networkIgnoredURLs = stringList(args.optJSONArray("ignored"))
+                networkOnlyURLs = stringList(args.optJSONArray("only"))
+                ok()
+            }
+            "network.clearHistory" -> ok(clear("http"))
+            "network.clearWebSockets" -> ok(clearWebSocketHistory())
+            "network.clearAll" -> {
+                clear("http")
+                clear("webview_network")
+                clearWebSocketHistory()
+                networkHistoryRecords.clear()
+                persistNetworkHistory()
+                ok("All network data cleared.")
+            }
+            "network.sessionHistory" -> {
+                val days = args.optInt("retentionDays", 7).coerceIn(1, 365)
+                networkHistoryRetentionMs = days * 24L * 60 * 60 * 1_000
+                trimNetworkHistory()
+                ok()
+            }
+            "network.threshold.get" -> {
+                val now = SystemClock.elapsedRealtime()
+                val endpoints = JSONArray()
+                endpointThresholdLimits.entries.sortedBy { it.key }.forEach { (endpoint, config) ->
+                    endpoints.put(JSONObject().put("endpoint", endpoint).put("limit", config.limit).put("timeWindow", config.windowMs / 1000.0))
+                }
+                val breaches = JSONArray()
+                thresholdBreaches.toList().forEach { breach ->
+                    breaches.put(JSONObject()
+                        .put("timestamp", breach.timestampMs)
+                        .put("requestCount", breach.requestCount)
+                        .put("threshold", breach.limit)
+                        .put("endpoint", breach.endpoint.ifBlank { null } ?: JSONObject.NULL)
+                        .put("message", breach.message))
+                }
+                val count = synchronized(this) { thresholdRequestTimes.count { now - it <= thresholdWindowMs } }
+                JSONObject()
+                    .put("isEnabled", thresholdTrackingEnabled)
+                    .put("limit", thresholdLimit)
+                    .put("timeWindow", thresholdWindowMs / 1000.0)
+                    .put("shouldBlockRequests", thresholdBlockRequests)
+                    .put("currentRequestCount", count)
+                    .put("endpointLimits", endpoints)
+                    .put("breaches", breaches)
+                    .toString()
+            }
+            "network.threshold.set" -> {
+                setRequestThreshold(args.optInt("limit", thresholdLimit), args.optDouble("timeWindow", thresholdWindowMs / 1000.0).toInt().coerceAtLeast(1))
+                ok()
+            }
+            "network.threshold.tracking" -> { setRequestTracking(args.optBoolean("enabled")); ok() }
+            "network.threshold.blocking" -> { setThresholdBlocking(args.optBoolean("enabled")); ok() }
+            "network.threshold.alert" -> { setThresholdAlert(args.optString("emoji", "⚠️"), args.optString("message")); ok() }
+            "network.threshold.endpoint" -> {
+                setEndpointRequestThreshold(args.optString("endpoint"), args.optInt("limit"), args.optDouble("timeWindow", 60.0).toInt().coerceAtLeast(1))
+                ok()
+            }
+            "network.threshold.count" ->
+                JSONObject().put("count", getCurrentRequestCount(args.optString("endpoint").ifBlank { null })).toString()
+            "network.threshold.clear" -> ok(clearThresholdHistory())
+            "network.threshold.logs" -> JSONObject().put("logs", getThresholdLogs()).toString()
+            "network.threshold.export" -> ok(context?.let { export("network_thresholds", it) } ?: "Android runtime has not been installed.")
+
+            // WebSocket
+            "websocket.state" -> JSONObject()
+                .put("enabled", webSocketMonitoringEnabled)
+                .put("active", activeWebSockets.size)
+                .put("unread", webSocketConnections.sumOf { it.unreadFrameCount.get() })
+                .toString()
+            "websocket.enabled" -> { webSocketMonitoringEnabled = args.optBoolean("enabled", true); ok() }
+            "websocket.clearFrames" -> {
+                val url = args.optString("url")
+                webSocketConnections.filter { it.url == url }.forEach { connection ->
+                    connection.frames.clear()
+                    connection.unreadFrameCount.set(0)
+                }
+                ok()
+            }
+
+            // WebView
+            "webview.config" -> {
+                if (args.has("enabled")) webViewCaptureEnabled = args.optBoolean("enabled")
+                if (args.has("maxStoredRequests")) webViewMaxStoredRequests = args.optInt("maxStoredRequests").coerceAtLeast(1)
+                JSONObject().put("enabled", webViewCaptureEnabled).put("maxStoredRequests", webViewMaxStoredRequests).toString()
+            }
+
+            // Performance
+            "performance.backtrace.capture" -> {
+                captureBacktrace(args.optBoolean("allThreads", false), args.optString("label").ifBlank { null })
+                backtraceJSON(backtraces.last()).toString()
+            }
+            "performance.backtraces" -> JSONArray().also { array -> backtraces.toList().forEach { array.put(backtraceJSON(it)) } }.toString()
+            "performance.backtraces.clear" -> { clearBacktraces(); ok() }
+            "performance.threads" -> {
+                val violations = JSONArray()
+                threadViolations.toList().forEach { violation ->
+                    violations.put(JSONObject().put("title", violation.substringBefore('\n')).put("stack", violation.substringAfter('\n', "")))
+                }
+                JSONObject().put("enabled", synchronized(enabledTools) { "thread_checker" in enabledTools }).put("violations", violations).toString()
+            }
+            "performance.threads.enabled" -> {
+                val enabled = args.optBoolean("enabled")
+                synchronized(enabledTools) { if (enabled) enabledTools.add("thread_checker") else enabledTools.remove("thread_checker") }
+                if (enabled) enableStrictMode() else disableStrictMode()
+                ok()
+            }
+            "performance.threads.options" -> {
+                if (args.has("flashScreen")) strictModeFlashScreen = args.optBoolean("flashScreen")
+                if (args.has("log")) strictModeLog = args.optBoolean("log")
+                if (args.has("ignored")) strictModeIgnoredClasses = stringList(args.optJSONArray("ignored")).toSet()
+                if (synchronized(enabledTools) { "thread_checker" in enabledTools }) {
+                    disableStrictMode()
+                    enableStrictMode()
+                }
+                ok()
+            }
+            "performance.threads.clear" -> { threadViolations.clear(); ok() }
+            "performance.supercalls" -> {
+                val array = JSONArray()
+                crashRecords.filter { it.contains("SuperNotCalledException") }
+                    .filter { record -> superCallIgnoredClasses.none { record.contains(it) } }
+                    .forEach { array.put(it.take(4_000)) }
+                array.toString()
+            }
+            "performance.supercalls.ignored" -> { superCallIgnoredClasses = stringList(args.optJSONArray("classes")).toSet(); ok() }
+            "performance.supercalls.clear" -> { crashRecords.removeAll { it.contains("SuperNotCalledException") }; ok() }
+            "performance.leaks" -> performanceDetailJSON("leaks")
+
+            // Resources
+            "resources.registerDatabase" -> { DebugSwiftDatabaseBrowser.registerRoomDatabase(args.optString("name")); ok() }
+            "resources.registerPreferences" -> { registerPreferences(args.optString("name")); ok() }
+
+            // Interface
+            "interface.compose" -> JSONObject()
+                .put("renders", composeRenderCount)
+                .put("frames", frameCount)
+                .put("slowFrames", slowFrameCount)
+                .toString()
+            "interface.compose.clear" -> { composeRenderCount = 0L; ok() }
+            "interface.viewDebugger3D" -> ok(DebugSwiftViewDebugger3D.show())
+
+            // App
+            "app.snapshot" -> writeAgentSnapshot().toString()
+            "app.agentLog" -> {
+                val enabled = args.optBoolean("enabled")
+                synchronized(enabledTools) { if (enabled) enabledTools.add("agent_debug_log") else enabledTools.remove("agent_debug_log") }
+                agentLogEnabled = enabled
+                ok()
+            }
+            "push.state" -> pushStateJSON()
+            "push.enabled" -> ok(setPushSimulationEnabled(args.optBoolean("enabled")))
+            "push.simulate" -> {
+                val info = args.optJSONObject("userInfo")
+                val userInfo = info?.keys()?.asSequence()?.associateWith { info.optString(it) } ?: emptyMap()
+                ok(simulatePushNotification(
+                    args.optString("title"),
+                    args.optString("body"),
+                    args.optDouble("delay", 0.0).toLong(),
+                    args.optString("subtitle").ifEmpty { null },
+                    if (args.isNull("badge") || !args.has("badge")) null else args.optInt("badge"),
+                    args.optString("sound").ifEmpty { null },
+                    args.optString("category").ifEmpty { null },
+                    userInfo
+                ))
+            }
+            "push.template" -> ok(simulatePushNotificationFromTemplate(args.optString("name"), args.optDouble("delay", 0.0).toLong()))
+            "push.interact" -> ok(simulatePushNotificationInteraction(args.optString("id")))
+            "push.foreground" -> ok(simulateForegroundPushNotification(args.optString("id")))
+            "push.background" -> ok(simulateBackgroundPushNotification(args.optString("id")))
+            "push.addTemplate" -> {
+                val info = args.optJSONObject("userInfo")
+                val userInfo = info?.keys()?.asSequence()?.associateWith { info.optString(it) } ?: emptyMap()
+                ok(addPushNotificationTemplate(
+                    args.optString("name"),
+                    args.optString("title"),
+                    args.optString("body"),
+                    args.optString("subtitle").ifEmpty { null },
+                    if (args.isNull("badge") || !args.has("badge")) null else args.optInt("badge"),
+                    args.optString("sound").ifEmpty { null },
+                    args.optString("category").ifEmpty { null },
+                    userInfo
+                ))
+            }
+            "push.removeTemplate" -> {
+                val id = args.optString("id")
+                val name = pushTemplates.firstOrNull { it.id == id }?.name ?: id
+                ok(removePushNotificationTemplate(name))
+            }
+            "push.clearHistory" -> ok(clearPushNotificationHistory())
+            "push.remove" -> ok(removeSimulatedPushNotification(args.optString("id")))
+            "push.config" -> {
+                val keys = args.keys().asSequence().toList()
+                keys.forEach { key -> updatePushNotificationSetting(key, args.get(key).toString()) }
+                ok()
+            }
+            "push.scenario" -> ok(runPushNotificationScenario(args.optString("name")))
+            "push.token" -> { reportPushToken(args.optString("token")); ok() }
+
+            else -> JSONObject().put("error", "Unknown host operation: $operation").toString()
+        }
     }
 
     @Volatile private var lastIntentDescription = ""

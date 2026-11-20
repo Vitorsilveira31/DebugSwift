@@ -57,8 +57,9 @@ final class DebugSwiftURLProtocol: URLProtocol, @unchecked Sendable {
     private var loading: Task<Void, Never>?
 
     override class func canInit(with request: URLRequest) -> Bool {
-        guard let scheme = request.url?.scheme?.lowercased() else { return false }
-        return scheme == "http" || scheme == "https"
+        guard let url = request.url, let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return false }
+        return DebugSwift.Network.accepts(url)
     }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest {
@@ -89,21 +90,27 @@ final class DebugSwiftURLProtocol: URLProtocol, @unchecked Sendable {
             }
             try Task.checkCancellation()
             let http = response as? HTTPURLResponse
+            let decrypted = request.url.flatMap { DebugSwift.Network.shared.decryptedBody(data, for: $0) }
             await record(request, startedAt: startedAt, outcome: .response(
                 statusCode: http?.statusCode ?? 0,
                 headers: headers(of: http),
                 body: data
-            ))
+            ), decryptedBody: decrypted)
             guard let owner = loading.owner else { return }
+            let delegate = DebugSwift.Network.shared.delegate
             owner.client?.urlProtocol(owner, didReceive: response, cacheStoragePolicy: .notAllowed)
+            delegate?.urlSession(owner, didReceive: response)
             owner.client?.urlProtocol(owner, didLoad: data)
+            delegate?.urlSession(owner, didReceive: data)
             owner.client?.urlProtocolDidFinishLoading(owner)
+            delegate?.didFinishLoading(owner)
         } catch {
             if !(error is CancellationError) {
                 await record(request, startedAt: startedAt, outcome: .failure(description: error.localizedDescription))
             }
             guard let owner = loading.owner else { return }
             owner.client?.urlProtocol(owner, didFailWithError: error)
+            DebugSwift.Network.shared.delegate?.urlSession(owner, didFailWithError: error)
         }
     }
 
@@ -115,8 +122,18 @@ final class DebugSwiftURLProtocol: URLProtocol, @unchecked Sendable {
         task?.cancel()
     }
 
-    private static func record(_ request: URLRequest, startedAt: Date, outcome: NetworkRecord.Outcome) async {
+    private static func record(
+        _ request: URLRequest,
+        startedAt: Date,
+        outcome: NetworkRecord.Outcome,
+        decryptedBody: String? = nil
+    ) async {
+        let id = UUID()
+        if let decryptedBody {
+            DebugSwiftNetworkForwarder.setDecryptedBody(decryptedBody, for: id)
+        }
         await NetworkRecorder.shared.record(NetworkRecord(
+            id: id,
             startedAt: startedAt,
             duration: Date().timeIntervalSince(startedAt),
             method: request.httpMethod ?? "GET",

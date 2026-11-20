@@ -16,6 +16,7 @@ struct DebugViewHierarchyView: View {
     var body: some View {
         List {
             Section {
+                Button("Show in 3D") { DebugSwiftRuntime.showViewDebugger3D() }
                 Toggle("Hide invisible", isOn: $hidingInvisible)
                 Button("Refresh") { load() }
                 if let tree {

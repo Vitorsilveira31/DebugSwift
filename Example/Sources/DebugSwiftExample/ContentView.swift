@@ -4,7 +4,6 @@ import SwiftUI
 
 /// The list of demos. Each one exercises a DebugSwift tool; the debug panel shows the result.
 struct ContentView: View {
-    @State var showDebugger = false
     @State var deepLink: DeepLink?
     @State var showsFloatingButton = DebugSwiftRuntime.isFloatingButtonVisible
 
@@ -12,7 +11,7 @@ struct ContentView: View {
         NavigationStack {
             List {
                 Section("DebugSwift") {
-                    Button("Open debug panel") { openDebugger() }
+                    Button("Open debug panel") { DebugSwift.App.presentDebugger() }
                     Button(showsFloatingButton ? "Hide floating button" : "Show floating button") {
                         showsFloatingButton.toggle()
                         DebugSwiftRuntime.isFloatingButtonVisible = showsFloatingButton
@@ -49,11 +48,9 @@ struct ContentView: View {
                     DemoLink("Memory Leak Demo", "Leave an object alive after its screen closes") {
                         LeakView()
                     }
-                    #if os(iOS)
-                    DemoLink("Backtrace Capture Demo", "Programmatically capture call stacks via SE-0419 API") {
+                    DemoLink("Backtrace Capture Demo", "Capture call stacks with DebugSwift.Performance.Backtrace") {
                         BacktraceDemoView()
                     }
-                    #endif
                 }
 
                 Section("App") {
@@ -83,16 +80,13 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        openDebugger()
+                        DebugSwift.App.presentDebugger()
                     } label: {
                         Image(systemName: "ladybug")
                     }
                     .accessibilityLabel("Debugger")
                 }
             }
-        }
-        .sheet(isPresented: $showDebugger) {
-            DebugSwiftRuntime.panel { showDebugger = false }
         }
         .sheet(item: $deepLink) { link in
             DeepLinkTestView(url: link.url)
@@ -102,13 +96,12 @@ struct ContentView: View {
             deepLink = DeepLink(url: url)
         }
         .onAppear {
-            DebugFloatingButton.onTap = { openDebugger() }
+            // The first screen can appear before the launch callback runs; start() runs once either way.
+            ExampleDebugger.start()
             showsFloatingButton = DebugSwiftRuntime.isFloatingButtonVisible
         }
-    }
-
-    private func openDebugger() {
-        showDebugger = true
+        // Presents the panel when the floating button or DebugSwift.App.presentDebugger() asks.
+        .debugSwiftPanel()
     }
 }
 
