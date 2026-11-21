@@ -226,7 +226,8 @@ struct DebugPreferenceEditView: View {
     }
 
     func save() {
-        let name = key.trimmingCharacters(in: .whitespaces)
+        // An existing key is saved exactly as stored; only a newly typed one is trimmed.
+        let name = isNew ? key.trimmingCharacters(in: .whitespaces) : key
         guard !name.isEmpty else {
             status = "Enter a key."
             return

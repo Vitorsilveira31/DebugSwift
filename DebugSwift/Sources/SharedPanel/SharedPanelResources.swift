@@ -127,7 +127,8 @@ final class SharedPanelResources {
             if leftDirectory != rightDirectory { return leftDirectory }
             return (lhs["name"] as? String ?? "").lowercased() < (rhs["name"] as? String ?? "").lowercased()
         }
-        return ["path": trimmed, "entries": Array(entries.prefix(500))]
+        // Every entry: the screen's list draws rows as they scroll into view.
+        return ["path": trimmed, "entries": entries]
     }
 
     private func readFile(_ path: String) -> [String: Any] {
