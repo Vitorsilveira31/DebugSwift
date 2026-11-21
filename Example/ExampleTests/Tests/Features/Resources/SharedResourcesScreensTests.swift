@@ -51,6 +51,32 @@ struct SharedResourcesScreensTests {
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
+    @Test("A configured App Group is a root of the file browser")
+    func appGroups() throws {
+        let identifier = "group.debugswift.tests"
+        // The test app has no App Group entitlement, so a folder stands in for the container.
+        let container = FileManager.default.temporaryDirectory.appendingPathComponent("group-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        let lookup = DebugSwift.Resources.appGroupContainer
+        DebugSwift.Resources.appGroupContainer = { $0 == identifier ? container : nil }
+        DebugSwift.Resources.shared.addAppGroup(identifier)
+        defer {
+            DebugSwift.Resources.shared.removeAppGroup(identifier)
+            DebugSwift.Resources.appGroupContainer = lookup
+            try? FileManager.default.removeItem(at: container)
+        }
+        let name = "shared-group-\(UUID().uuidString.prefix(8)).txt"
+        try "from the group".write(to: container.appendingPathComponent(name), atomically: true, encoding: .utf8)
+
+        let roots = try DebugResourceClient.fetch("files.list", ["path": ""], as: DebugFileListing.self).get()
+        #expect(roots.entries.map(\.name) == ["Documents", "Library", "tmp", identifier])
+        let listing = try DebugResourceClient.fetch("files.list", ["path": identifier], as: DebugFileListing.self).get()
+        #expect(listing.entries.contains { $0.name == name })
+        let content = try DebugResourceClient.fetch("files.read", ["path": "\(identifier)/\(name)"], as: DebugFileContent.self).get()
+        #expect(content.text == "from the group")
+        #expect((try? DebugResourceClient.fetch("files.delete", ["path": identifier], as: DebugFileDeletion.self).get()) == nil)
+    }
+
     @Test("A symbolic link can't lead the file browser out of its folder, and deleting a link keeps its target")
     func symbolicLinks() throws {
         let documents = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
