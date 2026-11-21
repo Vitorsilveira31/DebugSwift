@@ -74,12 +74,18 @@ final class SharedPanelResources {
     private static let roots = ["Documents", "Library", "tmp"]
 
     /// A path inside one of the roots, or nil for anything outside them.
+    ///
+    /// The check uses the location with symbolic links resolved, so a link inside a root can't
+    /// reach outside it; a link to somewhere else in the same root is followed. The URL returned
+    /// keeps the link itself, so deleting a link removes the link, not what it points to.
     private func resolve(_ path: String) -> URL? {
         let parts = path.split(separator: "/").map(String.init)
         guard let root = parts.first, Self.roots.contains(root) else { return nil }
         let base = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(root).standardizedFileURL
         let target = parts.dropFirst().reduce(base) { $0.appendingPathComponent($1) }.standardizedFileURL
-        guard target.path == base.path || target.path.hasPrefix(base.path + "/") else { return nil }
+        let resolvedBase = base.resolvingSymlinksInPath().path
+        let resolvedTarget = target.resolvingSymlinksInPath().path
+        guard resolvedTarget == resolvedBase || resolvedTarget.hasPrefix(resolvedBase + "/") else { return nil }
         return target
     }
 

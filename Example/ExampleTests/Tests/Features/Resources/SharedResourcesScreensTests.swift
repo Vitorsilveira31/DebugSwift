@@ -51,6 +51,34 @@ struct SharedResourcesScreensTests {
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
+    @Test("A symbolic link can't lead the file browser out of its folder, and deleting a link keeps its target")
+    func symbolicLinks() throws {
+        let documents = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
+        try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+        let tag = UUID().uuidString.prefix(8)
+        let outside = documents.appendingPathComponent("outside-\(tag)")
+        let folder = documents.appendingPathComponent("folder-\(tag)")
+        let inside = documents.appendingPathComponent("inside-\(tag)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "kept".write(to: folder.appendingPathComponent("note.txt"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: outside, withDestinationURL: Bundle.main.bundleURL)
+        try FileManager.default.createSymbolicLink(at: inside, withDestinationURL: folder)
+        defer { [outside, inside, folder].forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        let plist = Bundle.main.bundleURL.appendingPathComponent("Info.plist")
+        #expect((try? DebugResourceClient.fetch("files.list", ["path": "Documents/outside-\(tag)"], as: DebugFileListing.self).get()) == nil)
+        #expect((try? DebugResourceClient.fetch("files.read", ["path": "Documents/outside-\(tag)/Info.plist"], as: DebugFileContent.self).get()) == nil)
+        #expect((try? DebugResourceClient.fetch("files.delete", ["path": "Documents/outside-\(tag)/Info.plist"], as: DebugFileDeletion.self).get()) == nil)
+        #expect(FileManager.default.fileExists(atPath: plist.path))
+
+        let content = try DebugResourceClient.fetch("files.read", ["path": "Documents/inside-\(tag)/note.txt"], as: DebugFileContent.self).get()
+        #expect(content.text == "kept")
+        let deletion = try DebugResourceClient.fetch("files.delete", ["path": "Documents/inside-\(tag)"], as: DebugFileDeletion.self).get()
+        #expect(deletion.ok)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: inside.path)) == nil)
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("note.txt").path))
+    }
+
     @Test("Preferences list, save with the key's type, delete, and show changes since a snapshot")
     func preferences() throws {
         let key = "shared-prefs-\(UUID().uuidString.prefix(8))"
