@@ -8,6 +8,9 @@
 import UIKit
 
 public class DebugSwift {
+    /// Counts visibility requests, so the delayed appearance `show()` schedules is dropped when a
+    /// `hide()` or `toggle()` came after it.
+    private static let visibilityRequests = FloatingBallRequests()
     
     public init() {}
     
@@ -45,7 +48,9 @@ public class DebugSwift {
 
     @discardableResult
     public func show() -> Self {
+        let request = Self.visibilityRequests.next()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            guard Self.visibilityRequests.isLatest(request) else { return }
             FloatViewManager.show()
         }
 
@@ -55,6 +60,7 @@ public class DebugSwift {
     @discardableResult
     @MainActor
     public func hide() -> Self {
+        _ = Self.visibilityRequests.next()
         FloatViewManager.remove()
         return self
     }
@@ -62,6 +68,7 @@ public class DebugSwift {
     @discardableResult
     @MainActor
     public func toggle() -> Self {
+        _ = Self.visibilityRequests.next()
         FloatViewManager.toggle()
 
         return self
@@ -345,5 +352,24 @@ public extension DebugSwift {
         navigationController.view.backgroundColor = .black
         navigationController.overrideUserInterfaceStyle = .dark
         return navigationController
+    }
+}
+
+/// A thread-safe counter of floating-ball visibility requests; the newest one wins.
+private final class FloatingBallRequests: @unchecked Sendable {
+    private let lock = NSLock()
+    private var latest = 0
+
+    func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        latest += 1
+        return latest
+    }
+
+    func isLatest(_ request: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return request == latest
     }
 }

@@ -285,12 +285,16 @@ final class DebugSwiftURLProtocol: URLProtocol {
     /// fallback when the session cannot be read.
     private static func foundationProtocol(for task: URLSessionTask) -> URLProtocol.Type? {
         let capture = ObjectIdentifier(DebugSwiftURLProtocol.self)
-        let classes = session(of: task)?.configuration.protocolClasses
-            ?? URLSessionConfiguration.default.protocolClasses
-            ?? []
-        return classes
-            .compactMap { $0 as? URLProtocol.Type }
-            .first { ObjectIdentifier($0) != capture && $0.canInit(with: task) }
+        func first(in classes: [AnyClass]?) -> URLProtocol.Type? {
+            (classes ?? [])
+                .compactMap { $0 as? URLProtocol.Type }
+                .first { ObjectIdentifier($0) != capture && $0.canInit(with: task) }
+        }
+        // Foundation's own order: the session's classes first, and when none of them takes the
+        // request, its built-in protocols. URLSession.shared lists none of its own, so its requests
+        // always come to the second step.
+        return first(in: session(of: task)?.configuration.protocolClasses)
+            ?? first(in: URLSessionConfiguration.default.protocolClasses)
     }
 
     /// The session a task belongs to. Foundation keeps it internal, so it is read through reflection.

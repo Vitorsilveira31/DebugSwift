@@ -139,6 +139,31 @@ check("host protocol answers as without DebugSwift", hosted.status == reference.
 check("host protocol request recorded", hostedRecord?.statusCode == 299, "recorded \(hostedRecord?.statusCode.map(String.init) ?? "nothing")")
 HostProtocol.status = 200
 
+// 1b. URLSession.shared, which lists no protocol of its own: with the capture installed its
+//     requests still reach Foundation's built-in HTTP protocol, and are recorded.
+DebugSwiftURLSessionCapture.install()
+let shared = await fetch(URLSession.shared, "https://jsonplaceholder.typicode.com/todos/2")
+let sharedRecord = await latestRecord(endingWith: "/todos/2")
+check("URLSession.shared request", shared.status == 200 && shared.body.contains("\"id\": 2"),
+      "status \(shared.status), error \(shared.error.map { "\($0)" } ?? "none")")
+check("URLSession.shared request recorded", sharedRecord?.statusCode == 200, "recorded \(sharedRecord?.statusCode.map(String.init) ?? "nothing")")
+
+// 1c. A session whose only protocol handles another scheme, as Skip's AssetURLProtocol does in
+//     an Android app's URLSession.shared: an https request still reaches Foundation's built-in
+//     protocol, as it does without DebugSwift.
+final class AssetOnlyProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.scheme == "asset" }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL)) }
+    override func stopLoading() {}
+}
+let assetConfiguration = URLSessionConfiguration.ephemeral
+assetConfiguration.protocolClasses = [AssetOnlyProtocol.self]
+DebugSwiftURLSessionCapture.add(to: assetConfiguration)
+let assetSession = await fetch(URLSession(configuration: assetConfiguration), "https://jsonplaceholder.typicode.com/todos/3")
+check("session listing only another scheme's protocol", assetSession.status == 200,
+      "status \(assetSession.status), error \(assetSession.error.map { "\($0)" } ?? "none")")
+
 // 2. Downloads, with a completion handler and with a delegate, through the real network.
 let downloadURL = URL(string: "https://jsonplaceholder.typicode.com/todos/1")!
 let downloadConfiguration = URLSessionConfiguration.default

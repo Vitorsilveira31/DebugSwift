@@ -111,7 +111,12 @@ struct DebugSwiftPanelPresenter: ViewModifier {
             .sheet(isPresented: Binding(
                 get: { presentation.isPresented && presentation.activePresenter == id },
                 set: { if !$0 { presentation.isPresented = false } }
-            ), onDismiss: { presentation.route = nil }) {
+            ), onDismiss: {
+                // A sheet also closes when a newer presenter takes the panel over: the route (say,
+                // the measurement tool) then belongs to that presenter and stays. Only a real
+                // closing of the panel clears it.
+                if !presentation.isPresented { presentation.route = nil }
+            }) {
                 DebugSwiftRuntime.panel { presentation.dismiss() }
             }
             .onAppear { presentation.attach(id) }

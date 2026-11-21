@@ -3910,14 +3910,7 @@ object AndroidDebugTools {
             if (pushStateLoaded) return
             val preferences = context.getSharedPreferences(PUSH_STATE_PREFS, Context.MODE_PRIVATE)
             pushEnabled = false
-            pushShowInForeground = preferences.getBoolean("showInForeground", true)
-            pushPlaySound = preferences.getBoolean("playSound", true)
-            pushShowBadge = preferences.getBoolean("showBadge", true)
-            pushAutoInteraction = preferences.getBoolean("autoInteraction", false)
-            pushInteractionDelaySeconds = preferences.getFloat("interactionDelay", 3f).toDouble()
-            pushSimulateRealPush = preferences.getBoolean("simulateRealPush", false)
-            pushDefaultSound = preferences.getString("defaultSound", "default") ?: "default"
-            pushMaxHistoryCount = preferences.getInt("maxHistoryCount", 100).coerceIn(1, 1_000)
+            readPushConfiguration(preferences)
             runCatching {
                 val historyJSON = JSONArray(preferences.getString("history", "[]") ?: "[]")
                 for (index in 0 until historyJSON.length()) {
@@ -3954,13 +3947,29 @@ object AndroidDebugTools {
     private fun pushPreferences(context: Context) =
         context.getSharedPreferences(PUSH_STATE_PREFS, Context.MODE_PRIVATE)
 
+    /** The push options as saved: by the first load, and by `push.reloadConfiguration` in tests. */
+    private fun readPushConfiguration(preferences: android.content.SharedPreferences) {
+        pushShowInForeground = preferences.getBoolean("showInForeground", true)
+        pushPlaySound = preferences.getBoolean("playSound", true)
+        pushShowBadge = preferences.getBoolean("showBadge", true)
+        pushAutoInteraction = preferences.getBoolean("autoInteraction", false)
+        // Saved as text so any accepted delay comes back exactly; older versions saved a Float.
+        pushInteractionDelaySeconds = preferences.getString("interactionDelaySeconds", null)
+            ?.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 }
+            ?: preferences.getFloat("interactionDelay", 3f).toDouble()
+        pushSimulateRealPush = preferences.getBoolean("simulateRealPush", false)
+        pushDefaultSound = preferences.getString("defaultSound", "default") ?: "default"
+        // Any positive limit the configuration accepts comes back as it was.
+        pushMaxHistoryCount = preferences.getInt("maxHistoryCount", 100).coerceAtLeast(1)
+    }
+
     private fun persistPushConfiguration(context: Context) {
         pushPreferences(context).edit()
             .putBoolean("showInForeground", pushShowInForeground)
             .putBoolean("playSound", pushPlaySound)
             .putBoolean("showBadge", pushShowBadge)
             .putBoolean("autoInteraction", pushAutoInteraction)
-            .putFloat("interactionDelay", pushInteractionDelaySeconds.toFloat())
+            .putString("interactionDelaySeconds", pushInteractionDelaySeconds.toString())
             .putBoolean("simulateRealPush", pushSimulateRealPush)
             .putString("defaultSound", pushDefaultSound)
             .putInt("maxHistoryCount", pushMaxHistoryCount)
@@ -5187,14 +5196,20 @@ object AndroidDebugTools {
                 .put("version", networkInjectionVersion.get())
                 .put("settings", JSONObject(networkInjectionSettingsJSON()))
                 .toString()
-            "network.injection.set" -> synchronized(this) {
-                val expected = args.optLong("version", -1)
-                if (expected != networkInjectionVersion.get()) {
-                    fail("conflict")
-                } else {
-                    val message = applyNetworkInjectionSettingsJSON(args.optJSONObject("settings")?.toString() ?: "{}")
-                    if (message == "Network injection settings applied.") ok(message) else fail(message)
-                }
+            // Puts the given sections (delay, failure, rewrite) over the current rules, under the same
+            // monitor as every other writer, so changes to other sections are kept.
+            "network.injection.patch" -> synchronized(this) {
+                val current = JSONObject(networkInjectionSettingsJSON())
+                val sections = args.optJSONObject("sections") ?: JSONObject()
+                sections.keys().forEach { key -> current.put(key, sections.get(key)) }
+                val message = applyNetworkInjectionSettingsJSON(current.toString())
+                if (message == "Network injection settings applied.") ok(message) else fail(message)
+            }
+            "network.history.reload" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
+                networkHistoryRecords.clear()
+                loadNetworkHistory(ctx)
+                ok()
             }
             "network.injection.csv" -> JSONObject().put("csv", networkInjectionRulesCSV()).toString()
 
@@ -5355,6 +5370,11 @@ object AndroidDebugTools {
                     savePushHistory(ctx)
                 }
                 ok("Notification configuration updated.")
+            }
+            "push.reloadConfiguration" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
+                readPushConfiguration(pushPreferences(ctx))
+                ok()
             }
             "push.scenario" -> ok(runPushNotificationScenario(args.optString("name")))
             "push.token" -> { reportPushToken(args.optString("token")); ok() }

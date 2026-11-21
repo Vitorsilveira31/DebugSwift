@@ -437,25 +437,32 @@ extension DebugSwift {
 
         private static let injectionLock = NSLock()
 
-        /// Reads the rules, changes them and applies them before returning, so a request started
-        /// right after the call already sees them. The runtime applies the change only if the rules
-        /// are still the version that was read; if something else changed them in between (an
-        /// import, the panel), the change is made again on top of theirs.
+        /// Changes the rules and applies the change before returning, so a request started right
+        /// after the call already sees it. Only the sections the change touched (delay, failure,
+        /// rewrite) are sent, and the runtime puts them over its current rules under the lock its
+        /// other writers use, so an import or a panel edit to another section is kept and nothing
+        /// needs retrying.
         private static func updateInjection(_ change: (inout DebugSwiftNetworkInjection) -> Void) {
             injectionLock.lock()
             defer { injectionLock.unlock() }
-            for _ in 0..<5 {
-                let reply = DebugSwiftHost.object("network.injection.get")
-                guard let version = DebugSwiftHost.int(reply["version"]),
-                      let raw = reply["settings"],
-                      let data = try? JSONSerialization.data(withJSONObject: raw),
-                      var settings = try? JSONDecoder().decode(DebugSwiftNetworkInjection.self, from: data) else { return }
-                change(&settings)
-                guard let encoded = try? JSONEncoder().encode(settings),
+            let reply = DebugSwiftHost.object("network.injection.get")
+            guard let raw = reply["settings"],
+                  let data = try? JSONSerialization.data(withJSONObject: raw),
+                  let before = try? JSONDecoder().decode(DebugSwiftNetworkInjection.self, from: data) else { return }
+            var after = before
+            change(&after)
+            var sections: [String: Any] = [:]
+            func add<Section: Encodable & Equatable>(_ name: String, _ old: Section, _ new: Section) {
+                guard old != new,
+                      let encoded = try? JSONEncoder().encode(new),
                       let object = try? JSONSerialization.jsonObject(with: encoded) else { return }
-                let result = DebugSwiftHost.object("network.injection.set", ["version": version, "settings": object])
-                if result["ok"] as? Bool == true || result["message"] as? String != "conflict" { return }
+                sections[name] = object
             }
+            add("delay", before.delay, after.delay)
+            add("failure", before.failure, after.failure)
+            add("rewrite", before.rewrite, after.rewrite)
+            guard !sections.isEmpty else { return }
+            DebugSwiftHost.call("network.injection.patch", ["sections": sections])
         }
 
         // MARK: - Injection settings

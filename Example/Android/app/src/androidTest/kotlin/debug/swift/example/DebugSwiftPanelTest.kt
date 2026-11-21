@@ -200,6 +200,58 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun pushOptionsComeBackExactlyAfterAReload() {
+        fun state() = org.json.JSONObject(AndroidDebugTools.pushStateJSON())
+        val configured = AndroidDebugTools.hostAPI("push.config", org.json.JSONObject()
+            .put("interactionDelay", 2.7).put("maxHistoryCount", 2_500).toString())
+        try {
+            assertTrue("Configuring failed: $configured", org.json.JSONObject(configured).optBoolean("ok"))
+            // Read back what was saved, as a restart does.
+            AndroidDebugTools.hostAPI("push.reloadConfiguration", "{}")
+            assertTrue("The delay changed: ${state().optDouble("interactionDelay")}", state().optDouble("interactionDelay") == 2.7)
+            assertTrue("The history limit changed: ${state().optInt("maxHistory")}", state().optInt("maxHistory") == 2_500)
+        } finally {
+            AndroidDebugTools.hostAPI("push.config", org.json.JSONObject()
+                .put("interactionDelay", 3).put("maxHistoryCount", 100).toString())
+        }
+    }
+
+    @Test
+    fun savedHistoryIsMaskedWhenItLoads() {
+        // A history file as an older version wrote it: a decrypted body with an encoded key, unmasked.
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        val history = java.io.File(
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
+            "debugswift-network-history.json"
+        )
+        val row = org.json.JSONObject()
+            .put("id", "legacy-$marker").put("sessionID", "legacy-session")
+            .put("timestamp", System.currentTimeMillis()).put("method", "GET")
+            .put("url", "https://api.example.test/legacy-$marker").put("status", 200)
+            .put("durationMs", 5).put("requestBytes", 0).put("responseBytes", 10)
+            .put("requestHeaders", org.json.JSONObject())
+            .put("responseHeaders", org.json.JSONObject().put("Content-Type", "application/json"))
+            .put("requestBody", "").put("responseBody", "{}")
+            .put("decryptedResponseBody", "pass%77ord=legacy-secret-$marker&note=kept-$marker")
+            .put("error", "").put("graphqlOperation", "").put("source", "http")
+        history.writeText(org.json.JSONObject().put("requests", org.json.JSONArray().put(row)).toString())
+
+        val reloaded = AndroidDebugTools.hostAPI("network.history.reload", "{}")
+        assertTrue("Reloading failed: $reloaded", org.json.JSONObject(reloaded).optBoolean("ok"))
+        val loaded = AndroidDebugTools.networkInspectorSnapshotJSON("network_history")
+        assertTrue("The saved request did not load", loaded.contains("legacy-$marker"))
+        assertTrue("The loaded body lost its other fields", loaded.contains("kept-$marker"))
+        assertTrue("The loaded record kept the password: $loaded", !loaded.contains("legacy-secret-$marker"))
+
+        // Loading rewrites the file, masked.
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline && history.readText().contains("legacy-secret-$marker")) {
+            Thread.sleep(200)
+        }
+        assertTrue("The rewritten history file kept the password", !history.readText().contains("legacy-secret-$marker"))
+    }
+
+    @Test
     fun crashReportsShowAnUncaughtException() {
         // Reports from earlier runs are restored at launch, so this run's probe carries its own marker.
         val marker = java.util.UUID.randomUUID().toString().take(8)
