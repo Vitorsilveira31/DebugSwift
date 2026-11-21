@@ -12,7 +12,9 @@ import Testing
 
 /// The shared SwiftUI App screens read the same operations on iOS as on Android. These check that
 /// DebugSwift's iOS answers decode into the models the screens use.
+/// Serialized: the log tests share the provider's log cache and its Clear time.
 @MainActor
+@Suite(.serialized)
 struct SharedAppScreensTests {
     @Test("Crash reports decode, with one screenshot slot per report")
     func crashes() throws {
