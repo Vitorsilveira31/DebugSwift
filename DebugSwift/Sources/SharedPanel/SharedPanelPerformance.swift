@@ -34,8 +34,10 @@ final class SharedPanelPerformance: NSObject {
     /// What the screen asked for: the widget only changes `isHidden` once its animation ends.
     private var widgetShown = false
 
-    /// App storage is walked at most every few seconds; the screens ask once a second.
+    /// App storage, walked off the main actor at most every few seconds; the screens ask once a
+    /// second and get the last totals meanwhile.
     private var appFiles: (count: Int, bytes: Int, at: Date)?
+    private var isWalkingAppFiles = false
 
     override private init() {
         super.init()
@@ -50,6 +52,15 @@ final class SharedPanelPerformance: NSObject {
         if UserDefaults.standard.bool(forKey: Self.hangMonitoringKey) {
             HangDetectorRunner.shared.start()
         }
+        // Time spent suspended is not a frame: start timing again when the app comes back.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(resumeFrameTiming), name: UIApplication.didBecomeActiveNotification, object: nil
+        )
+    }
+
+    @objc private func resumeFrameTiming() {
+        lastFrameTimestamp = 0
+        framesThisSecond = 0
     }
 
     @objc private func frame(_ link: CADisplayLink) {
@@ -268,11 +279,24 @@ final class SharedPanelPerformance: NSObject {
         }
     }
 
-    /// Files and bytes under the app's home directory, cached for a few seconds.
+    /// Files and bytes under the app's home directory: the last totals, refreshed in the
+    /// background when they are a few seconds old, one walk at a time.
     private func appStorage() -> (count: Int, bytes: Int) {
-        if let cached = appFiles, Date().timeIntervalSince(cached.at) < 5 {
-            return (cached.count, cached.bytes)
+        let stale = appFiles.map { Date().timeIntervalSince($0.at) >= 5 } ?? true
+        if stale, !isWalkingAppFiles {
+            isWalkingAppFiles = true
+            Task.detached(priority: .utility) {
+                let totals = Self.walkAppFiles()
+                await MainActor.run {
+                    SharedPanelPerformance.shared.appFiles = (totals.count, totals.bytes, Date())
+                    SharedPanelPerformance.shared.isWalkingAppFiles = false
+                }
+            }
         }
+        return appFiles.map { ($0.count, $0.bytes) } ?? (0, 0)
+    }
+
+    nonisolated private static func walkAppFiles() -> (count: Int, bytes: Int) {
         var count = 0
         var bytes = 0
         let home = URL(fileURLWithPath: NSHomeDirectory())
@@ -284,7 +308,6 @@ final class SharedPanelPerformance: NSObject {
                 bytes += values.fileSize ?? 0
             }
         }
-        appFiles = (count, bytes, Date())
         return (count, bytes)
     }
 }
