@@ -1247,7 +1247,8 @@ public enum DebugSwiftRuntime {
     @MainActor static var panelInfo: [DebugInfoGroup] = []
 
     #if os(iOS)
-    @MainActor private(set) static var isIOSDebuggerPrepared = false
+    /// Settable within the module so tests can open the panel as for the first time.
+    @MainActor static var isIOSDebuggerPrepared = false
     @MainActor private static var isIOSFloatingBallVisible = false
 
     @MainActor
