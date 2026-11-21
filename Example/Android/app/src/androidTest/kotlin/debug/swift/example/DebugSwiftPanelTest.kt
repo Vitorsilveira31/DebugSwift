@@ -200,19 +200,34 @@ class DebugSwiftPanelTest {
     }
 
     @Test
-    fun pushOptionsComeBackExactlyAfterAReload() {
+    fun pushStateComesBackExactlyAfterARestart() {
         fun state() = org.json.JSONObject(AndroidDebugTools.pushStateJSON())
+        val preferences = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+            .getSharedPreferences("DebugSwift.PushNotifications", android.content.Context.MODE_PRIVATE)
+        fun savedHistoryCount() = org.json.JSONArray(preferences.getString("history", "[]") ?: "[]").length()
+        val originalHistory = preferences.getString("history", "[]")
         val configured = AndroidDebugTools.hostAPI("push.config", org.json.JSONObject()
-            .put("interactionDelay", 2.7).put("maxHistoryCount", 2_500).toString())
+            .put("interactionDelay", 2.7).put("maxHistoryCount", 1_500).toString())
         try {
             assertTrue("Configuring failed: $configured", org.json.JSONObject(configured).optBoolean("ok"))
-            // Read back what was saved, as a restart does.
-            AndroidDebugTools.hostAPI("push.reloadConfiguration", "{}")
+            // More history than the old 1000-record cap on load, saved as the app saves it.
+            val history = org.json.JSONArray()
+            for (index in 0 until 1_200) {
+                history.put(org.json.JSONObject().put("id", "restart-$index").put("title", "Restart $index")
+                    .put("body", "Kept").put("status", "Delivered").put("trigger", "Immediate"))
+            }
+            preferences.edit().putString("history", history.toString()).commit()
+
+            // Load the push state again from what was saved, as a restart does.
+            AndroidDebugTools.hostAPI("push.reloadState", "{}")
             assertTrue("The delay changed: ${state().optDouble("interactionDelay")}", state().optDouble("interactionDelay") == 2.7)
-            assertTrue("The history limit changed: ${state().optInt("maxHistory")}", state().optInt("maxHistory") == 2_500)
+            assertTrue("The history limit changed: ${state().optInt("maxHistory")}", state().optInt("maxHistory") == 1_500)
+            assertTrue("History was cut on load: ${savedHistoryCount()} of 1200 saved", savedHistoryCount() == 1_200)
         } finally {
             AndroidDebugTools.hostAPI("push.config", org.json.JSONObject()
                 .put("interactionDelay", 3).put("maxHistoryCount", 100).toString())
+            preferences.edit().putString("history", originalHistory).commit()
+            AndroidDebugTools.hostAPI("push.reloadState", "{}")
         }
     }
 

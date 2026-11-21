@@ -3947,7 +3947,7 @@ object AndroidDebugTools {
     private fun pushPreferences(context: Context) =
         context.getSharedPreferences(PUSH_STATE_PREFS, Context.MODE_PRIVATE)
 
-    /** The push options as saved: by the first load, and by `push.reloadConfiguration` in tests. */
+    /** The push options as saved, read when the push state loads (at launch, and by `push.reloadState` in tests). */
     private fun readPushConfiguration(preferences: android.content.SharedPreferences) {
         pushShowInForeground = preferences.getBoolean("showInForeground", true)
         pushPlaySound = preferences.getBoolean("playSound", true)
@@ -5376,9 +5376,15 @@ object AndroidDebugTools {
                 }
                 ok("Notification configuration updated.")
             }
-            "push.reloadConfiguration" -> {
+            "push.reloadState" -> {
+                // Tests: forget the push state and load it again from what was saved, as a restart does.
                 val ctx = context ?: return fail("Android runtime has not been installed.")
-                readPushConfiguration(pushPreferences(ctx))
+                synchronized(this) {
+                    pushStateLoaded = false
+                    pushHistory.clear()
+                    pushTemplates.clear()
+                    loadPushState(ctx)
+                }
                 ok()
             }
             "push.scenario" -> ok(runPushNotificationScenario(args.optString("name")))
