@@ -16,6 +16,10 @@ enum ProcessMetrics {
         var count = mach_msg_type_number_t(0)
         guard task_threads(mach_task_self_, &threads, &count) == KERN_SUCCESS, let threads else { return 0 }
         defer {
+            // task_threads hands over a send right for each thread, as well as the array.
+            for index in 0..<Int(count) {
+                mach_port_deallocate(mach_task_self_, threads[index])
+            }
             let size = vm_size_t(Int(count) * MemoryLayout<thread_t>.stride)
             vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: threads)), size)
         }

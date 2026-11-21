@@ -74,6 +74,11 @@ struct DebugDeepLinksView: View {
             status = error.message
         }
         load()
+        // Opening finishes after the call returns; its outcome then shows in the history.
+        Task {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            load()
+        }
     }
 
     func load() {

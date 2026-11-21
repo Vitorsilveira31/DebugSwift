@@ -60,6 +60,12 @@ struct DebugLogcatView: View {
         switch result {
         case let .success(value):
             entries = value.entries
+            if value.pending == true {
+                Task {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    load()
+                }
+            }
             failure = value.entries.isEmpty ? (DebugPlatform.isAndroid ? "No matching Logcat records." : "No matching log entries.") : ""
         case let .failure(error):
             failure = error.message
