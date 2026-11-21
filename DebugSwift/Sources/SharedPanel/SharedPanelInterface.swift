@@ -219,12 +219,10 @@ final class SharedPanelInterface {
     /// Draws the app's window with the last gestures numbered on it and saves it as a PNG.
     private func captureDocumentation() -> String {
         guard let window = Self.appWindow() else { return "No app window is available." }
-        let marks = Array(gestures.suffix(Self.annotatedLimit))
+        let (marks, firstNumber) = annotatedGestures()
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { context in
-            if !window.drawHierarchy(in: window.bounds, afterScreenUpdates: false) {
-                window.layer.render(in: context.cgContext)
-            }
-            Self.annotate(context.cgContext, marks)
+            Self.drawApp(window, in: context.cgContext)
+            Self.annotate(context.cgContext, marks, firstNumber: firstNumber)
         }
         guard let data = image.pngData() else { return "The screenshot could not be encoded." }
         let url = FileManager.default.temporaryDirectory
@@ -241,8 +239,15 @@ final class SharedPanelInterface {
         return captureMessage
     }
 
+    /// The gestures drawn on a capture, the last 24, and the number of the first one: the same
+    /// number it has in the recorder's list.
+    func annotatedGestures() -> (marks: [Gesture], firstNumber: Int) {
+        let marks = Array(gestures.suffix(Self.annotatedLimit))
+        return (marks, gestures.count - marks.count + 1)
+    }
+
     /// Numbered dots for taps; a numbered dot and an arrow for scrolls, as on Android.
-    private static func annotate(_ context: CGContext, _ marks: [Gesture]) {
+    private static func annotate(_ context: CGContext, _ marks: [Gesture], firstNumber: Int) {
         let radius: CGFloat = 11
         context.setStrokeColor(UIColor.systemRed.cgColor)
         context.setFillColor(UIColor.systemRed.cgColor)
@@ -267,7 +272,7 @@ final class SharedPanelInterface {
                 context.strokePath()
             }
             context.fillEllipse(in: CGRect(x: dot.x - radius, y: dot.y - radius, width: radius * 2, height: radius * 2))
-            let label = NSAttributedString(string: "\(index + 1)", attributes: attributes)
+            let label = NSAttributedString(string: "\(firstNumber + index)", attributes: attributes)
             let size = label.size()
             label.draw(at: CGPoint(x: dot.x - size.width / 2, y: dot.y - size.height / 2))
         }
@@ -296,9 +301,7 @@ final class SharedPanelInterface {
             context.translateBy(x: 0, y: CGFloat(height))
             context.scaleBy(x: scale, y: -scale)
             UIGraphicsPushContext(context)
-            if !window.drawHierarchy(in: window.bounds, afterScreenUpdates: false) {
-                window.layer.render(in: context)
-            }
+            Self.drawApp(window, in: context)
             UIGraphicsPopContext()
             return true
         }
@@ -341,6 +344,34 @@ final class SharedPanelInterface {
 
     // MARK: - Windows
 
+    /// Draws the window without the shared panel. Presented as a sheet, the panel lives in the
+    /// app's window, in a container of its own above the app; that container is hidden while drawing.
+    static func drawApp(_ window: UIWindow, in context: CGContext) {
+        let panels = panelContainers(in: window).filter { !$0.isHidden }
+        panels.forEach { $0.isHidden = true }
+        defer { panels.forEach { $0.isHidden = false } }
+        if !window.drawHierarchy(in: window.bounds, afterScreenUpdates: !panels.isEmpty) {
+            window.layer.render(in: context)
+        }
+    }
+
+    /// The window's direct subviews that hold the shared panel, other than the app's own root view.
+    static func panelContainers(in window: UIWindow) -> [UIView] {
+        var containers: [UIView] = []
+        var pending: [UIView] = [window]
+        while let view = pending.popLast() {
+            if view is SharedPanelMarkerView {
+                var top = view
+                while let parent = top.superview, parent !== window { top = parent }
+                if top.superview === window, top !== window.rootViewController?.view, !containers.contains(top) {
+                    containers.append(top)
+                }
+            }
+            pending.append(contentsOf: view.subviews)
+        }
+        return containers
+    }
+
     /// DebugSwift's own windows (the debugger, the floating ball, overlays) are not the app.
     static func isAppWindow(_ window: UIWindow) -> Bool {
         let name = NSStringFromClass(type(of: window))
@@ -356,6 +387,16 @@ final class SharedPanelInterface {
             .filter { !$0.isHidden && isAppWindow($0) }
         return windows.first { $0.isKeyWindow } ?? windows.first
     }
+}
+
+/// See `SharedPanelData.makePanelMarker()`.
+final class SharedPanelMarkerView: UIView {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+    }
+
+    required init?(coder: NSCoder) { nil }
 }
 
 extension UIWindow {

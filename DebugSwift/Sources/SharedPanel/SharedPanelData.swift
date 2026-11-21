@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import UIKit
 
 /// The data the shared SwiftUI panel (DebugSwiftUI) shows on iOS. On Android the Kotlin runtime
 /// answers the same operations, in the same JSON shapes, so one set of screens serves both.
@@ -58,6 +59,12 @@ public enum SharedPanelData {
     public static func snapshot(featureID: String) -> String? {
         SharedPanelPerformance.shared.snapshot(featureID: featureID)
             ?? SharedPanelApp.shared.snapshot(featureID: featureID)
+    }
+
+    /// The empty view the shared panel places in itself, so screen captures can leave it out.
+    @MainActor
+    public static func makePanelMarker() -> UIView {
+        SharedPanelMarkerView()
     }
 
     static func json(_ object: [String: Any]) -> String {
