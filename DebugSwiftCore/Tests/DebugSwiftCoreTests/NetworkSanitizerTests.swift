@@ -186,5 +186,8 @@ struct NetworkSanitizerTests {
         // Line breaks around `=` are allowed in XML.
         let broken = sanitizer.sanitize(body: Data("<user password\n=\n\"hunter2\"/>".utf8), contentType: "application/xml")
         #expect(String(data: broken, encoding: .utf8) == "<user password\n=\n\"&lt;redacted&gt;\"/>")
+        // Text pairs inside XML stay on their line, as in plain text.
+        let text = sanitizer.sanitize(body: Data("<root>note:\npassword: hunter2</root>".utf8), contentType: "application/xml")
+        #expect(String(data: text, encoding: .utf8) == "<root>note:\npassword: &lt;redacted&gt;</root>")
     }
 }
