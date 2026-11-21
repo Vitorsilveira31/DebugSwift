@@ -188,9 +188,10 @@ public struct NetworkSanitizer: Sendable {
         pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(["']?[ \t]*[:=][ \t]*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,})\]<>]+)"#
     )
 
-    /// XML quoting: a backslash doesn't escape a quote, so `note="C:\"` ends at its second quote.
+    /// XML quoting: a backslash doesn't escape a quote, so `note="C:\"` ends at its second quote; and
+    /// XML allows line breaks around an attribute's `=`.
     private static let xmlKeyValuePattern = try! NSRegularExpression(
-        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(["']?[ \t]*[:=][ \t]*)("[^"]*"|'[^']*'|[^\s&;,})\]<>]+)"#
+        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(["']?[ \t\r\n]*[:=][ \t\r\n]*)("[^"]*"|'[^']*'|[^\s&;,})\]<>]+)"#
     )
 
     // MARK: - Records
