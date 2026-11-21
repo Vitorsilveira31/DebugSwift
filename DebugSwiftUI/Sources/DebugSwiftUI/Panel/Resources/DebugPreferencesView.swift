@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// Every preference store the app owns, with each value editable. `includesKeystore` adds the
@@ -216,6 +217,14 @@ struct DebugPreferenceEditView: View {
         .navigationTitle(Text(verbatim: isNew ? "New value" : key))
     }
 
+    /// The preference actions take JSON, so a key with "=" or "|" stays whole.
+    static func payload(store: String, key: String, value: String?) -> String {
+        var object = ["store": store, "key": key]
+        if let value { object["value"] = value }
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return "" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     func save() {
         let name = key.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else {
@@ -225,7 +234,7 @@ struct DebugPreferenceEditView: View {
         status = DebugSwiftRuntime.perform(
             featureID: "preferences",
             actionID: "set_preference",
-            value: "\(store)|\(name)=\(value)",
+            value: Self.payload(store: store, key: name, value: value),
         )
     }
 
@@ -233,7 +242,7 @@ struct DebugPreferenceEditView: View {
         status = DebugSwiftRuntime.perform(
             featureID: "preferences",
             actionID: "delete_preference",
-            value: "\(store)|\(key)",
+            value: Self.payload(store: store, key: key, value: nil),
         )
         dismiss()
     }

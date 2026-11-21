@@ -132,6 +132,26 @@ struct SharedResourcesScreensTests {
         #expect(UserDefaults.standard.object(forKey: key) == nil)
     }
 
+    @Test("A preference key with \"=\" or \"|\" is saved and deleted whole")
+    func preferenceKeyDelimiters() {
+        let key = "feature=enabled|beta-\(UUID().uuidString.prefix(8))"
+        let prefix = String(key.prefix { $0 != "=" })
+        UserDefaults.standard.set("on", forKey: key)
+        defer { [key, prefix].forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+        let saved = DebugSwiftRuntime.perform(
+            featureID: "preferences", actionID: "set_preference",
+            value: DebugPreferenceEditView.payload(store: "Standard", key: key, value: "off")
+        )
+        #expect(saved == "Saved \(key).")
+        #expect(UserDefaults.standard.string(forKey: key) == "off")
+        #expect(UserDefaults.standard.object(forKey: prefix) == nil)
+        _ = DebugSwiftRuntime.perform(
+            featureID: "preferences", actionID: "delete_preference",
+            value: DebugPreferenceEditView.payload(store: "Standard", key: key, value: nil)
+        )
+        #expect(UserDefaults.standard.object(forKey: key) == nil)
+    }
+
     @Test("A number stored as 0 or 1 stays a number, and a Boolean stays a Boolean")
     func preferenceNumberTypes() throws {
         let number = "shared-prefs-number-\(UUID().uuidString.prefix(8))"
@@ -180,6 +200,20 @@ struct SharedResourcesScreensTests {
         listing = try DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self).get()
         #expect(!listing.aliases.contains { $0.alias == key })
         #expect(DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "|k=v") == "Enter a key and a value.")
+    }
+
+    @Test("A keychain value that isn't text is listed without a value, and opens read-only")
+    func keychainBinaryValue() throws {
+        let key = "shared-keychain-binary-\(UUID().uuidString.prefix(8))"
+        let keychain = Keychain()
+        try keychain.set(Data([0xff, 0x00]), key: key)
+        defer { try? keychain.remove(key) }
+        let listing = try DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self).get()
+        let item = try #require(listing.aliases.first { $0.alias == key })
+        #expect(item.value == nil)
+        let editor = DebugKeychainEditView(service: item.service ?? "", key: key, value: item.value, isNew: false)
+        #expect(!editor.readable)
+        #expect(try keychain.getData(key) == Data([0xff, 0x00]))
     }
 
     @Test("An item with an empty service is edited and deleted there, not in the app's default service")
@@ -232,6 +266,17 @@ struct SharedResourcesScreensTests {
         let select = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT body FROM notes ORDER BY id"], as: DebugTableData.self).get()
         #expect(select.rows.map { $0.first ?? nil } == ["one", "two", "three"])
         #expect((try? DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT * FROM missing"], as: DebugTableData.self).get()) == nil)
+        // A write that returns more than a page of rows still runs to the end.
+        _ = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "CREATE TABLE bulk (x INTEGER)"], as: DebugTableData.self).get()
+        _ = try DebugResourceClient.fetch(
+            "db.query",
+            ["db": database.name, "sql": "INSERT INTO bulk WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 700) SELECT x FROM n"],
+            as: DebugTableData.self
+        ).get()
+        let returned = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "UPDATE bulk SET x = x + 1000 RETURNING x"], as: DebugTableData.self).get()
+        #expect(returned.rows.count == 500)
+        let unchanged = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT count(*) FROM bulk WHERE x < 1000"], as: DebugTableData.self).get()
+        #expect(unchanged.rows.first?.first == .some("0"))
         // A write that returns columns still reports its failure.
         #expect((try? DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "INSERT INTO notes (id, body) VALUES (1, 'again') RETURNING id"], as: DebugTableData.self).get()) == nil)
 
@@ -284,6 +329,12 @@ struct SharedResourcesScreensTests {
             URL(fileURLWithPath: NSHomeDirectory()).deletingLastPathComponent().appendingPathComponent("debugswift-group-\(UUID().uuidString.prefix(8))")
         }
         let lookup = DebugSwift.Resources.appGroupContainer
+        // Registered before any setup, so a failed setup still restores the shared configuration.
+        defer {
+            groups.forEach { DebugSwift.Resources.shared.removeAppGroup($0) }
+            DebugSwift.Resources.appGroupContainer = lookup
+            containers.forEach { try? FileManager.default.removeItem(at: $0) }
+        }
         DebugSwift.Resources.appGroupContainer = { identifier in groups.firstIndex(of: identifier).map { containers[$0] } }
         for (index, group) in groups.enumerated() {
             DebugSwift.Resources.shared.addAppGroup(group)
@@ -293,11 +344,6 @@ struct SharedResourcesScreensTests {
             sqlite3_open(url.path, &db)
             sqlite3_exec(db, "CREATE TABLE t\(index) (x INTEGER);", nil, nil, nil)
             sqlite3_close(db)
-        }
-        defer {
-            groups.forEach { DebugSwift.Resources.shared.removeAppGroup($0) }
-            DebugSwift.Resources.appGroupContainer = lookup
-            containers.forEach { try? FileManager.default.removeItem(at: $0) }
         }
         let names = try DebugResourceClient.fetch("db.list", as: DebugDatabaseListing.self).get().databases.map(\.name)
         for (index, group) in groups.enumerated() {
