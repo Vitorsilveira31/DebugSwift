@@ -324,7 +324,9 @@ struct DebugSwiftFeatureDestination: View {
         } else if ["swiftui_render", "doc_recorder", "color_palette"].contains(feature.id) {
             DebugSwiftIOSNativeInterfaceHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
-        } else if ["crashes", "oslog_console", "location", "loaded_libraries", "push_simulator", "deep_links", "event_bus", "agent_debug_log"].contains(feature.id) {
+        } else if DebugAppDestination.featureIDs.contains(feature.id) {
+            DebugAppDestination(feature: feature)
+        } else if ["loaded_libraries", "push_simulator"].contains(feature.id) {
             DebugSwiftIOSNativeAppHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
         } else if ["files", "user_defaults", "keychain", "persistent_data", "core_data", "swift_data", "http_cookies", "database", "security_audit"].contains(feature.id) {
@@ -353,28 +355,18 @@ struct DebugSwiftFeatureDestination: View {
             DebugAnimationControlView()
         } else if DebugPerformanceDestination.featureIDs.contains(feature.id) {
             DebugPerformanceDestination(featureID: feature.id)
-        } else if feature.id == "crashes" {
-            DebugCrashesView()
-        } else if feature.id == "oslog_console" {
-            DebugLogcatView()
-        } else if feature.id == "deep_links" {
-            DebugDeepLinksView()
-        } else if feature.id == "location" {
-            DebugLocationView()
+        } else if DebugAppDestination.featureIDs.contains(feature.id) {
+            DebugAppDestination(feature: feature)
         } else if feature.id == "device_info" || feature.id == "custom_info" {
             DebugKeyValueView(featureID: feature.id, title: feature.title)
         } else if feature.id == "custom_actions" {
             DebugCustomActionsView()
-        } else if feature.id == "event_bus" {
-            DebugLinesView(featureID: feature.id, title: feature.title)
         } else if feature.id == "push_simulator" {
             DebugPushNotificationsView()
         } else if feature.id == "push_token" {
             DebugPushTokenView()
         } else if feature.id == "loaded_libraries" {
             DebugLibrariesView()
-        } else if feature.id == "agent_debug_log" {
-            DebugAgentLogView()
         } else if feature.id == "realm" {
             DebugRealmView()
         } else if feature.id == "compose_renders" {
@@ -1027,6 +1019,28 @@ struct DebugPerformanceDestination: View {
     }
 }
 
+/// The App tools that use the same screens on iOS and Android, each reading its platform's data.
+struct DebugAppDestination: View {
+    static let featureIDs: Set<String> = [
+        "crashes", "oslog_console", "location", "deep_links", "event_bus", "agent_debug_log"
+    ]
+
+    let feature: DebugSwiftTool
+
+    @ViewBuilder
+    var body: some View {
+        switch feature.id {
+        case "crashes": DebugCrashesView()
+        case "oslog_console": DebugLogcatView()
+        case "location": DebugLocationView()
+        case "deep_links": DebugDeepLinksView()
+        case "event_bus": DebugLinesView(featureID: feature.id, title: feature.title)
+        case "agent_debug_log": DebugAgentLogView()
+        default: EmptyView()
+        }
+    }
+}
+
 struct DebugSwiftFeatureDetail: View {
     let feature: DebugSwiftTool
     @State var output = ""
@@ -1233,7 +1247,8 @@ public enum DebugSwiftRuntime {
     @MainActor static var panelInfo: [DebugInfoGroup] = []
 
     #if os(iOS)
-    @MainActor private(set) static var isIOSDebuggerPrepared = false
+    /// Settable within the module so tests can open the panel as for the first time.
+    @MainActor static var isIOSDebuggerPrepared = false
     @MainActor private static var isIOSFloatingBallVisible = false
 
     @MainActor

@@ -2,6 +2,22 @@ import SwiftUI
 
 /// The last position the app reported, and a mock position for the GPS and network providers.
 struct DebugLocationView: View {
+    /// Cities to jump to without typing coordinates.
+    static let presets: [(name: String, latitude: Double, longitude: Double)] = [
+        ("London, England", 51.509980, -0.133700),
+        ("Johannesburg, South Africa", -26.204103, 28.047305),
+        ("Moscow, Russia", 55.755786, 37.617633),
+        ("Mumbai, India", 19.017615, 72.856164),
+        ("Tokyo, Japan", 35.702069, 139.775327),
+        ("Sydney, Australia", -33.863400, 151.211000),
+        ("Hong Kong, China", 22.284681, 114.158177),
+        ("Honolulu, HI, USA", 21.282778, -157.829444),
+        ("San Francisco, CA, USA", 37.787359, -122.408227),
+        ("Mexico City, Mexico", 19.435478, -99.136479),
+        ("New York, NY, USA", 40.759211, -73.984638),
+        ("Rio de Janeiro, Brazil", -22.903539, -43.209587)
+    ]
+
     @State var current = ""
     @State var latitude = ""
     @State var longitude = ""
@@ -13,6 +29,15 @@ struct DebugLocationView: View {
             Section("Last reported location") {
                 Text(verbatim: current)
                     .font(.system(.footnote, design: .monospaced))
+            }
+            Section("Preset locations") {
+                ForEach(Self.presets, id: \.name) { preset in
+                    Button(preset.name) {
+                        latitude = String(preset.latitude)
+                        longitude = String(preset.longitude)
+                        set()
+                    }
+                }
             }
             Section("Mock location") {
                 TextField("Latitude, for example -23.5505", text: $latitude)

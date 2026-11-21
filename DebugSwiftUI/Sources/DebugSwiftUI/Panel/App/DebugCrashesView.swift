@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Uncaught exceptions DebugSwift saved, and the reasons Android reports for recent process exits.
+/// Uncaught exceptions DebugSwift saved, with the screen at the time on iOS, and the reasons Android
+/// reports for recent process exits.
 struct DebugCrashesView: View {
     @State var listing: DebugCrashListing? = nil
     @State var failure = ""
@@ -29,13 +30,14 @@ struct DebugCrashesView: View {
                     }
                     ForEach(0..<listing.reports.count, id: \.self) { index in
                         NavigationLink {
-                            DebugTextDetailView(title: "Crash report", text: listing.reports[index])
+                            DebugCrashReportView(report: listing.reports[index], screenshot: listing.screenshots?[safe: index])
                         } label: {
                             Text(verbatim: String(listing.reports[index].split(separator: "\n").first ?? "Crash report"))
                                 .lineLimit(2)
                         }
                     }
                 }
+                if DebugPlatform.isAndroid {
                 Section("Recent process exits") {
                     if listing.exits.isEmpty {
                         Text(verbatim: "Android reported no recent process exits.")
@@ -48,6 +50,7 @@ struct DebugCrashesView: View {
                             DebugCrashExitRow(exit: exit)
                         }
                     }
+                }
                 }
             }
         }
@@ -106,5 +109,37 @@ struct DebugTextDetailView: View {
                 .padding(16)
         }
         .navigationTitle(Text(verbatim: title))
+    }
+}
+
+/// One saved crash: its text, and on iOS the screen as it was when the app crashed.
+struct DebugCrashReportView: View {
+    let report: String
+    let screenshot: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                #if os(iOS)
+                if let screenshot, let data = Data(base64Encoded: screenshot), let image = UIImage(data: data) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 360)
+                }
+                #endif
+                Text(verbatim: report)
+                    .font(.system(.footnote, design: .monospaced))
+            }
+            .padding()
+        }
+        .navigationTitle("Crash report")
+    }
+}
+
+extension Array {
+    /// The element at `index`, or nil past the end.
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

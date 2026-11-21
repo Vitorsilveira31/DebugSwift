@@ -51,6 +51,20 @@ struct SharedPerformanceScreensTests {
         #expect(SharedPanelData.isDebugSwiftSetUp)
     }
 
+    @Test("Opening the panel keeps an area the host hid with its own setup")
+    func panelKeepsHostHiddenFeatures() {
+        let hidden = FeatureHandling.hiddenFeatures
+        let prepared = DebugSwiftRuntime.isIOSDebuggerPrepared
+        defer {
+            FeatureHandling.hiddenFeatures = hidden
+            DebugSwiftRuntime.isIOSDebuggerPrepared = prepared
+        }
+        _ = DebugSwift().setup(hideFeatures: [.resources])
+        DebugSwiftRuntime.isIOSDebuggerPrepared = false
+        DebugSwiftRuntime.startRuntime()
+        #expect(FeatureHandling.hiddenFeatures.contains(.resources))
+    }
+
     @Test("Slow frames are listed newest first")
     func slowFramesOrder() async throws {
         _ = DebugSwiftRuntime.perform(featureID: "frame_drops", actionID: "clear")

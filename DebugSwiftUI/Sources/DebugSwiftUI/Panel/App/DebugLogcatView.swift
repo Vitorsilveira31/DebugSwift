@@ -1,10 +1,14 @@
 import SwiftUI
 
-/// This process's Logcat, filterable by minimum level and by text in the tag or message.
+/// This process's log (Logcat on Android, OSLog on iOS), filterable by minimum level and by text in
+/// the tag or message.
 struct DebugLogcatView: View {
     @State var entries: [DebugLogEntry] = []
     @State var filter = ""
     @State var level = "V"
+    @State var includeApple = false
+    /// The platform reads the log in the background (iOS): ask again every second while shown.
+    @State var live = false
     @State var failure = ""
 
     let levels = ["V", "D", "I", "W", "E"]
@@ -23,6 +27,19 @@ struct DebugLogcatView: View {
                     }
                     Spacer()
                     Button("Refresh") { load() }
+                    Button("Clear") {
+                        _ = DebugResourceClient.fetch("app.logcat.clear", as: DebugActionReply.self)
+                        load()
+                    }
+                }
+                if !DebugPlatform.isAndroid {
+                    Toggle("Include Apple subsystems", isOn: Binding(
+                        get: { includeApple },
+                        set: { include in
+                            includeApple = include
+                            load()
+                        },
+                    ))
                 }
             }
             if !failure.isEmpty {
@@ -34,16 +51,31 @@ struct DebugLogcatView: View {
         }
         .navigationTitle("System Log")
         .onAppear { load() }
+        // Tied to the screen: it stops when the screen goes away.
+        .task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                if live { load() }
+            }
+        }
     }
 
     func load() {
-        let result = DebugResourceClient.fetch("app.logcat", ["filter": filter, "level": level], as: DebugLogListing.self)
+        let result = DebugResourceClient.fetch(
+            "app.logcat",
+            ["filter": filter, "level": level, "apple": includeApple ? "true" : "false"],
+            as: DebugLogListing.self,
+        )
         switch result {
         case let .success(value):
             entries = value.entries
-            failure = value.entries.isEmpty ? "No matching Logcat records." : ""
+            live = value.live == true
+            failure = value.entries.isEmpty ? (DebugPlatform.isAndroid ? "No matching Logcat records." : "No matching log entries.") : ""
         case let .failure(error):
             failure = error.message
+            // iOS reads in the background and may be retrying: keep asking, so a read that
+            // recovers replaces the error without a tap.
+            live = !DebugPlatform.isAndroid
         }
     }
 }
