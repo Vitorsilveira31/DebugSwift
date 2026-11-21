@@ -10,6 +10,9 @@ import SkipFuse
 /// - `sanitizer.configure`: `{headers?, queryParameters?, bodyKeys?, redactsURLPassword?}`; a list
 ///   left out keeps its current value.
 /// - `sanitizer.defaults`: the default `headers`, `queryParameters` and `bodyKeys`.
+/// - `url.matches`: `{url, patterns, full, queryExact}`; whether the URL matches any of the wildcard
+///   patterns, as iOS matches injection and rewrite rules: `full` for the whole URL rather than a part,
+///   `queryExact` for exactly the pattern's query items rather than at least them.
 /// - `sanitize.record`: `{url, requestHeaders, responseHeaders, requestBody, responseBody,
 ///   decryptedResponseBody}`, headers as `{name: [values]}`; answers the same fields masked.
 enum DebugSwiftCoreBridge {
@@ -38,6 +41,7 @@ enum DebugSwiftCoreBridge {
             "bodyKeys": NetworkSanitizer.defaultBodyKeys.sorted()
         ]
         case "sanitize.record": sanitizeRecord(input)
+        case "url.matches": ["matches": urlMatches(input)]
         default: ["error": "Unknown DebugSwiftCore operation: \(operation)."]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: output),
@@ -57,6 +61,17 @@ enum DebugSwiftCoreBridge {
             if let password { sanitizer.redactsURLPassword = password }
         }
         return [:]
+    }
+
+    private static func urlMatches(_ input: [String: Any]) -> Bool {
+        let text = input["url"] as? String ?? ""
+        let patterns = input["patterns"] as? [String] ?? []
+        let strategy: URLPatternMatchStrategy = (input["full"] as? Bool ?? false) ? .full : .contains
+        let query: URLQueryPatternMatchStrategy = (input["queryExact"] as? Bool ?? false) ? .exact : .subset
+        guard let url = URL(string: text) else {
+            return text.matchesAny(wildcardPatterns: patterns, strategy: strategy)
+        }
+        return url.matchesAny(wildcardPatterns: patterns, strategy: strategy, queryStrategy: query)
     }
 
     private static func sanitizeRecord(_ input: [String: Any]) -> [String: Any] {

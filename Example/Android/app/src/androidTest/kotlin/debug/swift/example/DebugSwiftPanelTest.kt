@@ -119,6 +119,38 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun rewriteRulesMatchURLsThroughDebugSwiftCore() {
+        // The same wildcard rules as iOS: a full match of the URL, query items exact and in any order.
+        fun matches(url: String, pattern: String, full: Boolean, queryExact: Boolean): Boolean =
+            org.json.JSONObject(
+                debug.swift.android.DebugSwiftCoreBridge.call(
+                    "url.matches",
+                    org.json.JSONObject().put("url", url).put("patterns", org.json.JSONArray(listOf(pattern)))
+                        .put("full", full).put("queryExact", queryExact).toString()
+                )
+            ).optBoolean("matches")
+        assertTrue(matches("https://api.example.test/orders?b=2&a=1", "*/orders?a=1&b=2", full = true, queryExact = true))
+        assertTrue(!matches("https://api.example.test/orders?a=1&b=2&c=3", "*/orders?a=1&b=2", full = true, queryExact = true))
+        assertTrue(matches("https://api.example.test/orders?a=1&b=2&c=3", "*/orders?a=1&b=2", full = true, queryExact = false))
+        assertTrue(matches("https://api.example.test/v2/orders/42", "orders/*", full = false, queryExact = false))
+        assertTrue(!matches("https://api.example.test/v2/orders/42", "orders/*", full = true, queryExact = false))
+
+        val original = AndroidDebugTools.networkInjectionSettingsJSON()
+        try {
+            val settings = org.json.JSONObject(original)
+            settings.getJSONObject("rewrite").put("isEnabled", true).put("rules", org.json.JSONArray().put(
+                org.json.JSONObject().put("id", "rule-1").put("urlPattern", "*/profile?id=*").put("responseBody", "{}")
+                    .put("isEnabled", true).put("matchType", "wildcard")
+            ))
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(settings.toString())
+            assertTrue(AndroidDebugTools.matchingNetworkRewriteRule("https://api.example.test/profile?id=7", "GET")?.id == "rule-1")
+            assertTrue(AndroidDebugTools.matchingNetworkRewriteRule("https://api.example.test/profile", "GET") == null)
+        } finally {
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(original)
+        }
+    }
+
+    @Test
     fun decryptedBodiesAreMaskedLiveAndInSavedHistory() {
         // A decrypted form body whose key is percent-encoded: `pass%77ord` is `password`.
         val marker = java.util.UUID.randomUUID().toString().take(8)

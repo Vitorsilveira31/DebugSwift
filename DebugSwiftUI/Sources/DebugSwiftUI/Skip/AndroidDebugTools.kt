@@ -1530,7 +1530,7 @@ object AndroidDebugTools {
             if (!rule.httpMethod.isNullOrEmpty() && !rule.httpMethod.equals(method, ignoreCase = true)) return@filter false
             when (rule.matchType) {
                 "exact" -> url.equals(rule.urlPattern, ignoreCase = true)
-                else -> matchesWildcardURL(url, rule.urlPattern, full = true, queryExact = true)
+                else -> matchesWildcardURL(url, listOf(rule.urlPattern), full = true, queryExact = true)
             }
         }
         if (matches.isEmpty()) return null
@@ -1570,71 +1570,14 @@ object AndroidDebugTools {
     private fun matchesRequest(url: String, method: String, urlPatterns: List<String>, httpMethods: List<String>): Boolean {
         val methodMatches = httpMethods.isEmpty() || httpMethods.any { it.equals(method, ignoreCase = true) }
         if (!methodMatches) return false
-        return urlPatterns.isEmpty() || urlPatterns.any { matchesWildcardURL(url, it, full = false, queryExact = false) }
+        return urlPatterns.isEmpty() || matchesWildcardURL(url, urlPatterns, full = false, queryExact = false)
     }
 
-    private data class QueryPattern(val name: String, val value: String?, val hasValue: Boolean)
-
-    private fun matchesWildcardURL(url: String, pattern: String, full: Boolean, queryExact: Boolean): Boolean {
-        val queryPattern = parseWildcardQuery(pattern)
-        if (queryPattern == null) {
-            val target = if (pattern.contains("?") && pattern.substringAfterLast('?').contains("=")) url else url.substringBefore('#')
-            return matchesWildcardString(target, pattern, full)
-        }
-        val (basePattern, expectedItems) = queryPattern
-        val baseURL = url.substringBefore('#').substringBefore('?')
-        if (!matchesWildcardString(baseURL, basePattern.ifEmpty { "*" }, full)) return false
-        val rawQuery = Uri.parse(url).encodedQuery.orEmpty()
-        val actualItems = if (rawQuery.isEmpty()) emptyList() else rawQuery.split('&').map { item ->
-            val pair = item.split('=', limit = 2)
-            Uri.decode(pair[0]) to pair.getOrNull(1)?.let { Uri.decode(it) }
-        }
-        if (queryExact && actualItems.size != expectedItems.size) return false
-        val used = mutableSetOf<Int>()
-        expectedItems.forEach { expected ->
-            val matchIndex = actualItems.indices.firstOrNull { index ->
-                index !in used && matchesWildcardString(actualItems[index].first, expected.name, full = true) &&
-                    (!expected.hasValue || matchesWildcardString(actualItems[index].second.orEmpty(), expected.value.orEmpty(), full = true))
-            } ?: return false
-            used.add(matchIndex)
-        }
-        return !queryExact || used.size == actualItems.size
-    }
-
-    private fun parseWildcardQuery(pattern: String): Pair<String, List<QueryPattern>>? {
-        val withoutFragment = pattern.substringBefore('#')
-        var searchIndex = 0
-        while (searchIndex < withoutFragment.length) {
-            val questionIndex = withoutFragment.indexOf('?', searchIndex)
-            if (questionIndex < 0) return null
-            val nextQuestion = withoutFragment.indexOf('?', questionIndex + 1).let { if (it < 0) withoutFragment.length else it }
-            val candidate = withoutFragment.substring(questionIndex + 1, nextQuestion)
-            if (candidate.contains('=') || candidate.contains('&') || (candidate.isNotEmpty() && !candidate.contains('/'))) {
-                val items = candidate.split('&').filter(String::isNotEmpty).map { item ->
-                    val equalsIndex = item.indexOf('=')
-                    if (equalsIndex < 0) QueryPattern(Uri.decode(item), null, false)
-                    else QueryPattern(Uri.decode(item.substring(0, equalsIndex)), Uri.decode(item.substring(equalsIndex + 1)), true)
-                }
-                return withoutFragment.substring(0, questionIndex) to items
-            }
-            searchIndex = questionIndex + 1
-        }
-        return null
-    }
-
-    private fun matchesWildcardString(value: String, pattern: String, full: Boolean): Boolean {
-        val expression = buildString {
-            if (full) append('^')
-            pattern.forEach { character ->
-                when (character) {
-                    '*' -> append(".*")
-                    '?' -> append('.')
-                    else -> append(Regex.escape(character.toString()))
-                }
-            }
-            if (full) append('$')
-        }
-        return runCatching { Regex(expression, RegexOption.IGNORE_CASE).containsMatchIn(value) }.getOrDefault(false)
+    /** DebugSwiftCore's URL wildcard matching, the one iOS uses for the same rules. */
+    private fun matchesWildcardURL(url: String, patterns: List<String>, full: Boolean, queryExact: Boolean): Boolean {
+        val input = JSONObject().put("url", url).put("patterns", org.json.JSONArray(patterns))
+            .put("full", full).put("queryExact", queryExact)
+        return JSONObject(DebugSwiftCoreBridge.call("url.matches", input.toString())).optBoolean("matches")
     }
 
     fun webSocketOpened(webSocket: WebSocket, url: String, responseCode: Int) {
