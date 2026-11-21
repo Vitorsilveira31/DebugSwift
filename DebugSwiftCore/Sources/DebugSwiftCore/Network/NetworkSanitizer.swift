@@ -160,7 +160,10 @@ public struct NetworkSanitizer: Sendable {
             // Keys can be percent-encoded, as in form bodies (`pass%77ord`): compare them decoded.
             let decoded = name.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? name
             guard normalizedBodyKeys.contains(Self.normalize(decoded)) else { continue }
+            // The XML pattern has a second branch for unquoted values, in group 6.
             var valueRange = match.range(at: 4)
+            if valueRange.location == NSNotFound, match.numberOfRanges > 6 { valueRange = match.range(at: 6) }
+            guard valueRange.location != NSNotFound else { continue }
             // A quoted value keeps its quotes; only what is between them is replaced.
             let first = source.substring(with: NSRange(location: valueRange.location, length: 1))
             if first == "\"" || first == "'", valueRange.length >= 2 {
@@ -191,7 +194,9 @@ public struct NetworkSanitizer: Sendable {
     /// XML quoting: a backslash doesn't escape a quote, so `note="C:\"` ends at its second quote; and
     /// XML allows line breaks around an attribute's `=`.
     private static let xmlKeyValuePattern = try! NSRegularExpression(
-        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(["']?[ \t\r\n]*[:=][ \t\r\n]*)("[^"]*"|'[^']*'|[^\s&;,})\]<>]+)"#
+        // Quoted values (attributes) may sit across line breaks; an unquoted value stays on its line,
+        // so `note:` followed by a line break can't take the next line's key as its value.
+        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(?:(["']?[ \t\r\n]*[:=][ \t\r\n]*)("[^"]*"|'[^']*')|(["']?[ \t]*[:=][ \t]*)([^\s&;,})\]<>"']+))"#
     )
 
     // MARK: - Records
