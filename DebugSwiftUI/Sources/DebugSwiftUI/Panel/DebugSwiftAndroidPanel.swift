@@ -1239,7 +1239,11 @@ public enum DebugSwiftRuntime {
     @MainActor
     static func prepareIOSDebugger(betaFeatures: [DebugSwiftBetaFeature] = []) {
         guard !isIOSDebuggerPrepared else { return }
-        DebugSwift().setup(enableBetaFeatures: betaFeatures)
+        // The host's own setup keeps its hidden features and disabled methods; only set up when
+        // nothing did.
+        if !SharedPanelData.isDebugSwiftSetUp {
+            DebugSwift().setup(enableBetaFeatures: betaFeatures)
+        }
         SharedPanelData.prepare()
         isIOSDebuggerPrepared = true
     }
