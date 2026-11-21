@@ -235,17 +235,26 @@ object DebugSwiftResourceAPI {
 
     // MARK: Cookies
 
-    /** Expires the cookie for the host and its paths the WebView cookie store reports. */
+    /**
+     * Expires the cookie wherever the WebView store may hold it for this host: host-only, and on the
+     * host's parent domains (a `Domain=` cookie), at the root path. The store hides those attributes,
+     * so success is reported only when the host no longer sees the cookie.
+     */
     private fun cookiesDelete(host: String, name: String): JSONObject {
         if (host.isBlank() || name.isBlank()) return failure("Choose a cookie.")
         val manager = CookieManager.getInstance()
         val url = "https://$host"
-        val present = manager.getCookie(url).orEmpty().split(';').any { it.trim().substringBefore('=') == name }
-        if (!present) return failure("No cookie $name for $host.")
-        manager.setCookie(url, "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
-        manager.setCookie(url, "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/")
+        fun present() = manager.getCookie(url).orEmpty().split(';').any { it.trim().substringBefore('=') == name }
+        if (!present()) return failure("No cookie $name for $host.")
+        val expired = "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+        val labels = host.split('.')
+        val domains = (0 until (labels.size - 1).coerceAtLeast(1)).map { labels.drop(it).joinToString(".") }
+        manager.setCookie(url, expired)
+        manager.setCookie(url, "$expired; Path=/")
+        domains.forEach { domain -> manager.setCookie(url, "$expired; Domain=$domain; Path=/") }
         manager.flush()
-        return JSONObject().put("message", "Deleted $name.")
+        return if (present()) failure("$name is still stored for $host, on a path or domain the WebView doesn't report.")
+        else JSONObject().put("message", "Deleted $name.")
     }
 
     private fun cookiesClear(): JSONObject {

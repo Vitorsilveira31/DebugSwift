@@ -5,7 +5,7 @@ import SwiftUI
 struct DebugCookieItem: Identifiable {
     let host: String
     let cookie: DebugCookie
-    var id: String { host + "|" + cookie.name }
+    var id: String { host + "|" + cookie.id }
 }
 
 struct DebugCookiesView: View {
@@ -28,7 +28,7 @@ struct DebugCookiesView: View {
                     ForEach(host.cookies.map { DebugCookieItem(host: host.host, cookie: $0) }) { item in
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(verbatim: item.cookie.name)
+                                Text(verbatim: item.cookie.path.map { "\(item.cookie.name)  \($0)" } ?? item.cookie.name)
                                 Text(verbatim: item.cookie.value)
                                     .font(.system(.footnote, design: .monospaced))
                                     .foregroundColor(Color.secondary)
@@ -61,7 +61,9 @@ struct DebugCookiesView: View {
     }
 
     func delete(_ item: DebugCookieItem) {
-        act("cookies.delete", ["host": item.host, "name": item.cookie.name])
+        var arguments = ["host": item.host, "name": item.cookie.name]
+        if let path = item.cookie.path { arguments["path"] = path }
+        act("cookies.delete", arguments)
     }
 
     func clear() {
