@@ -132,6 +132,26 @@ struct SharedResourcesScreensTests {
         #expect(UserDefaults.standard.object(forKey: key) == nil)
     }
 
+    @Test("A preference key with \"=\" or \"|\" is saved and deleted whole")
+    func preferenceKeyDelimiters() {
+        let key = "feature=enabled|beta-\(UUID().uuidString.prefix(8))"
+        let prefix = String(key.prefix { $0 != "=" })
+        UserDefaults.standard.set("on", forKey: key)
+        defer { [key, prefix].forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+        let saved = DebugSwiftRuntime.perform(
+            featureID: "preferences", actionID: "set_preference",
+            value: DebugPreferenceEditView.payload(store: "Standard", key: key, value: "off")
+        )
+        #expect(saved == "Saved \(key).")
+        #expect(UserDefaults.standard.string(forKey: key) == "off")
+        #expect(UserDefaults.standard.object(forKey: prefix) == nil)
+        _ = DebugSwiftRuntime.perform(
+            featureID: "preferences", actionID: "delete_preference",
+            value: DebugPreferenceEditView.payload(store: "Standard", key: key, value: nil)
+        )
+        #expect(UserDefaults.standard.object(forKey: key) == nil)
+    }
+
     @Test("A number stored as 0 or 1 stays a number, and a Boolean stays a Boolean")
     func preferenceNumberTypes() throws {
         let number = "shared-prefs-number-\(UUID().uuidString.prefix(8))"
