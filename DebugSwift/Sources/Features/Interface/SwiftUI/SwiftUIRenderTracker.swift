@@ -97,7 +97,11 @@ public class SwiftUIRenderTracker: @unchecked Sendable {
         ]
     }
     
+    /// Changes on every `clearStats()`, so a sampler can tell a reset from fewer renders.
+    private(set) var resetGeneration = 0
+
     public func clearStats() {
+        resetGeneration += 1
         renderCounts.removeAll()
         lastRenderTimes.removeAll()
         activeOverlays.removeAll() // Clear active overlays to prevent stuck states
