@@ -55,6 +55,8 @@ object DebugSwiftNativeBridge {
     @JvmStatic
     fun injectionDecision(url: String, method: String): String {
         val decision = org.json.JSONObject()
+        // A URL the host's filters leave out gets no rule, as on iOS.
+        if (!AndroidDebugTools.networkAccepts(url)) return decision.put("delaySeconds", 0.0).put("isBlocked", false).toString()
         decision.put("delaySeconds", AndroidDebugTools.requestDelay(url, method) / 1000.0)
         val blocked = AndroidDebugTools.shouldBlock(url)
         decision.put("isBlocked", blocked)

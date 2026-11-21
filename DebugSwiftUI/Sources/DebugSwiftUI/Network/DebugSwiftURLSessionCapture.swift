@@ -336,11 +336,10 @@ final class DebugSwiftURLProtocol: URLProtocol {
 /// unchanged, records the exchange, applies a pass-through rewrite and tells
 /// `DebugSwift.Network.shared.delegate`.
 private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @unchecked Sendable {
-    /// What the inspector keeps of a body; the Android runtime trims it further.
-    private static let inspectedBodyLimit = 1_048_576
-    /// The largest body handed to a decryptor. A decryptor needs the whole body (an authentication
-    /// tag is often at its end), so a longer one is not decrypted rather than decrypted in part.
-    private static let decryptedBodyLimit = 8 * 1_048_576
+    /// The largest body kept, for the inspector and for a decryptor. Both need it whole: the recorder
+    /// masks it before trimming it (a cut JSON body could not be masked), and a decryptor often
+    /// needs the end (an authentication tag). A longer one is not kept rather than kept in part.
+    private static let keptBodyLimit = 8 * 1_048_576
 
     private weak var capture: DebugSwiftURLProtocol?
     private let client: URLProtocolClient?
@@ -353,9 +352,10 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
     /// True once the response came through `didReceive`, which Foundation calls only for tasks
     /// with a delegate; `async` and completion-handler tasks get it from `task.response`.
     private var responseReported = false
-    private var body = Data()
-    /// The whole body for a decryptor, up to `decryptedBodyLimit`; nil once it grew past that.
+    /// The whole body, up to `keptBodyLimit`; nil once it grew past that.
     private var fullBody: Data? = Data()
+    /// A pass-through rewrite replaces the whole body once, on the first chunk; later chunks are dropped.
+    private var rewriteDelivered = false
     private var recorded = false
 
     init(
@@ -399,13 +399,21 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
         lock.lock()
         let received = response ?? `protocol`.task?.response
         lock.unlock()
-        let delivered = received.flatMap(rewritten)?.0 ?? data
-        lock.lock()
-        if body.count < Self.inspectedBodyLimit {
-            body.append(delivered.prefix(Self.inspectedBodyLimit - body.count))
+        let delivered: Data
+        if let replacement = received.flatMap(rewritten)?.0 {
+            lock.lock()
+            let first = !rewriteDelivered
+            rewriteDelivered = true
+            lock.unlock()
+            // The replacement is the whole body: sent once, and the original's other chunks dropped.
+            guard first else { return }
+            delivered = replacement
+        } else {
+            delivered = data
         }
+        lock.lock()
         if let current = fullBody {
-            fullBody = current.count + delivered.count <= Self.decryptedBodyLimit ? current + delivered : nil
+            fullBody = current.count + delivered.count <= Self.keptBodyLimit ? current + delivered : nil
         }
         lock.unlock()
         client?.urlProtocol(`protocol`, didLoad: delivered)
@@ -462,21 +470,27 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
         guard markRecorded() else { return }
         lock.lock()
         let response = self.response
-        let body = self.body
         let fullBody = self.fullBody
         lock.unlock()
         let http = response as? HTTPURLResponse
+        let limitText = "\(Self.keptBodyLimit / 1_048_576) MB"
         let decrypted: String? = if let fullBody, !fullBody.isEmpty {
             request.url.flatMap { DebugSwift.Network.shared.decryptedBody(fullBody, for: $0) }
         } else if fullBody == nil {
-            "Not decrypted: the response is larger than \(Self.decryptedBodyLimit / 1_048_576) MB."
+            "Not decrypted: the response is larger than \(limitText)."
         } else {
             nil
+        }
+        // The recorder masks this whole body, then trims it. One past the limit is not kept at all.
+        let body: Data? = if let fullBody {
+            fullBody.isEmpty ? nil : fullBody
+        } else {
+            Data("[DebugSwift: body not kept: larger than \(limitText), too large to mask]".utf8)
         }
         DebugSwiftURLProtocol.record(request, startedAt: startedAt, outcome: .response(
             statusCode: http?.statusCode ?? 0,
             headers: DebugSwiftURLProtocol.headers(of: http),
-            body: body.isEmpty ? nil : body
+            body: body
         ), decryptedBody: decrypted)
     }
 }

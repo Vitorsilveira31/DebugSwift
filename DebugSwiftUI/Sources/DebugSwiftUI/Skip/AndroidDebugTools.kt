@@ -1435,6 +1435,7 @@ object AndroidDebugTools {
     }
 
     fun shouldBlock(url: String): Boolean {
+        if (!networkAccepts(url)) return false
         if (networkInjectionEnabled && blockedURLPatterns.any { it.containsMatchIn(url) }) return true
         return synchronized(this) {
             if (!thresholdTrackingEnabled || !thresholdBlockRequests) return@synchronized false
@@ -4325,11 +4326,12 @@ object AndroidDebugTools {
         return when (key) {
             "showinforeground", "playsound", "showbadge", "autointeraction", "simulaterealpush" ->
                 if (bool == null) "$name must be true or false." else null
+            // The same range NotificationConfiguration allows on iOS; the panel offers a few presets of it.
             "interactiondelay" ->
-                if (raw.trim().toDoubleOrNull() in listOf(1.0, 2.0, 3.0, 5.0, 10.0)) null else "interactionDelay must be one of 1, 2, 3, 5, or 10 seconds."
+                if (raw.trim().toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true) null else "interactionDelay must be a number of seconds, 0 or more."
             "defaultsound" -> if (raw.isBlank()) "defaultSound cannot be empty. Use default, silent, or a raw resource name." else null
             "maxhistorycount" ->
-                if (raw.trim().toIntOrNull() in listOf(50, 100, 200, 500, 1_000)) null else "maxHistoryCount must be 50, 100, 200, 500, or 1000."
+                if ((raw.trim().toIntOrNull() ?: 0) > 0) null else "maxHistoryCount must be a whole number above 0."
             else -> "Unknown notification option '$name'."
         }
     }
@@ -4347,13 +4349,13 @@ object AndroidDebugTools {
             "playsound" -> pushPlaySound = bool ?: return "playSound must be true or false."
             "showbadge" -> pushShowBadge = bool ?: return "showBadge must be true or false."
             "autointeraction" -> pushAutoInteraction = bool ?: return "autoInteraction must be true or false."
-            "interactiondelay" -> pushInteractionDelaySeconds = raw.toDoubleOrNull()?.takeIf { it in listOf(1.0, 2.0, 3.0, 5.0, 10.0) } ?: return "interactionDelay must be one of 1, 2, 3, 5, or 10 seconds."
+            "interactiondelay" -> pushInteractionDelaySeconds = raw.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return "interactionDelay must be a number of seconds, 0 or more."
             "simulaterealpush" -> pushSimulateRealPush = bool ?: return "simulateRealPush must be true or false."
             "defaultsound" -> {
                 if (raw.isBlank()) return "defaultSound cannot be empty. Use default, silent, or a raw resource name."
                 pushDefaultSound = raw
             }
-            "maxhistorycount" -> pushMaxHistoryCount = raw.toIntOrNull()?.takeIf { it in listOf(50, 100, 200, 500, 1_000) } ?: return "maxHistoryCount must be 50, 100, 200, 500, or 1000."
+            "maxhistorycount" -> pushMaxHistoryCount = raw.toIntOrNull()?.takeIf { it > 0 } ?: return "maxHistoryCount must be a whole number above 0."
             else -> return "Unknown notification option '${parts[0]}'."
         }
         persistPushConfiguration(context)
@@ -5039,8 +5041,11 @@ object AndroidDebugTools {
         return only.isEmpty() || only.any { message.contains(it) }
     }
 
-    /** Whether a request passes the host's `ignoredURLs` and `onlyURLs` filters. */
-    private fun networkAccepts(url: String): Boolean {
+    /**
+     * Whether a request passes the host's `ignoredURLs` and `onlyURLs` filters. As on iOS, where such
+     * a request never reaches DebugSwift, one left out is not captured, counted, blocked or injected.
+     */
+    fun networkAccepts(url: String): Boolean {
         if (networkIgnoredURLs.any { it.isNotEmpty() && url.contains(it) }) return false
         val only = networkOnlyURLs.filter { it.isNotEmpty() }
         return only.isEmpty() || only.any { url.contains(it) }

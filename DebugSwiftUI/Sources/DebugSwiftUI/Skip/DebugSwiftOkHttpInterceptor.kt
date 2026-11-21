@@ -16,14 +16,27 @@ import javax.net.ssl.SSLHandshakeException
 
 /** Add this interceptor to the host app's OkHttpClient.Builder to capture HTTP traffic. */
 class DebugSwiftOkHttpInterceptor : Interceptor {
+    private companion object {
+        /** The largest body kept for inspection; it is masked whole before being trimmed. */
+        const val INSPECTED_BODY_LIMIT = 1_000_000L
+
+        fun tooLargeToKeep(size: Long?): String =
+            "[DebugSwift: body${size?.let { " of $it bytes" } ?: ""} not kept: larger than $INSPECTED_BODY_LIMIT bytes, too large to mask]"
+    }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val url = request.url.toString()
+        // A URL the host's ignoredURLs/onlyURLs leave out goes through untouched: not counted,
+        // blocked, injected or recorded, as on iOS.
+        if (!AndroidDebugTools.networkAccepts(url)) return chain.proceed(request)
         val start = SystemClock.elapsedRealtime()
+        // Whole bodies only: a cut JSON body no longer parses and so could not be masked. One too
+        // large to read whole is not kept; recordNetwork masks, then trims for display.
         val requestBody = runCatching {
             val buffer = Buffer()
             request.body?.writeTo(buffer)
-            buffer.readUtf8(32_000)
+            if (buffer.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(buffer.size) else buffer.readUtf8()
         }.getOrDefault("")
         val requestBytes = request.body?.contentLength()?.takeIf { it >= 0 } ?: 0L
 
@@ -65,7 +78,10 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
             AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", error.message ?: "network error", request.headers.toMultimap())
             throw error
         }
-        val originalText = runCatching { response.peekBody(1_000_000).string() }.getOrDefault("")
+        val originalText = runCatching {
+            val bytes = response.peekBody(INSPECTED_BODY_LIMIT + 1).bytes()
+            if (bytes.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(null) else String(bytes, Charsets.UTF_8)
+        }.getOrDefault("")
         val rewrittenText = rewriteRule?.responseBody ?: originalText
         val finalResponse = if (rewriteRule != null) {
             val builder = response.newBuilder()

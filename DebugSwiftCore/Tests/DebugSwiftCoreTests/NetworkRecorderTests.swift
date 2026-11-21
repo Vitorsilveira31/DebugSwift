@@ -62,6 +62,22 @@ struct NetworkRecorderTests {
         #expect(stored.utf8.count <= 40)
     }
 
+    @Test func truncatesTheDecryptedBodyAtACharacterBoundary() async {
+        let recorder = NetworkRecorder(bodyLimit: 3)
+        for (text, expected) in [("😀", ""), ("a😀", "a"), ("abcd", "abc")] {
+            await recorder.record(NetworkRecord(
+                duration: 0,
+                method: "GET",
+                url: "https://example.test/\(expected.count)",
+                outcome: .response(statusCode: 200, headers: [:], body: nil),
+                decryptedResponseBody: text
+            ))
+            let stored = await recorder.snapshot().last?.decryptedResponseBody
+            #expect(stored == expected)
+            #expect((stored ?? "").utf8.count <= 3)
+        }
+    }
+
     @Test func truncatesLongBodies() async {
         let recorder = NetworkRecorder(bodyLimit: 4)
         await recorder.record(record(requestBody: Data("abcdefgh".utf8), responseBody: Data("12345678".utf8)))
