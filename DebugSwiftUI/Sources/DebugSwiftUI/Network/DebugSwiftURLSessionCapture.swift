@@ -78,6 +78,19 @@ final class DebugSwiftURLProtocol: URLProtocol {
     private let lock = NSRecursiveLock()
     private var state = State.idle
     private var waits = 0
+    /// Set when a forwarded load is stopped (not suspended): nothing more of it is reported.
+    private var forwardedLoadStopped = false
+
+    /// Whether the observer may still report the forwarded load. It holds the lock while it reports,
+    /// so a stop from another thread waits for the callback in progress, and one from inside a
+    /// callback ends the ones after it.
+    func whileForwarding(_ callback: () -> Void) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard case .forwarding = state, !forwardedLoadStopped else { return false }
+        callback()
+        return true
+    }
 
     override class func canInit(with request: URLRequest) -> Bool {
         guard let url = request.url, let scheme = url.scheme?.lowercased(),
@@ -140,7 +153,8 @@ final class DebugSwiftURLProtocol: URLProtocol {
         let suspending = task?.state == .suspended
         switch current {
         case .forwarding:
-            break
+            // A suspension pauses Foundation's protocol and resumes it later; a stop ends the load.
+            if !suspending { forwardedLoadStopped = true }
         case .waiting where suspending:
             // Resuming starts the request over, delay included.
             state = .idle
@@ -377,12 +391,18 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
         return NetworkInjection.rewritten(response, by: rewrite, for: url)
     }
 
+    /// Runs a callback only while the capture still reports this load (see `whileForwarding`).
+    @discardableResult
+    private func report(_ callback: () -> Void) -> Bool {
+        capture?.whileForwarding(callback) ?? false
+    }
+
     func urlProtocol(_ protocol: URLProtocol, wasRedirectedTo request: URLRequest, redirectResponse: URLResponse) {
-        client?.urlProtocol(`protocol`, wasRedirectedTo: request, redirectResponse: redirectResponse)
+        report { client?.urlProtocol(`protocol`, wasRedirectedTo: request, redirectResponse: redirectResponse) }
     }
 
     func urlProtocol(_ protocol: URLProtocol, cachedResponseIsValid cachedResponse: CachedURLResponse) {
-        client?.urlProtocol(`protocol`, cachedResponseIsValid: cachedResponse)
+        report { client?.urlProtocol(`protocol`, cachedResponseIsValid: cachedResponse) }
     }
 
     func urlProtocol(_ protocol: URLProtocol, didReceive response: URLResponse, cacheStoragePolicy policy: URLCache.StoragePolicy) {
@@ -391,8 +411,8 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
         self.response = delivered
         responseReported = true
         lock.unlock()
-        client?.urlProtocol(`protocol`, didReceive: delivered, cacheStoragePolicy: policy)
-        if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didReceive: delivered) }
+        guard report({ client?.urlProtocol(`protocol`, didReceive: delivered, cacheStoragePolicy: policy) }) else { return }
+        report { if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didReceive: delivered) } }
     }
 
     func urlProtocol(_ protocol: URLProtocol, didLoad data: Data) {
@@ -416,8 +436,8 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
             fullBody = current.count + delivered.count <= Self.keptBodyLimit ? current + delivered : nil
         }
         lock.unlock()
-        client?.urlProtocol(`protocol`, didLoad: delivered)
-        if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didReceive: delivered) }
+        guard report({ client?.urlProtocol(`protocol`, didLoad: delivered) }) else { return }
+        report { if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didReceive: delivered) } }
     }
 
     func urlProtocolDidFinishLoading(_ protocol: URLProtocol) {
@@ -427,7 +447,7 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
         if !reported, let response = `protocol`.task?.response {
             if let rewrittenResponse = rewritten(response)?.1 {
                 // Telling the client sets `task.response`, which the completion handler receives.
-                client?.urlProtocol(`protocol`, didReceive: rewrittenResponse, cacheStoragePolicy: .notAllowed)
+                report { client?.urlProtocol(`protocol`, didReceive: rewrittenResponse, cacheStoragePolicy: .notAllowed) }
                 lock.lock()
                 self.response = rewrittenResponse
                 lock.unlock()
@@ -446,28 +466,29 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
         }
         lock.unlock()
         if let pendingReplacement {
-            client?.urlProtocol(`protocol`, didLoad: pendingReplacement)
-            if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didReceive: pendingReplacement) }
+            report { client?.urlProtocol(`protocol`, didLoad: pendingReplacement) }
+            report { if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didReceive: pendingReplacement) } }
         }
-        recordResponse()
-        client?.urlProtocolDidFinishLoading(`protocol`)
-        if let capture { DebugSwift.Network.shared.delegate?.didFinishLoading(capture) }
+        // A load stopped before it finished is not recorded as a response, nor reported as finished.
+        guard report({ recordResponse() }) else { return }
+        guard report({ client?.urlProtocolDidFinishLoading(`protocol`) }) else { return }
+        report { if let capture { DebugSwift.Network.shared.delegate?.didFinishLoading(capture) } }
     }
 
     func urlProtocol(_ protocol: URLProtocol, didFailWithError error: Error) {
         if (error as? URLError)?.code != .cancelled, markRecorded() {
             DebugSwiftURLProtocol.record(request, startedAt: startedAt, outcome: .failure(description: error.localizedDescription))
         }
-        client?.urlProtocol(`protocol`, didFailWithError: error)
-        if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didFailWithError: error) }
+        guard report({ client?.urlProtocol(`protocol`, didFailWithError: error) }) else { return }
+        report { if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didFailWithError: error) } }
     }
 
     func urlProtocol(_ protocol: URLProtocol, didReceive challenge: URLAuthenticationChallenge) {
-        client?.urlProtocol(`protocol`, didReceive: challenge)
+        report { client?.urlProtocol(`protocol`, didReceive: challenge) }
     }
 
     func urlProtocol(_ protocol: URLProtocol, didCancel challenge: URLAuthenticationChallenge) {
-        client?.urlProtocol(`protocol`, didCancel: challenge)
+        report { client?.urlProtocol(`protocol`, didCancel: challenge) }
     }
 
     private func markRecorded() -> Bool {

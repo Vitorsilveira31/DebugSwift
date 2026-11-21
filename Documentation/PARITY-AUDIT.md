@@ -73,6 +73,9 @@ failures, not rules that answer with an HTTP response. For a task read through a
 body: corelibs hands those chunks from its protocol straight to the session's delegate, which is
 fixed when the session is created. Swift `URLSessionWebSocketTask` sockets are
 not captured on Android; OkHttp sockets wrapped in `DebugSwiftWebSocketListener` are.
+`Example/Android/CaptureCheck/run.sh` checks this capture against corelibs on a device or emulator:
+host protocols, downloads, timeouts, masking of large bodies, rewrites, and stops during injected
+and forwarded loads.
 
 ## Done so far (verified on an Android 17 emulator)
 

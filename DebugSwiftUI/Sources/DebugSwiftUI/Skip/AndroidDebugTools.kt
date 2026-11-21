@@ -1697,12 +1697,13 @@ object AndroidDebugTools {
             "closed" -> {
                 connection.status = "Closed"
                 connection.statusDetail = payload
-                recordWebSocketEvent(connection, direction, payload)
+                // With capture off a tracked socket still closes, but no event is recorded.
+                if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, direction, payload)
             }
             "failed", "error" -> {
                 connection.status = "Error"
                 connection.statusDetail = payload
-                recordWebSocketEvent(connection, direction, payload)
+                if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, direction, payload)
             }
             else -> {
                 if (!connection.isActive()) {
@@ -4347,7 +4348,7 @@ object AndroidDebugTools {
         }
     }
 
-    private fun setPushConfiguration(context: Context, value: String): String {
+    private fun setPushConfiguration(context: Context, value: String, persist: Boolean = true): String {
         val parts = value.split("=", limit = 2).map { it.trim() }
         if (parts.size != 2 || parts[0].isBlank()) {
             return "Set one option at a time: showInForeground=true, playSound=true, showBadge=true, autoInteraction=false, interactionDelay=3, simulateRealPush=false, defaultSound=default, maxHistoryCount=100."
@@ -4369,8 +4370,10 @@ object AndroidDebugTools {
             "maxhistorycount" -> pushMaxHistoryCount = raw.toIntOrNull()?.takeIf { it > 0 } ?: return "maxHistoryCount must be a whole number above 0."
             else -> return "Unknown notification option '${parts[0]}'."
         }
-        persistPushConfiguration(context)
-        savePushHistory(context)
+        if (persist) {
+            persistPushConfiguration(context)
+            savePushHistory(context)
+        }
         return "Notification configuration updated: ${parts[0]}=$raw."
     }
 
@@ -5334,7 +5337,12 @@ object AndroidDebugTools {
                 val options = args.keys().asSequence().filter { it != "isEnabled" }.associateWith { args.get(it).toString() }
                 val rejected = options.mapNotNull { (key, value) -> pushConfigurationError(key, value) }
                 if (rejected.isNotEmpty()) return fail(rejected.joinToString(" "))
-                options.forEach { (key, value) -> setPushConfiguration(ctx, "$key=$value") }
+                // Apply in memory, then write configuration and history once for the whole update.
+                options.forEach { (key, value) -> setPushConfiguration(ctx, "$key=$value", persist = false) }
+                if (options.isNotEmpty()) {
+                    persistPushConfiguration(ctx)
+                    savePushHistory(ctx)
+                }
                 if (args.has("isEnabled")) setPushSimulationEnabled(args.optBoolean("isEnabled"))
                 ok("Notification configuration updated.")
             }
