@@ -446,7 +446,7 @@ final class SharedPanelResources {
         let files = databaseFiles()
         databasePaths = Dictionary(files.map { ($0.name, $0.path) }, uniquingKeysWith: { first, _ in first })
         // Registered Core Data and SwiftData stores come after the files; in-memory ones have no file.
-        let registered = SharedPanelRegisteredStores.names().map { ["name": $0, "size": 0] as [String: Any] }
+        let registered = SharedPanelRegisteredStores.names().map { ["name": $0] as [String: Any] }
         return ["databases": files.map { ["name": $0.name, "size": $0.size] } + registered]
     }
 
