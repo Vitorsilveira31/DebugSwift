@@ -539,7 +539,10 @@ final class SharedPanelApp {
             guard let template = push.templates.first(where: { $0.id == reference }) ?? push.templates.first(where: { $0.name == reference }) else {
                 return "No template named \(reference)."
             }
-            let delay = TimeInterval(parts[safe: 1] ?? "") ?? 0
+            let delayText = parts[safe: 1] ?? ""
+            guard let delay = delayText.isEmpty ? 0 : TimeInterval(delayText), delay.isFinite, (0...Self.maxDelay).contains(delay) else {
+                return "Delay must be from 0 to \(Int(Self.maxDelay)) seconds."
+            }
             Task { await simulator.simulateFromTemplate(template, trigger: delay > 0 ? .timeInterval(delay) : .immediate) }
             return "Sent the \(template.name) template."
         case "run_scenario":

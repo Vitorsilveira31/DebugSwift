@@ -284,6 +284,8 @@ struct SharedAppScreensTests {
         #expect(composed?.category == "orders")
         #expect(DebugPush.act("notify", "Bad|Payload|0||||| novalue").contains("key=value"))
         #expect(DebugPush.act("notify", "Bad|Delay|inf").contains("Delay must be"))
+        let anyTemplate = try #require(push.templates.first)
+        #expect(DebugPush.act("simulate_template", "\(anyTemplate.id)|1e20").contains("Delay must be"))
         #expect(DebugPush.setOption("interactionDelay", "1e400").contains("from 0 to"))
         #expect(DebugPush.setOption("interactionDelay", "1e20").contains("from 0 to"))
         _ = try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get()
