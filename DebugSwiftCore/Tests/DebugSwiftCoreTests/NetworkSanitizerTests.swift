@@ -168,4 +168,11 @@ struct NetworkSanitizerTests {
         custom.customBodyRedactor = { _, _ in Data([0xff, 0xfe]) }
         #expect(custom.sanitize(unformattedText: "card 4111") == "<redacted>")
     }
+
+    @Test func masksKeyValuePairsInTextBodies() {
+        let masked = sanitizer.sanitize(body: Data("user=ana password=secret".utf8), contentType: "text/plain; charset=utf-8")
+        #expect(String(data: masked, encoding: .utf8) == "user=ana password=<redacted>")
+        let image = Data([0x89, 0x50, 0x4e, 0x47])
+        #expect(sanitizer.sanitize(body: image, contentType: "image/png") == image)
+    }
 }

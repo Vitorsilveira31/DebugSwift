@@ -39,6 +39,11 @@ public enum GraphQLInspector {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let query = json["query"] as? String
         else { return nil }
+        // In a document with several operations, `operationName` says which one runs.
+        if let name = json["operationName"] as? String, !name.isEmpty,
+           let chosen = parseOperationName(query, named: name) {
+            return chosen
+        }
         return parseOperationName(query)
     }
 
@@ -76,8 +81,9 @@ public enum GraphQLInspector {
     /// Reads the operation with a regex instead of a full GraphQL parser: the
     /// query is a plain string inside JSON, so a lightweight match avoids pulling
     /// in an AST dependency just to read the leading keyword and name.
-    static func parseOperationName(_ query: String) -> GraphQLOperation? {
-        let pattern = "(query|mutation|subscription)\\s+(\\w+)"
+    static func parseOperationName(_ query: String, named name: String? = nil) -> GraphQLOperation? {
+        let namePattern = name.map { NSRegularExpression.escapedPattern(for: $0) + "\\b" } ?? "\\w+"
+        let pattern = "(query|mutation|subscription)\\s+(\(namePattern))"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
         let range = NSRange(query.startIndex..., in: query)
         guard let match = regex.firstMatch(in: query, options: [], range: range),

@@ -108,7 +108,8 @@ public struct NetworkSanitizer: Sendable {
 
     // MARK: - Body
 
-    /// Masks matching keys in JSON (at any depth) and `application/x-www-form-urlencoded` bodies.
+    /// Masks matching keys in JSON (at any depth) and `application/x-www-form-urlencoded` bodies, and
+    /// `key=value` or `key: value` pairs in other text bodies (`text/*`, XML).
     /// A body with nothing to mask is returned byte for byte.
     public func sanitize(body: Data, contentType: String?) -> Data {
         var result = body
@@ -121,6 +122,10 @@ public struct NetworkSanitizer: Sendable {
                 }
             } else if type.isEmpty || type.contains("json") {
                 result = sanitizeJSON(body) ?? body
+            } else if type.hasPrefix("text/") || type.contains("xml"), let text = String(data: body, encoding: .utf8) {
+                // Other text (plain, XML…) may still carry `password=…` pairs: mask them as key/value text.
+                let masked = maskingKeys(inUnformattedText: text)
+                if masked != text { result = Data(masked.utf8) }
             }
         }
         if let customBodyRedactor {
