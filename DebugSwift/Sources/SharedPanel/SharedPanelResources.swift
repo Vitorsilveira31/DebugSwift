@@ -112,7 +112,9 @@ final class SharedPanelResources {
             return ["error": "Not a directory: \(trimmed)"]
         }
         let entries: [[String: Any]] = items.compactMap { url in
-            guard let values = try? url.resourceValues(forKeys: Set(keys)) else { return nil }
+            // A link is described by what it points to, so a link to a folder opens as a folder.
+            guard let values = try? url.resolvingSymlinksInPath().resourceValues(forKeys: Set(keys))
+                ?? url.resourceValues(forKeys: Set(keys)) else { return nil }
             let isDirectory = values.isDirectory ?? false
             return [
                 "name": url.lastPathComponent,
@@ -132,7 +134,8 @@ final class SharedPanelResources {
     }
 
     private func readFile(_ path: String) -> [String: Any] {
-        guard let url = resolve(path),
+        // `resolve` already checked that a link stays inside its root; read what it points to.
+        guard let url = resolve(path)?.resolvingSymlinksInPath(),
               let size = (try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]))
                 .flatMap({ $0.isRegularFile == true ? $0.fileSize : nil }) else {
             return ["error": "File not found: \(path)"]

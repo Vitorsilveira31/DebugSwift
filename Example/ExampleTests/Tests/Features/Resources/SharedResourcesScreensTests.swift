@@ -99,6 +99,13 @@ struct SharedResourcesScreensTests {
 
         let content = try DebugResourceClient.fetch("files.read", ["path": "Documents/inside-\(tag)/note.txt"], as: DebugFileContent.self).get()
         #expect(content.text == "kept")
+        // A link to a folder lists as a folder, and a link to a file reads as that file.
+        let documentsListing = try DebugResourceClient.fetch("files.list", ["path": "Documents"], as: DebugFileListing.self).get()
+        #expect(documentsListing.entries.first { $0.name == "inside-\(tag)" }?.isDirectory == true)
+        let fileLink = documents.appendingPathComponent("note-link-\(tag)")
+        try FileManager.default.createSymbolicLink(at: fileLink, withDestinationURL: folder.appendingPathComponent("note.txt"))
+        defer { try? FileManager.default.removeItem(at: fileLink) }
+        #expect(try DebugResourceClient.fetch("files.read", ["path": "Documents/note-link-\(tag)"], as: DebugFileContent.self).get().text == "kept")
         let deletion = try DebugResourceClient.fetch("files.delete", ["path": "Documents/inside-\(tag)"], as: DebugFileDeletion.self).get()
         #expect(deletion.ok)
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: inside.path)) == nil)
