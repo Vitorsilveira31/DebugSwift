@@ -448,6 +448,8 @@ extension DebugSwift {
 
         private static func post(_ notification: SimulatedNotification) {
             var arguments: [String: Any] = [
+                // Kept by the runtime, so removeNotification(id:) and simulateInteraction(identifier:) find it.
+                "id": notification.id,
                 "title": notification.title, "body": notification.body,
                 "subtitle": notification.subtitle ?? "", "sound": notification.sound ?? "",
                 "category": notification.category ?? "", "userInfo": notification.userInfo,

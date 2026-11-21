@@ -159,6 +159,20 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun simulatedNotificationsKeepTheIdTheyWereGiven() {
+        val id = "check-" + java.util.UUID.randomUUID().toString().take(8)
+        AndroidDebugTools.setPushSimulationEnabled(true)
+        val posted = AndroidDebugTools.hostAPI("push.simulate", org.json.JSONObject()
+            .put("id", id).put("title", "Id check").put("body", "kept").put("delay", 60).toString())
+        assertTrue("Posting failed: $posted", org.json.JSONObject(posted).optBoolean("ok"))
+        assertTrue("The history lost the id", AndroidDebugTools.pushStateJSON().contains(id))
+
+        val removed = AndroidDebugTools.hostAPI("push.remove", org.json.JSONObject().put("id", id).toString())
+        assertTrue("Removing by the id failed: $removed", org.json.JSONObject(removed).optBoolean("ok"))
+        assertTrue("The notification is still in the history", !AndroidDebugTools.pushStateJSON().contains(id))
+    }
+
+    @Test
     fun crashReportsShowAnUncaughtException() {
         // Reports from earlier runs are restored at launch, so this run's probe carries its own marker.
         val marker = java.util.UUID.randomUUID().toString().take(8)

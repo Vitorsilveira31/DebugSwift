@@ -4152,14 +4152,19 @@ object AndroidDebugTools {
         badge: Int? = null,
         sound: String? = null,
         category: String? = null,
-        userInfo: Map<String, String> = emptyMap()
+        userInfo: Map<String, String> = emptyMap(),
+        requestedID: String? = null
     ): String {
         if (!pushEnabled) return "Enable push notification simulation before creating a notification."
+        // The caller's id is kept, as on iOS, so removing or interacting by that id finds it.
+        if (requestedID != null && pushHistory.any { it.id == requestedID }) {
+            return "A simulated notification with id '$requestedID' already exists."
+        }
         if (delaySeconds < 0) return "Delay must be zero or more seconds."
         val permissionMessage = requestNotificationPermission(context)
         if (permissionMessage.isNotEmpty()) return permissionMessage
         val boundedDelay = delaySeconds.coerceAtMost(86_400L)
-        val id = UUID.randomUUID().toString()
+        val id = requestedID?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
         val record = PushNotificationRecord(
             id = id,
             title = title,
@@ -5282,9 +5287,11 @@ object AndroidDebugTools {
             "push.state" -> pushStateJSON()
             "push.enabled" -> ok(setPushSimulationEnabled(args.optBoolean("enabled")))
             "push.simulate" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
                 val info = args.optJSONObject("userInfo")
                 val userInfo = info?.keys()?.asSequence()?.associateWith { info.optString(it) } ?: emptyMap()
-                ok(simulatePushNotification(
+                ok(schedulePushNotification(
+                    ctx,
                     args.optString("title"),
                     args.optString("body"),
                     args.optDouble("delay", 0.0).toLong(),
@@ -5292,7 +5299,8 @@ object AndroidDebugTools {
                     if (args.isNull("badge") || !args.has("badge")) null else args.optInt("badge"),
                     args.optString("sound").ifEmpty { null },
                     args.optString("category").ifEmpty { null },
-                    userInfo
+                    userInfo,
+                    requestedID = args.optString("id").ifBlank { null }
                 ))
             }
             "push.template" -> ok(simulatePushNotificationFromTemplate(args.optString("name"), args.optDouble("delay", 0.0).toLong()))
@@ -5330,7 +5338,7 @@ object AndroidDebugTools {
                 removePushTemplate(ctx, template.name).let { if (it.endsWith("removed.")) ok(it) else fail(it) }
             }
             "push.clearHistory" -> ok(clearPushNotificationHistory())
-            "push.remove" -> ok(removeSimulatedPushNotification(args.optString("id")))
+            "push.remove" -> removeSimulatedPushNotification(args.optString("id")).let { if (it.startsWith("Removed")) ok(it) else fail(it) }
             "push.config" -> {
                 val ctx = context ?: return fail("Android runtime has not been installed.")
                 // Check every option first, with no side effect; apply them (and the switch) only if all pass.
