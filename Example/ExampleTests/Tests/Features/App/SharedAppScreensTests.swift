@@ -30,6 +30,18 @@ struct SharedAppScreensTests {
         #expect(errors.entries.allSatisfy { ["E", "F"].contains($0.level) })
     }
 
+    @Test("Clearing the log hides what was logged before")
+    func clearLog() async throws {
+        DebugSwiftLogProbe.logError("logclear-before")
+        try await Task.sleep(nanoseconds: 50_000_000)
+        _ = try DebugResourceClient.fetch("app.logcat.clear", as: DebugActionReply.self).get()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        DebugSwiftLogProbe.logError("logclear-after")
+        let messages = try DebugResourceClient.fetch("app.logcat", ["filter": "logclear-", "level": "V"], as: DebugLogListing.self).get().entries.map(\.message)
+        #expect(!messages.contains("logclear-before"))
+        #expect(messages.contains("logclear-after"))
+    }
+
     @Test("Mocking a location reports it and stopping clears it")
     func location() throws {
         let previous = LocationToolkit.shared.simulatedLocation
@@ -80,6 +92,55 @@ struct SharedAppScreensTests {
         let after = try DebugResourceClient.fetch("app.agentlog.state", as: DebugAgentLogState.self).get()
         #expect(after.enabled != before.enabled)
         #expect(!after.path.isEmpty)
+    }
+
+    @Test("Loaded images decode, and a library's classes and a class's methods can be read")
+    func libraries() throws {
+        let info = try DebugResourceClient.fetch("app.libraries", as: DebugLibrariesInfo.self).get()
+        #expect(info.classesAvailable == true)
+        #expect(info.abis == nil)
+        #expect(!info.packageName.isEmpty)
+        #expect(info.libraries.contains { $0.origin == "App" })
+        #expect(info.libraries.contains { $0.address?.hasPrefix("0x") == true })
+
+        var found: String?
+        for library in info.libraries where library.origin == "App" {
+            let classes = try DebugResourceClient.fetch("app.libraries.classes", ["path": library.path], as: DebugClassList.self).get().classes
+            if let name = classes.first(where: { $0.hasSuffix("SharedPanelPerformance") }) {
+                found = name
+                break
+            }
+        }
+        let name = try #require(found)
+        let text = try DebugResourceClient.fetch("app.libraries.class", ["name": name], as: DebugClassDescription.self).get().text
+        #expect(text.contains("Inherits from NSObject"))
+        #expect(text.contains("Instance methods"))
+    }
+
+    @Test("Push state decodes, and options, templates and the switch round-trip")
+    func push() throws {
+        let push = DebugSwift.PushNotification.self
+        let wasEnabled = push.isEnabled
+        let config = push.configuration
+        defer {
+            push.updateConfiguration(config)
+            if push.isEnabled != wasEnabled { _ = DebugPush.act("toggle") }
+            _ = DebugPush.act("remove_template", "contract-template")
+        }
+        _ = try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get()
+
+        _ = DebugPush.setOption("interactionDelay", "7")
+        #expect(try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().interactionDelay == 7)
+        #expect(DebugPush.setOption("maxHistoryCount", "0").contains("above 0"))
+
+        _ = DebugPush.act("add_template", "contract-template|Hello|World")
+        #expect(try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().templates.contains { $0.name == "contract-template" })
+        _ = DebugPush.act("remove_template", "contract-template")
+        #expect(try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().templates.contains { $0.name == "contract-template" } == false)
+
+        _ = DebugPush.act("toggle")
+        #expect(try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().enabled != wasEnabled)
+        #expect(DebugPush.act("clear_push_history", "nope").contains("Type CLEAR"))
     }
 }
 

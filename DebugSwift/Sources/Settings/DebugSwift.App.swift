@@ -31,8 +31,7 @@ extension DebugSwift {
                     _defaultControllers = [
                         NetworkViewController(),
                         InterfaceViewController(),
-                        ResourcesViewController(),
-                        AppViewController()
+                        ResourcesViewController()
                     ]
                 }
                 return _defaultControllers!

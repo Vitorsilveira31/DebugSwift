@@ -25,6 +25,10 @@ struct DebugLogcatView: View {
                     }
                     Spacer()
                     Button("Refresh") { load() }
+                    Button("Clear") {
+                        _ = DebugResourceClient.fetch("app.logcat.clear", as: DebugActionReply.self)
+                        load()
+                    }
                 }
                 if !DebugPlatform.isAndroid {
                     Toggle("Include Apple subsystems", isOn: Binding(

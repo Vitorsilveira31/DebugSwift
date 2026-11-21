@@ -54,6 +54,7 @@ object DebugSwiftAppAPI {
                 "app.libraries" -> libraries(context)
                 "app.crashes" -> crashes(context)
                 "app.logcat" -> logcat(args.optString("filter"), args.optString("level"))
+                "app.logcat.clear" -> clearLogcat()
                 "app.deeplink.open" -> openDeepLink(context, args.optString("uri"))
                 "app.location.mock" -> mockLocation(context, args.optDouble("latitude"), args.optDouble("longitude"))
                 "app.location.stop" -> stopMocking(context)
@@ -186,22 +187,36 @@ object DebugSwiftAppAPI {
 
     private val levelOrder = "VDIWEF"
 
+    /** When Clear was tapped, in seconds since the epoch; earlier records are hidden. */
+    @Volatile private var logcatClearedAt: Double? = null
+
+    /** Logcat can't be erased for one app; Clear hides what was logged before it. */
+    private fun clearLogcat(): JSONObject {
+        logcatClearedAt = System.currentTimeMillis() / 1000.0
+        return JSONObject().put("message", "Log cleared.")
+    }
+
     /** This process's Logcat, newest last, optionally narrowed by a minimum level and a text filter. */
     private fun logcat(filter: String, minimumLevel: String): JSONObject {
-        val process = ProcessBuilder("logcat", "-d", "-v", "threadtime", "-t", "2000", "--pid=${android.os.Process.myPid()}")
+        // Epoch seconds: the logcat the app starts may print another time zone than the device's.
+        val process = ProcessBuilder("logcat", "-d", "-v", "threadtime", "-v", "epoch", "-t", "2000", "--pid=${android.os.Process.myPid()}")
             .redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().use { it.readText() }
         if (process.waitFor() != 0) return failure("Logcat is unavailable: ${output.takeLast(500)}")
         val minimum = levelOrder.indexOf(minimumLevel.firstOrNull() ?: 'V').coerceAtLeast(0)
         val entries = JSONArray()
-        // "10-19 21:00:43.109  1234  5678 I Tag     : message"
-        val pattern = Regex("""^(\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\s+\d+\s+\d+\s+([VDIWEF])\s+(.*?)\s*: (.*)$""")
+        // "1763699167.855  1234  5678 I Tag     : message"
+        val pattern = Regex("""^\s*(\d+\.\d+)\s+\d+\s+\d+\s+([VDIWEF])\s+(.*?)\s*: (.*)$""")
+        val timeFormat = java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+        val clearedAt = logcatClearedAt
         output.lineSequence().mapNotNull { pattern.matchEntire(it) }.filter { match ->
-            levelOrder.indexOf(match.groupValues[2][0]) >= minimum &&
+            (clearedAt == null || (match.groupValues[1].toDoubleOrNull() ?: 0.0) > clearedAt) &&
+                levelOrder.indexOf(match.groupValues[2][0]) >= minimum &&
                 (filter.isBlank() || match.groupValues[3].contains(filter, true) || match.groupValues[4].contains(filter, true))
         }.toList().takeLast(400).forEach { match ->
+            val seconds = match.groupValues[1].toDoubleOrNull() ?: 0.0
             entries.put(
-                JSONObject().put("time", match.groupValues[1]).put("level", match.groupValues[2])
+                JSONObject().put("time", timeFormat.format(java.util.Date((seconds * 1000).toLong()))).put("level", match.groupValues[2])
                     .put("tag", match.groupValues[3]).put("message", match.groupValues[4])
             )
         }
