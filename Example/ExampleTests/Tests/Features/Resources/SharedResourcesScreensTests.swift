@@ -301,6 +301,8 @@ struct SharedResourcesScreensTests {
         let select = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT body FROM notes ORDER BY id"], as: DebugTableData.self).get()
         #expect(select.rows.map { $0.first ?? nil } == ["one", "two", "three"])
         #expect((try? DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT * FROM missing"], as: DebugTableData.self).get()) == nil)
+        // A table that can't be read is an error, not an empty page.
+        #expect((try? DebugResourceClient.fetch("db.rows", ["db": database.name, "table": "missing", "offset": "0"], as: DebugTableData.self).get()) == nil)
         // A write that returns more than a page of rows still runs to the end.
         _ = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "CREATE TABLE bulk (x INTEGER)"], as: DebugTableData.self).get()
         _ = try DebugResourceClient.fetch(
