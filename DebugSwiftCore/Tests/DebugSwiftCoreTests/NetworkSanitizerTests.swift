@@ -134,7 +134,7 @@ struct NetworkSanitizerTests {
     @Test func masksKeyValuePairsInTextOfUnknownFormat() {
         let text = #"user=ana password=hunter2; token: "a\"b" note=keep pass%77ord=x"#
         let masked = sanitizer.sanitize(unformattedText: text)
-        #expect(masked == #"user=ana password=<redacted>; token: <redacted> note=keep pass%77ord=<redacted>"#)
+        #expect(masked == #"user=ana password=<redacted>; token: "<redacted>" note=keep pass%77ord=<redacted>"#)
     }
 
     @Test func masksUnformattedTextAsJSONWhenItParses() {
@@ -174,5 +174,11 @@ struct NetworkSanitizerTests {
         #expect(String(data: masked, encoding: .utf8) == "user=ana password=<redacted>")
         let image = Data([0x89, 0x50, 0x4e, 0x47])
         #expect(sanitizer.sanitize(body: image, contentType: "image/png") == image)
+    }
+
+    @Test func masksPairsAfterPunctuationAndKeepsXMLWellFormed() {
+        #expect(sanitizer.sanitize(unformattedText: "(password=hunter2)") == "(password=<redacted>)")
+        let xml = sanitizer.sanitize(body: Data(#"<user name="ana" password="hunter2"/>"#.utf8), contentType: "application/xml")
+        #expect(String(data: xml, encoding: .utf8) == #"<user name="ana" password="&lt;redacted&gt;"/>"#)
     }
 }
