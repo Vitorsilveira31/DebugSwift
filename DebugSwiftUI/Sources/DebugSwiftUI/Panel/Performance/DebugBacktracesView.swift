@@ -10,7 +10,9 @@ struct DebugBacktracesView: View {
         List {
             Section {
                 Button("Capture the main thread") { capture(all: false) }
-                Button("Capture all threads") { capture(all: true) }
+                if DebugPlatform.isAndroid {
+                    Button("Capture all threads") { capture(all: true) }
+                }
                 Button("Clear", role: .destructive) {
                     _ = DebugPerformanceDetail.act("app.perf.clearBacktraces")
                     load()

@@ -23,7 +23,7 @@ struct DebugLiveMetricsView: View {
                         color: Color.orange,
                     )
                     DebugMetricCard(
-                        title: "Memory (app heap)",
+                        title: DebugPlatform.isAndroid ? "Memory (app heap)" : "Memory (footprint)",
                         value: debugByteCount(sample.usedMemory),
                         history: memory,
                         ceiling: Double(sample.maxMemory),
@@ -38,9 +38,11 @@ struct DebugLiveMetricsView: View {
                     )
                 }
                 Section("Details") {
-                    LabeledContent("Heap limit") { Text(verbatim: debugByteCount(sample.maxMemory)) }
-                    LabeledContent("Native heap") { Text(verbatim: debugByteCount(sample.nativeHeap)) }
-                    LabeledContent("System memory free") {
+                    LabeledContent(DebugPlatform.isAndroid ? "Heap limit" : "Memory limit") { Text(verbatim: debugByteCount(sample.maxMemory)) }
+                    if let nativeHeap = sample.nativeHeap {
+                        LabeledContent("Native heap") { Text(verbatim: debugByteCount(nativeHeap)) }
+                    }
+                    LabeledContent(DebugPlatform.isAndroid ? "System memory free" : "Left for the app, of device memory") {
                         Text(verbatim: "\(debugByteCount(sample.systemAvailable)) of \(debugByteCount(sample.systemTotal))")
                     }
                     LabeledContent("Low memory") { Text(verbatim: sample.lowMemory ? "Yes" : "No") }

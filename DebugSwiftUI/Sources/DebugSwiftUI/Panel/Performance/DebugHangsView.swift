@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Moments the main thread did not respond, with the stack it was stuck in, and Android's own ANR reports.
+/// Moments the main thread did not respond, with the stack it was stuck in, and on Android the
+/// system's own ANR reports.
 struct DebugHangsView: View {
     @State var detail: DebugHangDetail? = nil
     @State var anrs: [DebugCrashExit] = []
@@ -11,6 +12,17 @@ struct DebugHangsView: View {
         List {
             if !failure.isEmpty {
                 Text(verbatim: failure).foregroundColor(Color.red)
+            }
+            if let monitoring = detail?.monitoring {
+                Section {
+                    Toggle("Detect stalls", isOn: Binding(
+                        get: { monitoring },
+                        set: { enabled in
+                            status = DebugSwiftRuntime.perform(featureID: "hangs", actionID: "set_monitoring", value: enabled ? "true" : "false")
+                            load()
+                        },
+                    ))
+                }
             }
             if let detail {
                 Section("Main thread stalls (over \(detail.thresholdMs) ms)") {
@@ -36,6 +48,7 @@ struct DebugHangsView: View {
                     }
                 }
             }
+            if DebugPlatform.isAndroid {
             Section("Android ANR reports") {
                 if anrs.isEmpty {
                     Text(verbatim: "Android has not reported an ANR for this app.")
@@ -48,6 +61,7 @@ struct DebugHangsView: View {
                         DebugCrashExitRow(exit: exit)
                     }
                 }
+            }
             }
             Section("Try it") {
                 Button("Block the main thread for 1 second") {
@@ -63,7 +77,7 @@ struct DebugHangsView: View {
                 }
             }
         }
-        .navigationTitle("Hangs and ANRs")
+        .navigationTitle(DebugPlatform.isAndroid ? "Hangs and ANRs" : "Hangs")
         .task {
             while !Task.isCancelled {
                 load()

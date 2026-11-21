@@ -1,11 +1,12 @@
 import Foundation
 
-/// One reading of the app's live metrics, as the Android tools report it.
+/// One reading of the app's live metrics: from the Android runtime, or from DebugSwift on iOS.
 struct DebugPerformanceSample: Decodable {
     let cpuPercent: Double
     let usedMemory: Int
     let maxMemory: Int
-    let nativeHeap: Int
+    /// Android only.
+    let nativeHeap: Int?
     let systemAvailable: Int
     let systemTotal: Int
     let lowMemory: Bool

@@ -31,7 +31,7 @@ struct DebugThreadCheckerView: View {
             if let detail {
                 Section("Violations, newest first") {
                     if detail.violations.isEmpty {
-                        Text(verbatim: "No StrictMode violations recorded.")
+                        Text(verbatim: DebugPlatform.isAndroid ? "No StrictMode violations recorded." : "No main-thread violations recorded.")
                             .foregroundColor(Color.secondary)
                     }
                     ForEach(0..<detail.violations.count, id: \.self) { index in

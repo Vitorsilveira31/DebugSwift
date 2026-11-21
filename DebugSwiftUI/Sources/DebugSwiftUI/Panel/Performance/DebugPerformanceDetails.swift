@@ -21,6 +21,8 @@ struct DebugStall: Decodable {
 struct DebugHangDetail: Decodable {
     let thresholdMs: Int
     let stalls: [DebugStall]
+    /// iOS only: whether stall detection is on. Android always watches.
+    let monitoring: Bool?
 }
 
 /// A titled call stack: a backtrace capture or a StrictMode violation.
@@ -36,6 +38,8 @@ struct DebugBacktraceDetail: Decodable {
 struct DebugLeakCandidate: Decodable {
     let className: String
     let ageSeconds: Int
+    /// iOS only: the detector's full report for the object.
+    let detail: String?
 }
 
 struct DebugLeakDetail: Decodable {
@@ -50,6 +54,8 @@ struct DebugThreadDetail: Decodable {
 
 struct DebugSuperCallDetail: Decodable {
     let crashes: [String]
+    /// iOS only: overrides DebugSwift caught skipping their super call.
+    let violations: [DebugStackEntry]?
 }
 
 struct DebugMemoryDetail: Decodable {

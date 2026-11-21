@@ -37,17 +37,3 @@ struct OpenFileDescriptor: Identifiable, Sendable {
     }
 }
 
-struct DiskUsageInfo {
-    let totalSpace: Int64
-    let freeSpace: Int64
-    let usedSpace: Int64
-    let bundleSize: Int64
-    let cachesSize: Int64
-    let tempSize: Int64
-    let documentsSize: Int64
-
-    var usedPercentage: Double {
-        guard totalSpace > 0 else { return 0 }
-        return Double(usedSpace) / Double(totalSpace) * 100
-    }
-}

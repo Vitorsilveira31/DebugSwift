@@ -35,10 +35,14 @@ struct DebugDiskView: View {
                 Section("App storage") {
                     LabeledContent("Files") { Text(verbatim: "\(sample.appFileCount)") }
                     LabeledContent("Size") { Text(verbatim: debugByteCount(sample.appFileBytes)) }
-                    NavigationLink {
-                        DebugFilesView(path: "")
-                    } label: {
-                        Text(verbatim: "Browse files")
+                    // The Files tool as this platform's panel shows it.
+                    if let files = DebugSwiftArea.tool(withID: "files") {
+                        NavigationLink {
+                            DebugSwiftFeatureDestination(feature: files)
+                                .navigationTitle(files.title)
+                        } label: {
+                            Text(verbatim: "Browse files")
+                        }
                     }
                 }
             }
