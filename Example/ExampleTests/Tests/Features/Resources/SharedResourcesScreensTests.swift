@@ -5,6 +5,7 @@
 
 @_spi(DebugSwiftUI) @testable import DebugSwift
 @testable import DebugSwiftUI
+import CoreData
 import Foundation
 import SQLite3
 import Testing
@@ -324,6 +325,60 @@ struct SharedResourcesScreensTests {
         #expect(many.total == nil)
         #expect(many.message == "Showing the first 500 rows.")
         #expect(select.total == 3)
+    }
+
+    @Test("A registered in-memory Core Data store lists its entities and pages its objects")
+    func registeredCoreDataStore() throws {
+        let entity = NSEntityDescription()
+        entity.name = "Note"
+        entity.managedObjectClassName = NSStringFromClass(NSManagedObject.self)
+        let body = NSAttributeDescription()
+        body.name = "body"
+        body.attributeType = .stringAttributeType
+        body.isOptional = true
+        entity.properties = [body]
+        let model = NSManagedObjectModel()
+        model.entities = [entity]
+        let container = NSPersistentContainer(name: "SharedPanelTests", managedObjectModel: model)
+        let description = NSPersistentStoreDescription()
+        description.type = NSInMemoryStoreType
+        container.persistentStoreDescriptions = [description]
+        container.loadPersistentStores { _, error in #expect(error == nil) }
+        for text in ["one", "two", "three"] {
+            NSManagedObject(entity: entity, insertInto: container.viewContext).setValue(text, forKey: "body")
+        }
+        try container.viewContext.save()
+
+        let previous = CoreDataManager.shared.getAvailableContexts()
+        defer { CoreDataManager.shared.configure(contexts: Dictionary(previous.map { ($0.name, $0.context) }, uniquingKeysWith: { first, _ in first })) }
+        CoreDataManager.shared.configure(contexts: ["Notes": container.viewContext])
+
+        let listing = try DebugResourceClient.fetch("db.list", as: DebugDatabaseListing.self).get()
+        #expect(listing.databases.contains { $0.name == "Core Data/Notes" })
+        let tables = try DebugResourceClient.fetch("db.tables", ["db": "Core Data/Notes"], as: DebugTableListing.self).get()
+        #expect(tables.tables.first { $0.name == "Note" }?.rows == 3)
+        let rows = try DebugResourceClient.fetch("db.rows", ["db": "Core Data/Notes", "table": "Note", "offset": "1"], as: DebugTableData.self).get()
+        #expect(rows.columns == ["body"])
+        #expect(rows.rows.count == 2)
+        #expect(rows.total == 3)
+        #expect((try? DebugResourceClient.fetch("db.query", ["db": "Core Data/Notes", "sql": "SELECT 1"], as: DebugTableData.self).get()) == nil)
+    }
+
+    @Test("A keychain item with an empty account can be saved and deleted")
+    func keychainEmptyAccount() throws {
+        let service = "debugswift-empty-account-\(UUID().uuidString.prefix(8))"
+        let keychain = Keychain(service: service)
+        try keychain.set("first", key: "")
+        defer { try? keychain.remove("") }
+        func act(_ actionID: String, _ value: String?) -> String {
+            DebugSwiftRuntime.perform(featureID: "keychain", actionID: actionID, value: DebugKeychainEditView.payload(service: service, key: "", value: value))
+        }
+        #expect(act("set_keychain_item", "second") == "Saved .")
+        #expect(keychain[string: ""] == "second")
+        #expect(act("delete_keychain_item", nil) == "Deleted .")
+        #expect(keychain[string: ""] == nil)
+        // A new item, sent without a service, still needs a key.
+        #expect(DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: DebugKeychainEditView.payload(service: nil, key: "", value: "x")) == "Enter a key and a value.")
     }
 
     @Test("Exporting a database in WAL mode includes what is still in the -wal file")
