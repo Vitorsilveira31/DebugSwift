@@ -205,4 +205,15 @@ struct NetworkSanitizerTests {
         let plain = Data(#"{"name":"ana"}"#.utf8)
         #expect(sanitizer.sanitize(body: plain, contentType: nil) == plain)
     }
+
+    @Test func aMaskedKeyInsideAnotherKeysQuotedValueIsStillMasked() {
+        let xml = sanitizer.sanitize(body: Data("<root>note:\n\"password: demo\"</root>".utf8), contentType: "application/xml")
+        #expect(String(data: xml, encoding: .utf8) == "<root>note:\n\"password: &lt;redacted&gt;\"</root>")
+        #expect(sanitizer.sanitize(unformattedText: #"note: "password: demo""#) == #"note: "password: <redacted>""#)
+    }
+
+    @Test func anUnquotedXMLValueMayHoldAQuote() {
+        let xml = sanitizer.sanitize(body: Data("<root>password=a'long-secret-value</root>".utf8), contentType: "application/xml")
+        #expect(String(data: xml, encoding: .utf8) == "<root>password=&lt;redacted&gt;</root>")
+    }
 }

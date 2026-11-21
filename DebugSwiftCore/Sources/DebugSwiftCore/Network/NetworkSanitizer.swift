@@ -164,18 +164,33 @@ public struct NetworkSanitizer: Sendable {
         var result = ""
         var cursor = 0
         let pattern = xml ? Self.xmlKeyValuePattern : Self.keyValuePattern
-        for match in pattern.matches(in: text, range: NSRange(location: 0, length: source.length)) {
-            let name = source.substring(with: match.range(at: 2))
+        var position = 0
+        // One match at a time: after a key that isn't masked, scanning resumes right after that key,
+        // so a masked key inside its value (`note: "password: demo"`) is still found.
+        while position < source.length,
+              let match = pattern.firstMatch(
+                  in: text, options: [.withoutAnchoringBounds],
+                  range: NSRange(location: position, length: source.length - position)
+              ) {
+            let keyRange = match.range(at: 2)
+            let name = source.substring(with: keyRange)
             // Keys can be percent-encoded, as in form bodies (`pass%77ord`): compare them decoded.
             let decoded = name.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? name
-            guard normalizedBodyKeys.contains(Self.normalize(decoded)) else { continue }
             // The XML pattern's value is in whichever branch matched: group 4, 6 or 8.
-            guard var valueRange = [4, 6, 8].lazy.filter({ $0 < match.numberOfRanges })
-                .map({ match.range(at: $0) }).first(where: { $0.location != NSNotFound }) else { continue }
-            // A quoted value keeps its quotes; only what is between them is replaced.
-            let first = source.substring(with: NSRange(location: valueRange.location, length: 1))
-            if first == "\"" || first == "'", valueRange.length >= 2 {
+            guard normalizedBodyKeys.contains(Self.normalize(decoded)),
+                  var valueRange = [4, 6, 8].lazy.filter({ $0 < match.numberOfRanges })
+                      .map({ match.range(at: $0) }).first(where: { $0.location != NSNotFound }) else {
+                position = keyRange.location + keyRange.length
+                continue
+            }
+            position = valueRange.location + valueRange.length
+            let value = source.substring(with: valueRange)
+            if let first = value.first, first == "\"" || first == "'", valueRange.length >= 2 {
+                // A quoted value keeps its quotes; only what is between them is replaced.
                 valueRange = NSRange(location: valueRange.location + 1, length: valueRange.length - 2)
+            } else if let last = value.last, last == "\"" || last == "'", value.filter({ $0 == last }).count == 1 {
+                // An unquoted value that ends at the quote closing an outer quoted value leaves it out.
+                valueRange.length -= 1
             }
             result += source.substring(with: NSRange(location: cursor, length: valueRange.location - cursor))
             result += xml ? "&lt;redacted&gt;" : Self.redactedValue
@@ -222,7 +237,8 @@ public struct NetworkSanitizer: Sendable {
     private static let xmlKeyValuePattern = try! NSRegularExpression(
         // An attribute (`=` and a quoted value) may sit across line breaks; text pairs, quoted or
         // not, stay on their line, so `note:` at a line's end can't take the next line as its value.
-        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(?:([ \t\r\n]*=[ \t\r\n]*)("[^"]*"|'[^']*')|(["']?[ \t]*[:=][ \t]*)("[^"]*"|'[^']*')|(["']?[ \t]*[:=][ \t]*)([^\s&;,})\]<>"']+))"#
+        // An unquoted value can't start with a quote but may hold one (`a'long-secret`).
+        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(?:([ \t\r\n]*=[ \t\r\n]*)("[^"]*"|'[^']*')|(["']?[ \t]*[:=][ \t]*)("[^"]*"|'[^']*')|(["']?[ \t]*[:=][ \t]*)([^\s&;,})\]<>"'][^\s&;,})\]<>]*))"#
     )
 
     /// An element named after a key, `<password>secret</password>`: its text is masked.
