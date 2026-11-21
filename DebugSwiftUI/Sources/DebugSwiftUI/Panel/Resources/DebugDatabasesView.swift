@@ -22,9 +22,11 @@ struct DebugDatabasesView: View {
                     HStack {
                         Text(verbatim: database.name)
                         Spacer()
-                        Text(verbatim: debugByteCount(database.size))
-                            .font(.caption)
-                            .foregroundColor(Color.secondary)
+                        if let size = database.size {
+                            Text(verbatim: debugByteCount(size))
+                                .font(.caption)
+                                .foregroundColor(Color.secondary)
+                        }
                     }
                 }
             }
@@ -48,6 +50,7 @@ struct DebugTablesView: View {
     let database: String
     @State var tables: [DebugTableInfo] = []
     @State var failure = ""
+    @State var status = ""
 
     var body: some View {
         List {
@@ -59,6 +62,14 @@ struct DebugTablesView: View {
                     DebugSQLConsoleView(database: database)
                 } label: {
                     Text(verbatim: "SQL console").foregroundColor(Color.accentColor)
+                }
+                if !DebugPlatform.isAndroid {
+                    Button("Share this database") {
+                        status = DebugSwiftRuntime.perform(featureID: "database", actionID: "export_database", value: database)
+                    }
+                }
+                if !status.isEmpty {
+                    Text(verbatim: status).font(.caption)
                 }
             }
             Section("Tables") {

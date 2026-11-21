@@ -119,7 +119,56 @@ final class SQLiteManager: @unchecked Sendable {
         }
         
         defer { sqlite3_close(db) }
-        
+        let page = readPage(db: db, table: table, limit: limit, offset: offset, orderBy: orderBy, ascending: ascending)
+        return (page.columns, page.rows)
+    }
+
+    /// Whether a statement only reads, decided by SQLite without running it. A statement that
+    /// doesn't compile counts as reading: running it reports SQLite's error and changes nothing.
+    func isReadOnly(path: String, query: String) -> Bool {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            return false
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else { return true }
+        defer { sqlite3_finalize(statement) }
+        return sqlite3_stmt_readonly(statement) != 0
+    }
+
+    /// A page of rows and the table's row count, read in one transaction so both describe the
+    /// same state of the database. A failed open, prepare or step comes back as `error`.
+    func getTablePage(from path: String, table: String, limit: Int, offset: Int) -> (columns: [String], rows: [[Any?]], total: Int?, error: String?) {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "The database could not be opened."
+            sqlite3_close(db)
+            return ([], [], nil, message)
+        }
+        defer { sqlite3_close(db) }
+        sqlite3_exec(db, "BEGIN", nil, nil, nil)
+        defer { sqlite3_exec(db, "COMMIT", nil, nil, nil) }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM \(quotedIdentifier(table))", -1, &statement, nil) == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_ROW else {
+            return ([], [], nil, String(cString: sqlite3_errmsg(db)))
+        }
+        let total = Int(sqlite3_column_int64(statement, 0))
+        let page = readPage(db: db, table: table, limit: limit, offset: offset, orderBy: nil, ascending: true)
+        return (page.columns, page.rows, total, page.error)
+    }
+
+    private func readPage(
+        db: OpaquePointer?,
+        table: String,
+        limit: Int,
+        offset: Int,
+        orderBy: String?,
+        ascending: Bool
+    ) -> (columns: [String], rows: [[Any?]], error: String?) {
         // Get column names
         let columns = getColumnNames(for: table, db: db)
         
@@ -132,14 +181,15 @@ final class SQLiteManager: @unchecked Sendable {
         
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else {
-            return (columns, [])
+            return (columns, [], String(cString: sqlite3_errmsg(db)))
         }
         
         defer { sqlite3_finalize(statement) }
         
         var rows: [[Any?]] = []
+        var status = sqlite3_step(statement)
         
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while status == SQLITE_ROW {
             var row: [Any?] = []
             
             for i in 0..<sqlite3_column_count(statement) {
@@ -172,9 +222,10 @@ final class SQLiteManager: @unchecked Sendable {
             }
             
             rows.append(row)
+            status = sqlite3_step(statement)
         }
         
-        return (columns, rows)
+        return (columns, rows, status == SQLITE_DONE ? nil : String(cString: sqlite3_errmsg(db)))
     }
     
     private func getColumnNames(for table: String, db: OpaquePointer?) -> [String] {
@@ -200,7 +251,9 @@ final class SQLiteManager: @unchecked Sendable {
     
     // MARK: - Query Execution
     
-    func executeQuery(path: String, query: String) -> QueryResult {
+    /// Runs one statement. A query reads at most `maxRows` rows, then stops: `hasMore` says
+    /// whether the result went on.
+    func executeQuery(path: String, query: String, maxRows: Int = .max) -> QueryResult {
         var db: OpaquePointer?
         
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
@@ -217,9 +270,8 @@ final class SQLiteManager: @unchecked Sendable {
         
         defer { sqlite3_finalize(statement) }
         
-        // Check if it's a SELECT query
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        if trimmedQuery.hasPrefix("SELECT") {
+        // A statement that returns columns is a query (SELECT, WITH ... SELECT, PRAGMA, ...).
+        if sqlite3_column_count(statement) > 0 {
             var columns: [String] = []
             var rows: [[Any?]] = []
             
@@ -232,7 +284,18 @@ final class SQLiteManager: @unchecked Sendable {
             }
             
             // Get rows
-            while sqlite3_step(statement) == SQLITE_ROW {
+            var hasMore = false
+            // A read stops after the page; a write that returns rows (RETURNING) must run to the end,
+            // or it would be left unfinished, keeping only the page.
+            let readOnly = sqlite3_stmt_readonly(statement) != 0
+            var status = sqlite3_step(statement)
+            while status == SQLITE_ROW {
+                guard rows.count < maxRows else {
+                    hasMore = true
+                    if readOnly { break }
+                    status = sqlite3_step(statement)
+                    continue
+                }
                 var row: [Any?] = []
                 
                 for i in 0..<columnCount {
@@ -265,9 +328,14 @@ final class SQLiteManager: @unchecked Sendable {
                 }
                 
                 rows.append(row)
+                status = sqlite3_step(statement)
             }
-            
-            return .select(columns: columns, rows: rows)
+
+            // A failed step (a constraint on INSERT ... RETURNING, say) is an error, not an empty result.
+            guard (hasMore && readOnly) || status == SQLITE_DONE else {
+                return .error(String(cString: sqlite3_errmsg(db)))
+            }
+            return .select(columns: columns, rows: rows, hasMore: hasMore)
         } else {
             // Execute non-SELECT query
             let result = sqlite3_step(statement)
@@ -358,7 +426,22 @@ final class SQLiteManager: @unchecked Sendable {
 // MARK: - Query Result
 
 enum QueryResult {
-    case select(columns: [String], rows: [[Any?]])
+    case select(columns: [String], rows: [[Any?]], hasMore: Bool)
     case update(affectedRows: Int)
     case error(String)
 }
+
+// MARK: - Models
+
+struct DatabaseTable {
+    let name: String
+    let rowCount: Int
+    let columns: [DatabaseColumn]
+}
+
+struct DatabaseColumn {
+    let name: String
+    let type: String
+    let isPrimaryKey: Bool
+    let isNullable: Bool
+} 
