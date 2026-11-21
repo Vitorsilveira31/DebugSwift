@@ -392,6 +392,8 @@ final class SharedPanelInterface {
                 chosen.append(color)
             }
         }
+        // Merging can lift a color above one listed earlier: rank by the final shares.
+        chosen.sort { $0.count > $1.count }
         return chosen.map { color in
             [
                 "hex": String(format: "#%02X%02X%02X", color.red, color.green, color.blue),

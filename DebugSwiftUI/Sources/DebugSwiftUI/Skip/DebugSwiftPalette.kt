@@ -90,6 +90,8 @@ object DebugSwiftPalette {
             if (index >= 0) chosen[index] = chosen[index].first to chosen[index].second + bucket[3]
             else if (chosen.size < MAX_COLORS) chosen += color to bucket[3]
         }
+        // Merging can lift a color above one listed earlier: rank by the final shares.
+        chosen.sortByDescending { it.second }
         val result = JSONArray()
         chosen.forEach { (color, count) ->
             result.put(
