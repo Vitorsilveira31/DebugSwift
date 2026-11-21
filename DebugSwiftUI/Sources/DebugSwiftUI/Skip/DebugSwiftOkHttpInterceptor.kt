@@ -83,13 +83,16 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         // otherwise at least the limit, which the notice states).
         var originalBytes = 0L
         val originalText = runCatching {
-            val bytes = response.peekBody(INSPECTED_BODY_LIMIT + 1).bytes()
-            if (bytes.size > INSPECTED_BODY_LIMIT) {
+            val peeked = response.peekBody(INSPECTED_BODY_LIMIT + 1)
+            val size = peeked.contentLength()
+            if (size > INSPECTED_BODY_LIMIT) {
                 originalBytes = response.body?.contentLength()?.takeIf { it >= 0 } ?: (INSPECTED_BODY_LIMIT + 1)
                 tooLargeToKeep(null)
             } else {
-                originalBytes = bytes.size.toLong()
-                String(bytes, Charsets.UTF_8)
+                originalBytes = size
+                // OkHttp decodes with the response's charset and drops a byte-order mark, so a
+                // BOM-prefixed JSON body still parses, and is masked, downstream.
+                peeked.string()
             }
         }.getOrDefault("")
         val rewrittenText = rewriteRule?.responseBody ?: originalText
