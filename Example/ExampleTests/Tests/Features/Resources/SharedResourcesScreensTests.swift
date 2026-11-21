@@ -222,6 +222,13 @@ struct SharedResourcesScreensTests {
         #expect(DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "|k=v") == "Enter a key and a value.")
     }
 
+    @Test("Keychain rows have distinct IDs even when services and keys hold \"|\"")
+    func keychainIDs() throws {
+        let json = #"{"aliases": [{"alias": "c", "service": "a|b"}, {"alias": "b|c", "service": "a"}]}"#
+        let listing = try JSONDecoder().decode(DebugKeystoreListing.self, from: Data(json.utf8))
+        #expect(Set(listing.aliases.map(\.id)).count == 2)
+    }
+
     @Test("A keychain value that isn't text is listed without a value, and opens read-only")
     func keychainBinaryValue() throws {
         let key = "shared-keychain-binary-\(UUID().uuidString.prefix(8))"

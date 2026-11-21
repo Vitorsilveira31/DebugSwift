@@ -444,7 +444,12 @@ final class SharedPanelResources {
             let data = RealmManager.shared.getTableData(from: path, table: table)
             return ["columns": data.columns, "rows": data.rows.map(Self.texts), "offset": 0, "total": data.rows.count]
         }
-        let total = SQLiteManager.shared.getTables(from: path).first { $0.name == table }?.rowCount
+        // Counts only this table: listing every table would count each of them on every page.
+        let quoted = "\"" + table.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        var total: Int?
+        if case let .select(_, rows, _) = SQLiteManager.shared.executeQuery(path: path, query: "SELECT COUNT(*) FROM \(quoted)", maxRows: 1) {
+            total = (rows.first?.first as? Int64).map(Int.init)
+        }
         let data = SQLiteManager.shared.getTableData(from: path, table: table, limit: Self.pageSize, offset: max(0, offset))
         var result: [String: Any] = ["columns": data.columns, "rows": data.rows.map(Self.texts), "offset": max(0, offset)]
         if let total { result["total"] = total }
