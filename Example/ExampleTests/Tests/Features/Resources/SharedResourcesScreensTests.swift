@@ -208,11 +208,22 @@ struct SharedResourcesScreensTests {
         let host = try #require(listing.hosts.first { $0.host == domain })
         #expect(host.cookies.map(\.name) == ["session"])
 
+        // The same name on another path is a separate cookie, deleted on its own.
+        let admin = try #require(HTTPCookie(properties: [.domain: domain, .path: "/admin", .name: "session", .value: "root"]))
+        HTTPCookieStorage.shared.setCookie(admin)
+        defer { HTTPCookieStorage.shared.deleteCookie(admin) }
+        let paths = try DebugResourceClient.fetch("cookies.list", as: DebugCookieListing.self).get().hosts.first { $0.host == domain }?.cookies
+            .filter { $0.name == "session" }.compactMap(\.path)
+        #expect(paths == ["/", "/admin"])
+        _ = try DebugResourceClient.fetch("cookies.delete", ["host": domain, "name": "session", "path": "/admin"], as: DebugActionReply.self).get()
+        #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.path == "/admin" } == false)
+        #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.path == "/" && $0.name == "session" } == true)
+
         // One cookie can be deleted, then all of them.
         let other = try #require(HTTPCookie(properties: [.domain: domain, .path: "/", .name: "theme", .value: "dark"]))
         HTTPCookieStorage.shared.setCookie(other)
         defer { HTTPCookieStorage.shared.deleteCookie(other) }
-        let deleted = try DebugResourceClient.fetch("cookies.delete", ["host": domain, "name": "session"], as: DebugActionReply.self).get()
+        let deleted = try DebugResourceClient.fetch("cookies.delete", ["host": domain, "name": "session", "path": "/"], as: DebugActionReply.self).get()
         #expect(deleted.message == "Deleted session.")
         #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.name == "session" } == false)
         #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.name == "theme" } == true)

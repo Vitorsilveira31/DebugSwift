@@ -36,7 +36,7 @@ final class SharedPanelResources {
         case "prefs.list": return preferences()
         case "prefs.diff": return preferenceChanges()
         case "cookies.list": return cookies()
-        case "cookies.delete": return deleteCookie(host: arguments["host"] ?? "", name: arguments["name"] ?? "")
+        case "cookies.delete": return deleteCookie(host: arguments["host"] ?? "", name: arguments["name"] ?? "", path: arguments["path"])
         case "cookies.clear":
             let all = HTTPCookieStorage.shared.cookies ?? []
             all.forEach(HTTPCookieStorage.shared.deleteCookie)
@@ -279,9 +279,10 @@ final class SharedPanelResources {
 
     // MARK: - Cookies
 
-    /// Every cookie with this name on this domain, whatever its path.
-    private func deleteCookie(host: String, name: String) -> [String: Any] {
-        let matches = (HTTPCookieStorage.shared.cookies ?? []).filter { $0.domain == host && $0.name == name }
+    /// The cookie with this name on this domain and path; without a path, every path.
+    private func deleteCookie(host: String, name: String, path: String?) -> [String: Any] {
+        let matches = (HTTPCookieStorage.shared.cookies ?? [])
+            .filter { $0.domain == host && $0.name == name && (path == nil || $0.path == path) }
         guard !matches.isEmpty else { return ["error": "No cookie \(name) for \(host)."] }
         matches.forEach(HTTPCookieStorage.shared.deleteCookie)
         return ["message": "Deleted \(name)."]
@@ -292,7 +293,9 @@ final class SharedPanelResources {
         let hosts = Dictionary(grouping: all, by: \.domain).keys.sorted().map { host in
             [
                 "host": host,
-                "cookies": all.filter { $0.domain == host }.sorted { $0.name < $1.name }.map { ["name": $0.name, "value": $0.value] }
+                "cookies": all.filter { $0.domain == host }
+                    .sorted { ($0.name, $0.path) < ($1.name, $1.path) }
+                    .map { ["name": $0.name, "value": $0.value, "path": $0.path] }
             ] as [String: Any]
         }
         return ["hosts": hosts]
