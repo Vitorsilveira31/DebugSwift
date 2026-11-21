@@ -211,6 +211,9 @@ final class SharedPanelApp {
         if includeApple != logIncludesApple {
             logIncludesApple = includeApple
             logItems = []
+            // Read again right away: the cache was just emptied. A read already running for the
+            // old filter is discarded when it ends, and the screen keeps asking meanwhile.
+            logReadAt = .distantPast
         }
         readNewLogEntries()
         let minimumRank = Self.rank(minimumLevel)

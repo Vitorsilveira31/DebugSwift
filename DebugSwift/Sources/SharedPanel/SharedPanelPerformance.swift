@@ -211,7 +211,8 @@ final class SharedPanelPerformance: NSObject {
                 "frames": frameCount,
                 "slow": slowFrameCount,
                 "slowest": slowestFrameMs,
-                "events": slowFrames.map { ["time": time.string(from: $0.date), "ms": $0.ms] }
+                // Newest first, as the shared screen and Android list them.
+                "events": slowFrames.reversed().map { ["time": time.string(from: $0.date), "ms": $0.ms] }
             ]
         case "hangs":
             return [
