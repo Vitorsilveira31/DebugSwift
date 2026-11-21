@@ -17,6 +17,7 @@ public enum SharedPanelData {
     @MainActor
     public static func prepare() {
         SharedPanelPerformance.shared.prepare()
+        SharedPanelInterface.shared.prepare()
     }
 
     /// Whether DebugSwift's setup already ran (`DebugSwift().setup(...)` by the host), so the
@@ -35,6 +36,8 @@ public enum SharedPanelData {
             reply = app
         } else if let resources = SharedPanelResources.shared.resource(operation, arguments) {
             reply = resources
+        } else if let interface = SharedPanelInterface.shared.resource(operation, arguments) {
+            reply = interface
         } else {
             reply = ["error": "This tool is not available on iOS."]
         }
@@ -47,6 +50,7 @@ public enum SharedPanelData {
         SharedPanelPerformance.shared.perform(featureID: featureID, actionID: actionID, value: value)
             ?? SharedPanelApp.shared.perform(featureID: featureID, actionID: actionID, value: value)
             ?? SharedPanelResources.shared.perform(featureID: featureID, actionID: actionID, value: value)
+            ?? SharedPanelInterface.shared.perform(featureID: featureID, actionID: actionID, value: value)
     }
 
     /// A feature's text snapshot, or nil when this feature is not handled here.
