@@ -180,11 +180,12 @@ class DebugSwiftPanelTest {
             debug.swift.android.DebugSwiftCoreBridge.call(
                 "curl.command",
                 org.json.JSONObject().put("method", "POST").put("url", "https://api.example.test/a'b")
-                    .put("headers", org.json.JSONObject().put("Authorization", org.json.JSONArray(listOf("Bearer secret"))))
+                    .put("headers", org.json.JSONObject().put("authorization", org.json.JSONArray(listOf("Bearer secret"))))
                     .put("body", "x=1").toString()
             )
         ).getString("command")
-        assertTrue(curl, curl == "curl -X POST 'https://api.example.test/a'\\''b' -H 'Authorization: <redacted>' -d 'x=1'")
+        // HTTP field names ignore case: a lowercase `authorization` is masked too.
+        assertTrue(curl, curl == "curl -X POST 'https://api.example.test/a'\\''b' -H 'authorization: <redacted>' -d 'x=1'")
     }
 
     @Test

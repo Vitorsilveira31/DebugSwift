@@ -40,4 +40,16 @@ struct HARAndGraphQLTests {
         #expect((entry["request"] as? [String: Any])?["postData"] == nil)
         #expect(((entry["response"] as? [String: Any])?["content"] as? [String: Any])?["text"] == nil)
     }
+
+    @Test func operationNameChoosesTheOperationInAMultiOperationDocument() {
+        let body = #"{"operationName":"Save","query":"query Read { viewer { id } } mutation Save { save }"}"#
+        #expect(GraphQLInspector.operationLabel(from: body) == "Mutation: Save")
+        // A name that isn't declared falls back to the first operation.
+        #expect(GraphQLInspector.operationLabel(from: #"{"operationName":"Other","query":"query Read { a }"}"#) == "Query: Read")
+    }
+
+    @Test func credentialHeadersAreMaskedWhateverTheirCase() {
+        let headers = HAREncoder.redactHeaders(["authorization": "Bearer t", "COOKIE": "a=1", "Accept": "x"])
+        #expect(headers == ["authorization": "<redacted>", "COOKIE": "<redacted>", "Accept": "x"])
+    }
 }

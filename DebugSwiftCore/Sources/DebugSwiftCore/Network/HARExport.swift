@@ -151,8 +151,10 @@ public enum HAREncoder {
         _ headers: [String: String],
         keys: Set<String> = HAREncoder.defaultRedactedKeys
     ) -> [String: String] {
-        headers.reduce(into: [String: String]()) { result, pair in
-            result[pair.key] = keys.contains(pair.key) ? "<redacted>" : pair.value
+        // HTTP field names ignore case: `authorization` is masked like `Authorization`.
+        let lowered = Set(keys.map { $0.lowercased() })
+        return headers.reduce(into: [String: String]()) { result, pair in
+            result[pair.key] = lowered.contains(pair.key.lowercased()) ? "<redacted>" : pair.value
         }
     }
 }
