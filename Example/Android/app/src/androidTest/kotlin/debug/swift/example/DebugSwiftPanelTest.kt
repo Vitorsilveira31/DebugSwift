@@ -267,6 +267,37 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun aSwiftDelayLandsAfterANativeWriteMadeBetweenItsReadAndItsPatch() {
+        fun delay(enabled: Boolean, seconds: Double) = org.json.JSONObject(AndroidDebugTools.networkInjectionSettingsJSON())
+            .also { it.put("delay", it.getJSONObject("delay").put("isEnabled", enabled).put("fixedDelay", seconds)) }
+            .toString()
+        val original = AndroidDebugTools.networkInjectionSettingsJSON()
+        val nativeWrites = java.util.concurrent.atomic.AtomicInteger()
+        try {
+            // Swift reads an enabled 1 s delay; a native writer then disables it at 2 s before
+            // Swift's enableRequestDelay(3) patches. The call must land after that write.
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(delay(enabled = true, seconds = 1.0))
+            AndroidDebugTools.afterInjectionRead.set {
+                AndroidDebugTools.applyNetworkInjectionSettingsJSON(delay(enabled = false, seconds = 2.0))
+                nativeWrites.incrementAndGet()
+            }
+            open("App", "Custom Actions")
+            val action = hasText("Delay Requests by 3 Seconds") and hasClickAction()
+            scrollTo(action)
+            tap(action)
+            waitFor(hasText("Action 'Delay Requests by 3 Seconds' completed.", substring = true))
+
+            val settings = org.json.JSONObject(AndroidDebugTools.networkInjectionSettingsJSON()).getJSONObject("delay")
+            assertTrue("The native write did not run between the read and the patch", nativeWrites.get() == 1)
+            assertTrue("The delay is off after enableRequestDelay(3): $settings", settings.getBoolean("isEnabled"))
+            assertTrue("The delay is not 3 s: $settings", settings.optDouble("fixedDelay") == 3.0)
+        } finally {
+            AndroidDebugTools.afterInjectionRead.set(null)
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(original)
+        }
+    }
+
+    @Test
     fun injectionChangesKeepRulesWrittenMeanwhile() {
         fun rules(pattern: String) = org.json.JSONObject()
             .put("delay", org.json.JSONObject().put("isEnabled", false))

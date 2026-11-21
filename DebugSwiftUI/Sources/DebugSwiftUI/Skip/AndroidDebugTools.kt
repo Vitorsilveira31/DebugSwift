@@ -465,6 +465,12 @@ object AndroidDebugTools {
         publishEvent("app", "Custom info updated: $key")
     }
 
+    /**
+     * Tests only: runs once, right after the next `network.injection.get` has read the rules and
+     * before the caller patches them, to write the rules in between as another writer could.
+     */
+    val afterInjectionRead = java.util.concurrent.atomic.AtomicReference<(() -> Unit)?>(null)
+
     fun registerAction(title: String, action: () -> Unit) {
         synchronized(customActions) { customActions[title] = action }
     }
@@ -5191,11 +5197,16 @@ object AndroidDebugTools {
             "network.threshold.logs" -> JSONObject().put("logs", getThresholdLogs()).toString()
             "network.threshold.export" -> ok(context?.let { export("network_thresholds", it) } ?: "Android runtime has not been installed.")
 
-            // Network injection: read with its version, write only if nothing changed in between.
-            "network.injection.get" -> JSONObject()
-                .put("version", networkInjectionVersion.get())
-                .put("settings", JSONObject(networkInjectionSettingsJSON()))
-                .toString()
+            // Network injection: the current rules. Swift's injection calls read them, then send
+            // `network.injection.patch` with the fields the call sets.
+            "network.injection.get" -> {
+                val reply = JSONObject()
+                    .put("version", networkInjectionVersion.get())
+                    .put("settings", JSONObject(networkInjectionSettingsJSON()))
+                    .toString()
+                afterInjectionRead.getAndSet(null)?.invoke()
+                reply
+            }
             // Writes the given fields of each section (delay, failure, rewrite) into the current rules,
             // under the same monitor as every other writer: fields the caller did not change, such as
             // rules an import just wrote, are kept.

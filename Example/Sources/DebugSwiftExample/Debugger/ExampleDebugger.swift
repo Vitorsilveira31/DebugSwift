@@ -57,6 +57,9 @@ enum ExampleDebugger {
                     DebugSwift.Network.shared.disableFailureInjection()
                     DebugSwift.Network.shared.disableResponseBodyRewrite()
                 },
+                .init(title: "Delay Requests by 3 Seconds") {
+                    DebugSwift.Network.shared.enableRequestDelay(3)
+                },
                 .init(title: "Log a Message") {
                     DebugSwiftRuntime.log("Hello from a custom action")
                 }
