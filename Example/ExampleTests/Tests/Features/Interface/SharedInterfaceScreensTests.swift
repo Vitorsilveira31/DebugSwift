@@ -65,6 +65,36 @@ struct SharedInterfaceScreensTests {
         #expect(state.total == 0)
     }
 
+    @Test("Render tracking leaves out the shared panel's own views")
+    func renderTrackingSkipsThePanel() throws {
+        let window = try #require(SharedPanelInterface.appWindow())
+        let tracker = SwiftUIRenderTracker.shared
+        let wasEnabled = tracker.isEnabled
+        let previousStyle = tracker.overlayStyle
+        tracker.isEnabled = true
+        tracker.overlayStyle = .none
+        tracker.clearStats()
+        let container = UIView(frame: window.bounds)
+        container.addSubview(SharedPanelData.makePanelMarker())
+        let panelView = UIView()
+        container.addSubview(panelView)
+        window.addSubview(container)
+        let appView = UIView()
+        window.rootViewController?.view.addSubview(appView)
+        defer {
+            container.removeFromSuperview()
+            appView.removeFromSuperview()
+            tracker.clearStats()
+            tracker.isEnabled = wasEnabled
+            tracker.overlayStyle = previousStyle
+        }
+        tracker.trackRender(for: panelView, viewType: "PanelView")
+        tracker.trackRender(for: appView, viewType: "AppView")
+        let counts = tracker.getRenderStats()["renderCounts"] as? [String: Int] ?? [:]
+        #expect(counts.keys.contains { $0.hasPrefix("AppView_") })
+        #expect(!counts.keys.contains { $0.hasPrefix("PanelView_") })
+    }
+
     @Test("A late render sample spreads its renders over the seconds it covers")
     func renderSampling() {
         let interface = SharedPanelInterface.shared

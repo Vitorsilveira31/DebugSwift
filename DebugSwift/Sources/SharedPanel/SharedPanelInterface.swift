@@ -415,6 +415,20 @@ final class SharedPanelInterface {
         return window.windowLevel < .alert
     }
 
+    /// Whether a view belongs to the debugger rather than the app: it is in one of DebugSwift's
+    /// windows, or inside the container the shared panel occupies in the app's window. The render
+    /// tracker leaves these out, so its statistics measure the app.
+    static func isDebuggerView(_ view: UIView) -> Bool {
+        guard let window = view.window else { return false }
+        if !isAppWindow(window) { return true }
+        for marker in SharedPanelMarkerView.all.allObjects where marker.window === window {
+            var top: UIView = marker
+            while let parent = top.superview, parent !== window { top = parent }
+            if top !== window.rootViewController?.view, view.isDescendant(of: top) { return true }
+        }
+        return false
+    }
+
     /// The app's window in the scene the user is using: the foreground active scene first, so a
     /// background scene's key window is never captured.
     static func appWindow() -> UIWindow? {
@@ -431,9 +445,13 @@ final class SharedPanelInterface {
 
 /// See `SharedPanelData.makePanelMarker()`.
 final class SharedPanelMarkerView: UIView {
+    /// The markers alive now, so the render tracker can find the panel without walking the window.
+    static let all = NSHashTable<SharedPanelMarkerView>.weakObjects()
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
+        Self.all.add(self)
     }
 
     required init?(coder: NSCoder) { nil }
