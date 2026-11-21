@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.rule.GrantPermissionRule
+import android.view.MotionEvent
 import debug.swift.android.AndroidDebugTools
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -248,6 +249,27 @@ class DebugSwiftPanelTest {
             assertTrue("Listed ${listing.optJSONArray("entries")?.length()} entries", listing.getJSONArray("entries").length() == 520)
         } finally {
             folder.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aTouchSeenTwiceIsRecordedOnce() {
+        AndroidDebugTools.clearDocumentation()
+        AndroidDebugTools.setDocumentationRecording(true)
+        try {
+            val now = android.os.SystemClock.uptimeMillis()
+            val down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, 100f, 400f, 0)
+            val up = MotionEvent.obtain(now, now + 80, MotionEvent.ACTION_UP, 100f, 900f, 0)
+            // Two forwarding callbacks pass each event on: once each.
+            listOf(down, down, up, up).forEach { AndroidDebugTools.recordTouch(it) }
+            down.recycle()
+            up.recycle()
+            val gestures = org.json.JSONObject(AndroidDebugTools.documentationState()).getJSONArray("gestures")
+            assertTrue("Recorded ${gestures.length()} gestures: $gestures", gestures.length() == 1)
+            assertTrue("The gesture is the scroll", gestures.getJSONObject(0).getString("kind") == "scroll")
+        } finally {
+            AndroidDebugTools.setDocumentationRecording(false)
+            AndroidDebugTools.clearDocumentation()
         }
     }
 
