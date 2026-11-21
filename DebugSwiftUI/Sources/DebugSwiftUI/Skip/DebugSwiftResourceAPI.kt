@@ -78,7 +78,6 @@ object DebugSwiftResourceAPI {
         if (!directory.isDirectory) return failure("Not a directory: $path")
         directory.listFiles().orEmpty()
             .sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
-            .take(500)
             .forEach { file ->
                 entries.put(
                     JSONObject().put("name", file.name).put("isDirectory", file.isDirectory)

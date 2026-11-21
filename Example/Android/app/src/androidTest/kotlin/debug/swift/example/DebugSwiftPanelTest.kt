@@ -209,6 +209,21 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun aFolderListsAllItsEntries() {
+        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val folder = java.io.File(context.cacheDir, "debugswift-many-${System.nanoTime()}").apply { mkdirs() }
+        try {
+            repeat(520) { java.io.File(folder, "file-$it").createNewFile() }
+            val listing = org.json.JSONObject(
+                debug.swift.android.DebugSwiftResourceAPI.handle("files.list", org.json.JSONObject().put("path", "cache/${folder.name}").toString())
+            )
+            assertTrue("Listed ${listing.optJSONArray("entries")?.length()} entries", listing.getJSONArray("entries").length() == 520)
+        } finally {
+            folder.deleteRecursively()
+        }
+    }
+
+    @Test
     fun clearingTheLogHidesWhatWasLoggedBefore() {
         fun log() = debug.swift.android.DebugSwiftAppAPI.handle("app.logcat", org.json.JSONObject().put("filter", "logclear-").put("level", "V").toString())
         val marker = java.util.UUID.randomUUID().toString().take(8)
