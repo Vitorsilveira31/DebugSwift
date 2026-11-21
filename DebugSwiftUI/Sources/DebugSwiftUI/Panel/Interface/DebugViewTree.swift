@@ -1,6 +1,7 @@
 import Foundation
 
-/// One element of the foreground window: an Android view, or a node of Compose's semantics tree.
+/// One element of the foreground window: an Android view or a node of Compose's semantics tree, or
+/// on iOS a UIKit view or one of SwiftUI's views.
 struct DebugViewNode: Decodable {
     let kind: String
     let name: String
@@ -46,9 +47,11 @@ struct DebugViewTree: Decodable {
         DebugResourceClient.fetch("app.ui.tree", as: DebugViewTree.self)
     }
 
+    /// A length as the platform measures layout: dp on Android (pixels over density), points on iOS.
     func dp(_ pixels: Int) -> String {
         let value = Double(pixels) / max(density, 0.1)
-        return value == value.rounded() ? "\(Int(value)) dp" : String(format: "%.1f dp", value)
+        let unit = DebugPlatform.isAndroid ? "dp" : "pt"
+        return value == value.rounded() ? "\(Int(value)) \(unit)" : String(format: "%.1f \(unit)", value)
     }
 }
 

@@ -314,9 +314,51 @@ struct SharedInterfaceScreensTests {
         #expect(result.colors.allSatisfy { $0.hex.count == 7 && $0.hex.hasPrefix("#") })
     }
 
+    @Test("The view hierarchy lists the app's views with their frames and text, without the panel")
+    func viewHierarchy() throws {
+        let window = try #require(SharedPanelInterface.appWindow())
+        let root = try #require(window.rootViewController?.view)
+        let label = UILabel(frame: CGRect(x: 10, y: 20, width: 120, height: 30))
+        label.text = "tree-probe-text"
+        label.accessibilityIdentifier = "tree-probe"
+        root.addSubview(label)
+        let panel = UIView(frame: window.bounds)
+        panel.addSubview(SharedPanelData.makePanelMarker())
+        let hidden = UILabel()
+        hidden.text = "panel-only-text"
+        panel.addSubview(hidden)
+        window.addSubview(panel)
+        defer {
+            label.removeFromSuperview()
+            panel.removeFromSuperview()
+        }
+
+        let tree = try DebugResourceClient.fetch("app.ui.tree", as: DebugViewTree.self).get()
+        #expect(tree.windowWidth == Int(window.bounds.width))
+        #expect(tree.dp(12) == "12 pt")
+        func all(_ node: DebugViewNode) -> [DebugViewNode] { [node] + node.children.flatMap(all) }
+        let nodes = all(tree.root)
+        let probe = try #require(nodes.first { $0.resourceId == "tree-probe" })
+        #expect(probe.text == "tree-probe-text")
+        #expect(probe.kind == "uikit")
+        let origin = root.convert(CGPoint(x: 10, y: 20), to: window)
+        #expect(probe.left == Int(origin.x.rounded()) && probe.top == Int(origin.y.rounded()))
+        #expect(probe.width == 120 && probe.height == 30)
+        #expect(!nodes.contains { $0.text == "panel-only-text" })
+
+        // A highlight is drawn over the app and goes when cleared.
+        let reply = try DebugResourceClient.fetch("app.ui.highlight", ["rects": "10,20,130,50"], as: DebugActionReply.self).get()
+        #expect(reply.message == nil)
+        #expect(window.subviews.contains { $0.accessibilityIdentifier == "DebugSwiftHighlight" })
+        #expect(!all(try DebugResourceClient.fetch("app.ui.tree", as: DebugViewTree.self).get().root).contains { $0.className == "UIView" && $0.resourceId == "DebugSwiftHighlight" })
+        _ = try DebugResourceClient.fetch("app.ui.clearHighlight", as: DebugActionReply.self).get()
+        #expect(!window.subviews.contains { $0.accessibilityIdentifier == "DebugSwiftHighlight" })
+    }
+
     @Test("The three tools are listed for the shared panel, and the UIKit entry point points there")
     func listing() {
         let ids = DebugSwift.availableInterfaceFeatureIDs()
+        #expect(ids.first == "view_hierarchy")
         #expect(ids.contains("doc_recorder"))
         #expect(ids.contains("color_palette"))
         for id in ["swiftui_render", "doc_recorder", "color_palette"] {
