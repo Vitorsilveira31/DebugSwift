@@ -188,6 +188,24 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun theAgentSnapshotIsWrittenByDebugSwiftCore() {
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        AndroidDebugTools.recordNetwork(
+            method = "GET", url = "https://api.example.test/snapshot-$marker?token=abc", status = 503,
+            durationMs = 9, requestBytes = 0, responseBytes = 0, requestBody = "", responseBody = "", error = "Service down"
+        )
+        val reply = AndroidDebugTools.writeAgentSnapshot()
+        val snapshot = org.json.JSONObject(java.io.File(reply.getString("path")).readText())
+        assertTrue("$snapshot", snapshot.getInt("schemaVersion") == 1 && snapshot.getString("platform") == "android")
+        assertTrue("$snapshot", snapshot.getJSONObject("app").getString("bundleId") == "com.debugswift.example")
+        val requests = snapshot.getJSONArray("network")
+        val request = (0 until requests.length()).map(requests::getJSONObject).last()
+        assertTrue("$request", request.getString("url") == "https://api.example.test/snapshot-$marker?token=%3Credacted%3E")
+        assertTrue("$request", request.getInt("status") == 503 && request.getString("error") == "Service down")
+        assertTrue("$snapshot", snapshot.getJSONObject("agentLog").has("sessionId"))
+    }
+
+    @Test
     fun decryptedBodiesAreMaskedLiveAndInSavedHistory() {
         // A decrypted form body whose key is percent-encoded: `pass%77ord` is `password`.
         val marker = java.util.UUID.randomUUID().toString().take(8)

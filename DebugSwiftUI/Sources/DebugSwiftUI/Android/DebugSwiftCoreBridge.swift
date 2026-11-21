@@ -17,6 +17,8 @@ import SkipFuse
 /// - `har.encode`: `{records: [{method, url, startedAt (ms), durationMs, status, requestHeaders,
 ///   responseHeaders, requestBody, responseBody}]}`; answers `{json}`, a HAR 1.2 log.
 /// - `curl.command`: `{method, url, headers, body}`; a cURL command, credentials masked.
+/// - `agent.snapshot`: `{app, device, metrics, network: [{method, url, status, durationMs, error?}],
+///   agentLog: {path, enabled, sessionId}}`; answers `{json}`, the `agent-snapshot.json` iOS writes.
 /// - `sanitize.record`: `{url, requestHeaders, responseHeaders, requestBody, responseBody,
 ///   decryptedResponseBody}`, headers as `{name: [values]}`; answers the same fields masked.
 enum DebugSwiftCoreBridge {
@@ -49,6 +51,7 @@ enum DebugSwiftCoreBridge {
         case "graphql.label": ["label": GraphQLInspector.operationLabel(from: input["body"] as? String ?? "")]
         case "har.encode": ["json": HAREncoder.encodeJSON(harCaptures(input)) ?? ""]
         case "curl.command": ["command": curlCommand(input)]
+        case "agent.snapshot": ["json": agentSnapshot(input)]
         default: ["error": "Unknown DebugSwiftCore operation: \(operation)."]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: output),
@@ -107,6 +110,34 @@ enum DebugSwiftCoreBridge {
             body: body.isEmpty ? nil : body
         )
         return HAREncoder.curlCommand(for: HARCapture(request: request, response: HARResponse(status: 0, headers: [:])))
+    }
+
+    private static func agentSnapshot(_ input: [String: Any]) -> String {
+        let requests = (input["network"] as? [[String: Any]] ?? []).suffix(AgentSnapshot.defaultRequestLimit).map { request in
+            AgentSnapshot.Request(
+                method: request["method"] as? String ?? "",
+                url: request["url"] as? String ?? "",
+                status: (request["status"] as? NSNumber)?.intValue ?? 0,
+                durationMs: (request["durationMs"] as? NSNumber)?.intValue ?? 0,
+                error: (request["error"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            )
+        }
+        let log = input["agentLog"] as? [String: Any]
+        let snapshot = AgentSnapshot(
+            platform: "android",
+            app: input["app"] as? [String: String] ?? [:],
+            device: input["device"] as? [String: String] ?? [:],
+            metrics: (input["metrics"] as? [String: NSNumber] ?? [:]).mapValues(\.doubleValue),
+            network: Array(requests),
+            agentLog: log.map {
+                AgentSnapshot.AgentLog(
+                    path: $0["path"] as? String ?? "",
+                    enabled: $0["enabled"] as? Bool ?? false,
+                    sessionId: $0["sessionId"] as? String ?? ""
+                )
+            }
+        )
+        return (try? snapshot.jsonData()).flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
 
     private static func urlMatches(_ input: [String: Any]) -> Bool {

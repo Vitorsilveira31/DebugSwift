@@ -2814,7 +2814,7 @@ object AndroidDebugTools {
 
     /**
      * Writes `agent-snapshot.json` next to the agent log: app, device, current resource use and the
-     * latest requests. Same schema as the Swift `AgentSnapshot` (Documentation/AGENT-SNAPSHOT.md).
+     * latest requests, written by DebugSwiftCore's `AgentSnapshot` (Documentation/AGENT-SNAPSHOT.md).
      * Stored records are already sanitized, so their URLs go out as they are.
      */
     fun writeAgentSnapshot(): JSONObject {
@@ -2832,10 +2832,8 @@ object AndroidDebugTools {
                 .apply { if (record.error.isNotEmpty()) put("error", record.error) })
         }
         val logFile = File(context.filesDir, AGENT_LOG_FILENAME)
-        val snapshot = JSONObject()
-            .put("schemaVersion", 1)
-            .put("generatedAt", System.currentTimeMillis())
-            .put("platform", "android")
+        // DebugSwiftCore builds the file, so both platforms write the same `AgentSnapshot`.
+        val input = JSONObject()
             .put("app", JSONObject()
                 .put("bundleId", context.packageName)
                 .put("version", packageInfo?.versionName.orEmpty())
@@ -2852,9 +2850,10 @@ object AndroidDebugTools {
                 .put("path", logFile.absolutePath)
                 .put("enabled", agentLogEnabled)
                 .put("sessionId", agentLogSessionID))
+        val snapshot = JSONObject(DebugSwiftCoreBridge.call("agent.snapshot", input.toString())).optString("json")
         val file = File(context.filesDir, "agent-snapshot.json")
         return runCatching {
-            file.writeText(snapshot.toString(2))
+            file.writeText(snapshot)
             appendAgentEntry(
                 kind = "lifecycle",
                 location = "AgentDebugLog.writeSnapshot",
