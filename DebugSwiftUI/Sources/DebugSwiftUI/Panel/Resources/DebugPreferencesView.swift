@@ -13,6 +13,8 @@ struct DebugPreferencesView: View {
     let includesKeystore: Bool
     @State var stores: [DebugPreferenceStore] = []
     @State var failure = ""
+    /// iOS only: whether changes since a snapshot can be shown.
+    @State var hasChanges = false
 
     var body: some View {
         List {
@@ -41,6 +43,15 @@ struct DebugPreferencesView: View {
                     Text(verbatim: "\(store.name) (\(store.values.count))")
                 }
             }
+            if hasChanges {
+                Section {
+                    NavigationLink {
+                        DebugPreferenceChangesView()
+                    } label: {
+                        Text(verbatim: "Changes since the last snapshot")
+                    }
+                }
+            }
             if includesKeystore {
                 Section {
                     NavigationLink {
@@ -61,6 +72,77 @@ struct DebugPreferencesView: View {
             failure = ""
         case let .failure(error):
             failure = error.message
+        }
+        if case .success = DebugResourceClient.fetch("prefs.diff", as: DebugPreferenceChanges.self) {
+            hasChanges = true
+        }
+    }
+}
+
+struct DebugPreferenceChange: Decodable, Identifiable {
+    let key: String
+    let kind: String
+    let old: String
+    let new: String
+    var id: String { key }
+}
+
+struct DebugPreferenceChanges: Decodable {
+    let changes: [DebugPreferenceChange]
+    /// When the snapshot was taken; none means since the app started.
+    let snapshotAt: String?
+}
+
+/// What changed in the app's preferences since a snapshot, each change with Undo.
+struct DebugPreferenceChangesView: View {
+    @State var listing: DebugPreferenceChanges? = nil
+    @State var status = ""
+
+    var body: some View {
+        List {
+            Section {
+                Text(verbatim: listing?.snapshotAt.map { "Since the snapshot at \($0)" } ?? "Since the app started")
+                    .font(.caption)
+                    .foregroundColor(Color.secondary)
+                Button("Take a new snapshot") {
+                    status = DebugSwiftRuntime.perform(featureID: "preferences", actionID: "snapshot_preferences")
+                    load()
+                }
+                if !status.isEmpty {
+                    Text(verbatim: status).font(.caption)
+                }
+            }
+            Section("Changes") {
+                if listing?.changes.isEmpty ?? true {
+                    Text(verbatim: "No changes.").foregroundColor(Color.secondary)
+                }
+                ForEach(listing?.changes ?? []) { change in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(verbatim: change.key)
+                            Spacer()
+                            Text(verbatim: change.kind).font(.caption).foregroundColor(Color.secondary)
+                        }
+                        Text(verbatim: "\(change.old.isEmpty ? "—" : change.old) → \(change.new.isEmpty ? "—" : change.new)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(Color.secondary)
+                            .lineLimit(3)
+                        Button("Undo") {
+                            status = DebugSwiftRuntime.perform(featureID: "preferences", actionID: "undo_preference_change", value: change.key)
+                            load()
+                        }
+                        .font(.caption)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Changes")
+        .onAppear { load() }
+    }
+
+    func load() {
+        if case let .success(value) = DebugResourceClient.fetch("prefs.diff", as: DebugPreferenceChanges.self) {
+            listing = value
         }
     }
 }
