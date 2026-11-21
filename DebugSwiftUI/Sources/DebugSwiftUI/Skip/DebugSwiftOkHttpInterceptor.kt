@@ -78,9 +78,19 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
             AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", error.message ?: "network error", request.headers.toMultimap())
             throw error
         }
+        // The response's own size, kept apart from the text recorded for it: a body too large to keep
+        // is recorded as a notice, but its size is the response's (Content-Length when known,
+        // otherwise at least the limit, which the notice states).
+        var originalBytes = 0L
         val originalText = runCatching {
             val bytes = response.peekBody(INSPECTED_BODY_LIMIT + 1).bytes()
-            if (bytes.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(null) else String(bytes, Charsets.UTF_8)
+            if (bytes.size > INSPECTED_BODY_LIMIT) {
+                originalBytes = response.body?.contentLength()?.takeIf { it >= 0 } ?: (INSPECTED_BODY_LIMIT + 1)
+                tooLargeToKeep(null)
+            } else {
+                originalBytes = bytes.size.toLong()
+                String(bytes, Charsets.UTF_8)
+            }
         }.getOrDefault("")
         val rewrittenText = rewriteRule?.responseBody ?: originalText
         val finalResponse = if (rewriteRule != null) {
@@ -96,7 +106,7 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
             finalResponse.code,
             SystemClock.elapsedRealtime() - start,
             requestBytes,
-            rewrittenText.toByteArray().size.toLong(),
+            if (rewriteRule != null) rewrittenText.toByteArray().size.toLong() else originalBytes,
             requestBody,
             rewrittenText,
             requestHeaders = request.headers.toMultimap(),
