@@ -10,12 +10,17 @@ import UIKit
 
 @MainActor
 enum FeatureHandling {
+    /// Whether the host (or the shared panel) ran a setup, so later code doesn't redo it and
+    /// replace the host's hidden features and disabled methods.
+    nonisolated(unsafe) static var isSetUp = false
+
     static var enabledBetaFeatures: [DebugSwiftBetaFeature] = []
     static var hiddenFeatures: [DebugSwiftFeature] = []
 
     static func setup(
         only featuresToShow: [DebugSwiftFeature] = DebugSwiftFeature.allCases
     ) {
+        isSetUp = true
         hiddenFeatures = DebugSwiftFeature.allCases.filter { !featuresToShow.contains($0) }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
@@ -31,6 +36,7 @@ enum FeatureHandling {
         disable methods: [DebugSwiftSwizzleFeature],
         enableBeta betaFeatures: [DebugSwiftBetaFeature] = []
     ) {
+        isSetUp = true
         setupBetaFeatures(betaFeatures)
         setupMethods(methods)
         hiddenFeatures = features
