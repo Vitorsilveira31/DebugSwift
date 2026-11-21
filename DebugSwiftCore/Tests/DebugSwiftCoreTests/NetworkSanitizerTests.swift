@@ -154,4 +154,18 @@ struct NetworkSanitizerTests {
         )
         #expect(sanitizer.sanitize(record).decryptedResponseBody == "access_token=<redacted>&scope=read")
     }
+
+    @Test func anEmptyValueDoesNotHideTheNextLinesSecret() {
+        #expect(sanitizer.sanitize(unformattedText: "note:\npassword: hunter2") == "note:\npassword: <redacted>")
+    }
+
+    @Test func theCustomRedactorRunsOnUnformattedText() {
+        var custom = NetworkSanitizer.default
+        custom.customBodyRedactor = { body, _ in
+            Data((String(data: body, encoding: .utf8) ?? "").replacingOccurrences(of: "4111", with: "####").utf8)
+        }
+        #expect(custom.sanitize(unformattedText: "card 4111") == "card ####")
+        custom.customBodyRedactor = { _, _ in Data([0xff, 0xfe]) }
+        #expect(custom.sanitize(unformattedText: "card 4111") == "<redacted>")
+    }
 }

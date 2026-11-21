@@ -23,6 +23,11 @@ enum DebugSwiftCoreBridge {
         set { lock.withLock { sanitizer = newValue } }
     }
 
+    /// Changes the rules under one lock, so two updates of different fields both stay.
+    private static func updateSanitizer(_ change: (inout NetworkSanitizer) -> Void) {
+        lock.withLock { change(&sanitizer) }
+    }
+
     static func handle(_ operation: String, _ arguments: String) -> String {
         let input = (try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any] ?? [:]
         let output: [String: Any] = switch operation {
@@ -41,12 +46,16 @@ enum DebugSwiftCoreBridge {
     }
 
     private static func configure(_ input: [String: Any]) -> [String: Any] {
-        var updated = networkSanitizer
-        if let headers = input["headers"] as? [String] { updated.headers = Set(headers) }
-        if let query = input["queryParameters"] as? [String] { updated.queryParameters = Set(query) }
-        if let keys = input["bodyKeys"] as? [String] { updated.bodyKeys = Set(keys) }
-        if let password = input["redactsURLPassword"] as? Bool { updated.redactsURLPassword = password }
-        networkSanitizer = updated
+        let headers = input["headers"] as? [String]
+        let query = input["queryParameters"] as? [String]
+        let keys = input["bodyKeys"] as? [String]
+        let password = input["redactsURLPassword"] as? Bool
+        updateSanitizer { sanitizer in
+            if let headers { sanitizer.headers = Set(headers) }
+            if let query { sanitizer.queryParameters = Set(query) }
+            if let keys { sanitizer.bodyKeys = Set(keys) }
+            if let password { sanitizer.redactsURLPassword = password }
+        }
         return [:]
     }
 
@@ -59,7 +68,8 @@ enum DebugSwiftCoreBridge {
             guard !text.isEmpty else { return text }
             let type = headers.first { $0.key.lowercased() == "content-type" }?.value.first
             let masked = sanitizer.sanitize(body: Data(text.utf8), contentType: type)
-            return String(data: masked, encoding: .utf8) ?? text
+            // A custom redactor may return bytes that aren't UTF-8: never fall back to the original.
+            return String(data: masked, encoding: .utf8) ?? NetworkSanitizer.redactedValue
         }
         return [
             "url": sanitizer.sanitize(url: input["url"] as? String ?? ""),

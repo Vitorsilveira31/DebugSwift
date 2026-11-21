@@ -38,6 +38,21 @@ object DebugSwiftNetworkSanitizer {
         DebugSwiftCoreBridge.call("sanitizer.configure", config.toString())
     }
 
+    /** Same as [configure], from `{"headers":[...],"queryParameters":[...],"bodyKeys":[...],"redactsURLPassword":true}`. */
+    @JvmStatic
+    fun configureJSON(json: String) {
+        val config = runCatching { JSONObject(json) }.getOrNull() ?: return
+        fun list(key: String): List<String>? = config.optJSONArray(key)?.let { array ->
+            (0 until array.length()).map { array.optString(it) }
+        }
+        configure(
+            headers = list("headers"),
+            queryParameters = list("queryParameters"),
+            bodyKeys = list("bodyKeys"),
+            redactsURLPassword = if (config.has("redactsURLPassword")) config.optBoolean("redactsURLPassword") else null
+        )
+    }
+
     /** The parts of a captured request, masked. */
     data class Masked(
         val url: String,

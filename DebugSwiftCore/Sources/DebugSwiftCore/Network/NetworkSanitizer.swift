@@ -133,7 +133,12 @@ public struct NetworkSanitizer: Sendable {
     /// otherwise every `key=value` or `key: value` pair whose key is a masked one. Quoted values may
     /// hold escaped quotes, so the whole quoted value is masked.
     public func sanitize(unformattedText text: String) -> String {
-        guard !normalizedBodyKeys.isEmpty, !text.isEmpty else { return text }
+        guard !text.isEmpty else { return text }
+        return applyingCustomRedactor(to: maskingKeys(inUnformattedText: text))
+    }
+
+    private func maskingKeys(inUnformattedText text: String) -> String {
+        guard !normalizedBodyKeys.isEmpty else { return text }
         if let json = sanitizeJSON(Data(text.utf8)), let result = String(data: json, encoding: .utf8) {
             return result
         }
@@ -157,8 +162,17 @@ public struct NetworkSanitizer: Sendable {
         return result + source.substring(from: cursor)
     }
 
+    /// The host's redactor over text whose type is unknown; output that isn't UTF-8 becomes the
+    /// placeholder rather than the unmasked text.
+    private func applyingCustomRedactor(to text: String) -> String {
+        guard let customBodyRedactor else { return text }
+        return String(data: customBodyRedactor(Data(text.utf8), nil), encoding: .utf8) ?? Self.redactedValue
+    }
+
     private static let keyValuePattern = try! NSRegularExpression(
-        pattern: #"(^|[\s&;,{"'])([A-Za-z0-9_.%+-]+)(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,}]+)"#
+        // Spaces and tabs only around `:` or `=`: an empty value at a line's end must not take the
+        // next line's key as its value and leave that key's value unmasked.
+        pattern: #"(^|[\s&;,{"'])([A-Za-z0-9_.%+-]+)(["']?[ \t]*[:=][ \t]*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,}]+)"#
     )
 
     // MARK: - Records
@@ -221,7 +235,8 @@ public struct NetworkSanitizer: Sendable {
 
     private func sanitize(text: String, contentType: String?) -> String {
         let sanitized = sanitize(body: Data(text.utf8), contentType: contentType)
-        return String(data: sanitized, encoding: .utf8) ?? text
+        // A custom redactor may return bytes that aren't UTF-8: never fall back to the original.
+        return String(data: sanitized, encoding: .utf8) ?? Self.redactedValue
     }
 
     private static func contentType(in headers: [String: String]) -> String? {
