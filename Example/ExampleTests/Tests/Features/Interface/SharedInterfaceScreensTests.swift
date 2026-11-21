@@ -93,7 +93,9 @@ struct SharedInterfaceScreensTests {
         let window = try #require(SharedPanelInterface.appWindow())
         #expect(CGFloat(image.width) == window.bounds.width * window.screen.scale)
 
+        let saved = state.screenshot
         _ = DebugPerformanceDetail.act("app.doc.clear")
+        #expect(!FileManager.default.fileExists(atPath: saved))
         state = try DebugResourceClient.fetch("app.doc.state", as: DebugDocState.self).get()
         #expect(state.gestures.isEmpty)
         #expect(state.screenshot.isEmpty)

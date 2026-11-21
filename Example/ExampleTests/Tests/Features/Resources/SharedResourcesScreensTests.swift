@@ -152,6 +152,26 @@ struct SharedResourcesScreensTests {
         #expect(UserDefaults.standard.object(forKey: key) == nil)
     }
 
+    @Test("Saving an existing key keeps its spaces, and a folder lists all its entries")
+    func exactKeysAndLongFolders() throws {
+        let key = "shared-prefs-spaced-\(UUID().uuidString.prefix(8)) "
+        let trimmed = key.trimmingCharacters(in: .whitespaces)
+        UserDefaults.standard.set("old", forKey: key)
+        defer { [key, trimmed].forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+        DebugPreferenceEditView(store: "Standard", key: key, type: "String", value: "new").save()
+        #expect(UserDefaults.standard.string(forKey: key) == "new")
+        #expect(UserDefaults.standard.object(forKey: trimmed) == nil)
+
+        let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("tmp/shared-many-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for index in 0..<520 {
+            FileManager.default.createFile(atPath: folder.appendingPathComponent("file-\(index)").path, contents: Data())
+        }
+        let listing = try DebugResourceClient.fetch("files.list", ["path": "tmp/\(folder.lastPathComponent)"], as: DebugFileListing.self).get()
+        #expect(listing.entries.count == 520)
+    }
+
     @Test("A number stored as 0 or 1 stays a number, and a Boolean stays a Boolean")
     func preferenceNumberTypes() throws {
         let number = "shared-prefs-number-\(UUID().uuidString.prefix(8))"
@@ -200,6 +220,13 @@ struct SharedResourcesScreensTests {
         listing = try DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self).get()
         #expect(!listing.aliases.contains { $0.alias == key })
         #expect(DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "|k=v") == "Enter a key and a value.")
+    }
+
+    @Test("Keychain rows have distinct IDs even when services and keys hold \"|\"")
+    func keychainIDs() throws {
+        let json = #"{"aliases": [{"alias": "c", "service": "a|b"}, {"alias": "b|c", "service": "a"}]}"#
+        let listing = try JSONDecoder().decode(DebugKeystoreListing.self, from: Data(json.utf8))
+        #expect(Set(listing.aliases.map(\.id)).count == 2)
     }
 
     @Test("A keychain value that isn't text is listed without a value, and opens read-only")

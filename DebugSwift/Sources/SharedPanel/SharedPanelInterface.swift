@@ -38,6 +38,8 @@ final class SharedPanelInterface {
             return ["message": captureDocumentation()]
         case "app.doc.clear":
             gestures.removeAll()
+            // The screenshot is ours: remove it, or Clear would leave it in tmp for good.
+            if !screenshotPath.isEmpty { try? FileManager.default.removeItem(atPath: screenshotPath) }
             screenshotPath = ""
             captureMessage = ""
             return [:]
