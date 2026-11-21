@@ -274,23 +274,29 @@ struct SharedAppScreensTests {
 
         // The composer's optional fields and payload reach the notification.
         let composedTitle = "Composed-\(UUID().uuidString.prefix(8))"
-        _ = DebugPush.act("notify", "\(composedTitle)|With payload|0|Sub|5|default|orders|order=42, kind=test")
+        _ = DebugPush.act("notify", "\(composedTitle)|With payload|0|Sub|5|default|orders|order=42, kind=test, token=")
         var composed: SimulatedNotification?
         for _ in 0..<50 where composed == nil {
             try await Task.sleep(nanoseconds: 20_000_000)
             composed = push.history.first { $0.title == composedTitle }
         }
-        #expect(composed?.userInfo == ["order": "42", "kind": "test"])
+        #expect(composed?.userInfo == ["order": "42", "kind": "test", "token": ""])
         #expect(composed?.subtitle == "Sub")
         #expect(composed?.badge == 5)
         #expect(composed?.category == "orders")
         #expect(DebugPush.act("notify", "Bad|Payload|0||||| novalue").contains("key=value"))
         #expect(DebugPush.act("notify", "Bad|Delay|inf").contains("Delay must be"))
+        #expect(DebugPush.act("notify", "Bad|Key|0|||||=order=42").contains("key=value"))
         let anyTemplate = try #require(push.templates.first)
         #expect(DebugPush.act("simulate_template", "\(anyTemplate.id)|1e20").contains("Delay must be"))
         #expect(DebugPush.setOption("interactionDelay", "1e400").contains("from 0 to"))
         #expect(DebugPush.setOption("interactionDelay", "1e20").contains("from 0 to"))
         _ = try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get()
+
+        // With simulation off, sending says so instead of claiming it was sent.
+        _ = DebugPush.act("toggle")
+        #expect(DebugPush.act("notify", "Off|Message").contains("Enable push notification simulation"))
+        _ = DebugPush.act("toggle")
 
         // Sending a notification again keeps its subtitle, badge and payload.
         let resendTitle = "Resend-\(UUID().uuidString.prefix(8))"

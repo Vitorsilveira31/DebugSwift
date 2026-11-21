@@ -17,6 +17,7 @@ final class SharedPanelApp {
     static let shared = SharedPanelApp()
 
     private static let logLimit = 500
+    private static let simulationOff = "Enable push notification simulation before sending a notification."
     /// The longest delay a simulated notification accepts: a day, as on Android.
     private static let maxDelay: TimeInterval = 86_400
     private let deepLinks = DeepLinkViewModel()
@@ -510,6 +511,7 @@ final class SharedPanelApp {
             return push.isEnabled ? "Push simulation on." : "Push simulation off."
         case "notify":
             // title|message|delay|subtitle|badge|sound|category|key=value,key=value, as on Android.
+            guard simulator.isEnabled else { return Self.simulationOff }
             guard parts.count >= 2, !parts[0].isEmpty else { return "Enter a title and a message." }
             let delayText = parts[safe: 2] ?? ""
             guard let delay = delayText.isEmpty ? 0 : TimeInterval(delayText), delay.isFinite, (0...Self.maxDelay).contains(delay) else {
@@ -534,6 +536,7 @@ final class SharedPanelApp {
             Task { await simulator.simulateNotification(notification) }
             return "Notification sent: \(parts[0])."
         case "simulate_template":
+            guard simulator.isEnabled else { return Self.simulationOff }
             // Named by its ID (names can repeat), or by its name from older callers.
             let reference = parts.first ?? ""
             guard let template = push.templates.first(where: { $0.id == reference }) ?? push.templates.first(where: { $0.name == reference }) else {
@@ -596,6 +599,7 @@ final class SharedPanelApp {
             return "Removed the notification."
         case "resend_notification":
             guard let record = push.history.first(where: { $0.id == value }) else { return "No simulated notification with ID '\(value)'." }
+            guard simulator.isEnabled else { return Self.simulationOff }
             // The same content and payload under a new identity, delivered now.
             let copy = SimulatedNotification(
                 title: record.title,
@@ -648,7 +652,8 @@ final class SharedPanelApp {
     private static func payload(_ text: String) -> [String: String]? {
         var values: [String: String] = [:]
         for pair in text.split(separator: ",") {
-            let parts = pair.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            // Empty pieces kept: "token=" is an empty value, and "=order=42" has no key.
+            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
             guard parts.count == 2, !parts[0].isEmpty else { return nil }
             values[parts[0]] = parts[1]
         }
