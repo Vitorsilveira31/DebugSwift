@@ -74,7 +74,10 @@ final class SharedPanelResources {
             }
             switch Self.sqliteSnapshot(of: path) {
             case let .success(url):
-                FileSharingManager.share(url)
+                // The copy is removed once the share sheet closes, shared or not.
+                FileSharingManager.share(url) {
+                    try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+                }
                 return "Sharing \(value)."
             case let .failure(message):
                 return message.text
@@ -302,11 +305,10 @@ final class SharedPanelResources {
         return [
             "editable": true,
             "aliases": items.sorted { ($0.service, $0.key) < ($1.service, $1.key) }.map { item -> [String: Any] in
-                [
-                    "alias": item.key,
-                    "service": item.service,
-                    "value": Keychain(service: item.service)[string: item.key] ?? ""
-                ]
+                var entry: [String: Any] = ["alias": item.key, "service": item.service]
+                // A value that isn't text is left out, so the editor can't save it back as a blank.
+                if let value = Keychain(service: item.service)[string: item.key] { entry["value"] = value }
+                return entry
             }
         ]
     }
