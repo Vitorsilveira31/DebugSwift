@@ -73,6 +73,9 @@ struct DebugLogcatView: View {
             failure = value.entries.isEmpty ? (DebugPlatform.isAndroid ? "No matching Logcat records." : "No matching log entries.") : ""
         case let .failure(error):
             failure = error.message
+            // iOS reads in the background and may be retrying: keep asking, so a read that
+            // recovers replaces the error without a tap.
+            live = !DebugPlatform.isAndroid
         }
     }
 }
