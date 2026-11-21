@@ -59,6 +59,29 @@ struct SharedAppScreensTests {
         #expect(!seen.contains("logclear-before"))
     }
 
+    @Test("Switching the Apple subsystems filter right after a read still reads the log")
+    func logFilterSwitch() async throws {
+        func listing(apple: Bool) throws -> DebugLogListing {
+            try DebugResourceClient.fetch("app.logcat", ["filter": "", "level": "V", "apple": apple ? "true" : "false"], as: DebugLogListing.self).get()
+        }
+        DebugSwiftLogProbe.logError("filter-switch-probe")
+        var current = try listing(apple: false)
+        for _ in 0..<50 where current.pending == true {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            current = try listing(apple: false)
+        }
+        // Right after that read ends, inside the read throttle: the screen only asks again while
+        // a read is pending, so the answer must start one (or already have entries).
+        current = try listing(apple: true)
+        #expect(current.pending == true || !current.entries.isEmpty)
+        // Back to the app's own entries before the next test.
+        current = try listing(apple: false)
+        for _ in 0..<100 where current.pending == true {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            current = try listing(apple: false)
+        }
+    }
+
     @Test("A link no app can open reports the failure")
     func deepLinkFailure() throws {
         let reply = try DebugResourceClient.fetch("app.deeplink.open", ["uri": "debugswift-no-handler-scheme://x"], as: DebugActionReply.self).get()
