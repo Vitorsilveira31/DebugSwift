@@ -5196,12 +5196,17 @@ object AndroidDebugTools {
                 .put("version", networkInjectionVersion.get())
                 .put("settings", JSONObject(networkInjectionSettingsJSON()))
                 .toString()
-            // Puts the given sections (delay, failure, rewrite) over the current rules, under the same
-            // monitor as every other writer, so changes to other sections are kept.
+            // Writes the given fields of each section (delay, failure, rewrite) into the current rules,
+            // under the same monitor as every other writer: fields the caller did not change, such as
+            // rules an import just wrote, are kept.
             "network.injection.patch" -> synchronized(this) {
                 val current = JSONObject(networkInjectionSettingsJSON())
                 val sections = args.optJSONObject("sections") ?: JSONObject()
-                sections.keys().forEach { key -> current.put(key, sections.get(key)) }
+                sections.keys().forEach { name ->
+                    val fields = sections.optJSONObject(name) ?: return@forEach
+                    val section = current.optJSONObject(name) ?: JSONObject().also { current.put(name, it) }
+                    fields.keys().forEach { field -> section.put(field, fields.get(field)) }
+                }
                 val message = applyNetworkInjectionSettingsJSON(current.toString())
                 if (message == "Network injection settings applied.") ok(message) else fail(message)
             }

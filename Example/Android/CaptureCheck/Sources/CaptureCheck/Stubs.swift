@@ -5,6 +5,16 @@ import FoundationNetworking
 // The few DebugSwiftUI pieces the capture refers to, without the rest of the module.
 public enum DebugSwiftRuntime {}
 
+extension DebugSwiftRuntime {
+    static func networkInjectionSettingsJSON() -> String { "{}" }
+    static func applyNetworkInjectionSettingsJSON(_ json: String) -> String { "" }
+}
+
+/// What DebugSwiftPresentation uses of the floating button.
+public enum DebugFloatingButton {
+    @MainActor public static var onTap: (@MainActor () -> Void)?
+}
+
 public protocol CustomHTTPProtocolDelegate: AnyObject {
     func urlSession(_ protocol: URLProtocol, didReceive response: URLResponse)
     func urlSession(_ protocol: URLProtocol, didReceive data: Data)

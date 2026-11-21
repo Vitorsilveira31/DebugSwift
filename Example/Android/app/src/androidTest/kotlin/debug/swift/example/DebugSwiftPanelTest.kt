@@ -252,6 +252,36 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun injectionChangesKeepRulesWrittenMeanwhile() {
+        fun rules(pattern: String) = org.json.JSONObject()
+            .put("delay", org.json.JSONObject().put("isEnabled", false))
+            .put("failure", org.json.JSONObject().put("isEnabled", false))
+            .put("rewrite", org.json.JSONObject().put("isEnabled", true).put("rules", org.json.JSONArray().put(
+                org.json.JSONObject().put("id", pattern).put("urlPattern", pattern).put("responseBody", "{}")
+                    .put("responseStatusCode", org.json.JSONObject.NULL).put("httpMethod", org.json.JSONObject.NULL)
+                    .put("isEnabled", true).put("matchType", "wildcard"))))
+            .toString()
+        val original = AndroidDebugTools.networkInjectionSettingsJSON()
+        try {
+            // Swift read rules A, an import then replaced them with rules B, and Swift's
+            // disableResponseBodyRewrite() arrives with only the field it changed.
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(rules("https://a.test/*"))
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(rules("https://b.test/*"))
+            val patched = AndroidDebugTools.hostAPI("network.injection.patch", org.json.JSONObject()
+                .put("sections", org.json.JSONObject().put("rewrite", org.json.JSONObject().put("isEnabled", false))).toString())
+            assertTrue("The patch failed: $patched", org.json.JSONObject(patched).optBoolean("ok"))
+
+            val rewrite = org.json.JSONObject(AndroidDebugTools.networkInjectionSettingsJSON()).getJSONObject("rewrite")
+            assertTrue("The rewrite is still on", !rewrite.getBoolean("isEnabled"))
+            val patterns = rewrite.getJSONArray("rules").toString()
+            assertTrue("The imported rules were lost: $patterns", patterns.contains("b.test"))
+            assertTrue("The older rules came back: $patterns", !patterns.contains("a.test"))
+        } finally {
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(original)
+        }
+    }
+
+    @Test
     fun crashReportsShowAnUncaughtException() {
         // Reports from earlier runs are restored at launch, so this run's probe carries its own marker.
         val marker = java.util.UUID.randomUUID().toString().take(8)

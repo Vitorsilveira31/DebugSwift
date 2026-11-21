@@ -258,5 +258,42 @@ HostProtocol.chunkDelay = 0
 check("cancel during a forwarded load", cancelling.events == ["response", "cancelled"] && !forwardedLog.events.contains("data") && !forwardedLog.events.contains("finish"),
       "app delegate \(cancelling.events), DebugSwift delegate \(forwardedLog.events)")
 
+// 8. A presenter hand-off keeps the panel open on the same feature, as SwiftUI drives it: the
+//    newer presenter attaches, the older sheet's binding reports false, then its onDismiss runs.
+let presentation = DebugSwiftPresentation()
+let first = UUID()
+let second = UUID()
+presentation.attach(first)
+presentation.present(route: "measurement")
+let firstShowed = presentation.isShowing(for: first)
+presentation.attach(second)
+presentation.setShowing(false, for: first)
+presentation.sheetDidDismiss(for: first)
+check("presenter hand-off keeps the measurement tool",
+      firstShowed && presentation.isShowing(for: second) && presentation.isPresented && presentation.route == "measurement",
+      "presented \(presentation.isPresented), route \(presentation.route ?? "nil"), second showing \(presentation.isShowing(for: second))")
+presentation.setShowing(false, for: second)
+presentation.sheetDidDismiss(for: second)
+check("closing the panel clears the route", !presentation.isPresented && presentation.route == nil,
+      "presented \(presentation.isPresented), route \(presentation.route ?? "nil")")
+
+// 9. An injection change sends only the fields it changed, so rules another writer set stay.
+var rewriting = DebugSwiftNetworkInjection()
+rewriting.rewrite.isEnabled = true
+rewriting.rewrite.rules = [.init(urlPattern: "https://a.test/*", responseBody: "A")]
+var disabled = rewriting
+disabled.rewrite.isEnabled = false
+let disabling = disabled.changedSections(from: rewriting)
+check("disabling a rewrite sends only isEnabled",
+      Set(disabling.keys) == ["rewrite"] && Set(disabling["rewrite"]?.keys ?? [:].keys) == ["isEnabled"] && disabling["rewrite"]?["isEnabled"] as? Bool == false,
+      "\(disabling)")
+var delayed = rewriting
+delayed.delay.isEnabled = true
+delayed.delay.fixedDelay = 2
+let delaying = delayed.changedSections(from: rewriting)
+check("enabling a delay sends only its delay fields",
+      Set(delaying.keys) == ["delay"] && Set(delaying["delay"]?.keys ?? [:].keys) == ["isEnabled", "fixedDelay"],
+      "\(delaying)")
+
 print(failures.isEmpty ? "ALL PASSED" : "FAILED: \(failures.joined(separator: ", "))")
 exit(failures.isEmpty ? 0 : 1)

@@ -108,14 +108,13 @@ struct DebugSwiftPanelPresenter: ViewModifier {
         #if os(Android)
         content
             // Only the newest presenter on screen shows the sheet, so two never present at once.
+            // The rules for a hand-off between presenters live in DebugSwiftPresentation, where
+            // Example/Android/CaptureCheck exercises them.
             .sheet(isPresented: Binding(
-                get: { presentation.isPresented && presentation.activePresenter == id },
-                set: { if !$0 { presentation.isPresented = false } }
+                get: { presentation.isShowing(for: id) },
+                set: { presentation.setShowing($0, for: id) }
             ), onDismiss: {
-                // A sheet also closes when a newer presenter takes the panel over: the route (say,
-                // the measurement tool) then belongs to that presenter and stays. Only a real
-                // closing of the panel clears it.
-                if !presentation.isPresented { presentation.route = nil }
+                presentation.sheetDidDismiss(for: id)
             }) {
                 DebugSwiftRuntime.panel { presentation.dismiss() }
             }

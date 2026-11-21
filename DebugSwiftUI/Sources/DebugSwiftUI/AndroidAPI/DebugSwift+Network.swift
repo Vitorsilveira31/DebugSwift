@@ -438,10 +438,10 @@ extension DebugSwift {
         private static let injectionLock = NSLock()
 
         /// Changes the rules and applies the change before returning, so a request started right
-        /// after the call already sees it. Only the sections the change touched (delay, failure,
-        /// rewrite) are sent, and the runtime puts them over its current rules under the lock its
-        /// other writers use, so an import or a panel edit to another section is kept and nothing
-        /// needs retrying.
+        /// after the call already sees it. Only the fields the change touched are sent (for
+        /// `disableResponseBodyRewrite()`, just `rewrite.isEnabled`), and the runtime writes them
+        /// into its current rules under the lock its other writers use. So rules an import or the
+        /// panel wrote in the meantime are kept, and nothing needs retrying.
         private static func updateInjection(_ change: (inout DebugSwiftNetworkInjection) -> Void) {
             injectionLock.lock()
             defer { injectionLock.unlock() }
@@ -451,16 +451,7 @@ extension DebugSwift {
                   let before = try? JSONDecoder().decode(DebugSwiftNetworkInjection.self, from: data) else { return }
             var after = before
             change(&after)
-            var sections: [String: Any] = [:]
-            func add<Section: Encodable & Equatable>(_ name: String, _ old: Section, _ new: Section) {
-                guard old != new,
-                      let encoded = try? JSONEncoder().encode(new),
-                      let object = try? JSONSerialization.jsonObject(with: encoded) else { return }
-                sections[name] = object
-            }
-            add("delay", before.delay, after.delay)
-            add("failure", before.failure, after.failure)
-            add("rewrite", before.rewrite, after.rewrite)
+            let sections = after.changedSections(from: before)
             guard !sections.isEmpty else { return }
             DebugSwiftHost.call("network.injection.patch", ["sections": sections])
         }

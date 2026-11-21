@@ -9,11 +9,16 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
 cd "$here"
 
-# Always the code in this checkout: DebugSwiftCore, and the capture with its Android guard lifted.
-rm -rf Sources/DebugSwiftCore Sources/CaptureCheck/Capture.swift
+# Always the code in this checkout: DebugSwiftCore, and the DebugSwiftUI files under test with
+# their Android guards lifted.
+ui="$repo/DebugSwiftUI/Sources/DebugSwiftUI"
+rm -rf Sources/DebugSwiftCore Sources/CaptureCheck/Copied
+mkdir -p Sources/CaptureCheck/Copied
 cp -R "$repo/DebugSwiftCore/Sources/DebugSwiftCore" Sources/DebugSwiftCore
-sed 's/^#if os(Android)$/#if true/' "$repo/DebugSwiftUI/Sources/DebugSwiftUI/Network/DebugSwiftURLSessionCapture.swift" \
-    > Sources/CaptureCheck/Capture.swift
+for file in Network/DebugSwiftURLSessionCapture.swift Network/DebugSwiftNetworkInjection.swift \
+    Network/DebugSwiftNetworkInjectionPatch.swift AndroidAPI/DebugSwiftPresentation.swift; do
+    sed 's/^#if os(Android)$/#if true/' "$ui/$file" > "Sources/CaptureCheck/Copied/$(basename "$file")"
+done
 
 swift build --swift-sdk aarch64-unknown-linux-android28 -c debug
 binary=$(find .build -type f -name CaptureCheck -perm -u+x -path '*android*' | head -1)

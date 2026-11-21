@@ -1,5 +1,5 @@
 # Copied in by run.sh from the rest of the repository.
 /Sources/DebugSwiftCore/
-/Sources/CaptureCheck/Capture.swift
+/Sources/CaptureCheck/Copied/
 /.build/
 /.last-run.txt

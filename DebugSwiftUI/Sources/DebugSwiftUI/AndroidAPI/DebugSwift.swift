@@ -90,60 +90,6 @@ public enum DebugSwiftBetaFeature: String, CaseIterable {
     case agentDebugLog
 }
 
-/// Whether the shared panel is on screen. `DebugSwift.App.presentDebugger()`, the floating button
-/// and `.debugSwiftPanel()` on the host's root view read and change it.
-@MainActor
-@Observable
-final class DebugSwiftPresentation {
-    static let shared = DebugSwiftPresentation()
-    var isPresented = false
-    /// A feature the panel opens directly, for example `measurement`.
-    var route: String?
-    /// The `.debugSwiftPanel()` presenters on screen, oldest first. The newest one presents the panel.
-    private var presenters: [UUID] = []
-    /// The host's own floating-button handler, put back when the last presenter leaves the screen.
-    private var hostTap: (@MainActor () -> Void)?
-
-    var isAttached: Bool { !presenters.isEmpty }
-
-    /// The presenter that shows the panel: the newest one on screen.
-    var activePresenter: UUID? { presenters.last }
-
-    /// Called by a `.debugSwiftPanel()` presenter when it appears: the floating button opens the
-    /// panel through the presenters from now on.
-    func attach(_ id: UUID) {
-        if presenters.isEmpty { hostTap = DebugFloatingButton.onTap }
-        presenters.removeAll { $0 == id }
-        presenters.append(id)
-        DebugFloatingButton.onTap = { DebugSwiftPresentation.shared.present(route: nil) }
-    }
-
-    /// Called when a presenter disappears. Others still on screen keep presenting; when the last
-    /// one leaves, the handler the host had before comes back, so `present` never calls itself.
-    func detach(_ id: UUID) {
-        guard presenters.contains(id) else { return }
-        presenters.removeAll { $0 == id }
-        guard presenters.isEmpty else { return }
-        DebugFloatingButton.onTap = hostTap
-        hostTap = nil
-    }
-
-    func present(route: String?) {
-        self.route = route
-        if isAttached {
-            isPresented = true
-        } else if let hostTap = DebugFloatingButton.onTap {
-            // No presenter on screen: the host shows the panel itself (`DebugFloatingButton.onTap`).
-            hostTap()
-        }
-    }
-
-    func dismiss() {
-        isPresented = false
-        route = nil
-    }
-}
-
 public class DebugSwift {
     public init() {}
 
