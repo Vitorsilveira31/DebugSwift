@@ -152,23 +152,34 @@ struct SharedResourcesScreensTests {
         #expect(UserDefaults.standard.integer(forKey: number) == 2)
     }
 
-    @Test("Keychain items list with their values, and can be added, edited and deleted")
+    @Test("Keychain items list with their values, and can be added, edited and deleted, whatever their text")
     func keychain() throws {
-        let key = "shared-keychain-\(UUID().uuidString.prefix(8))"
-        defer { _ = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: "|\(key)") }
-        #expect(DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "|\(key)=first") == "Saved \(key).")
+        // "=" in the key and "|" in the service used to be read as separators.
+        let key = "shared-keychain-\(UUID().uuidString.prefix(8))=backup"
+        let service = "debugswift|tests"
+        func act(_ actionID: String, _ value: String?) -> String {
+            DebugSwiftRuntime.perform(
+                featureID: "keychain", actionID: actionID,
+                value: DebugKeychainEditView.payload(service: service, key: key, value: value)
+            )
+        }
+        defer { _ = act("delete_keychain_item", nil) }
+        #expect(act("set_keychain_item", "first=one") == "Saved \(key).")
         var listing = try DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self).get()
         #expect(listing.editable == true)
         let item = try #require(listing.aliases.first { $0.alias == key })
-        #expect(item.value == "first")
+        #expect(item.service == service)
+        #expect(item.value == "first=one")
 
-        _ = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "\(item.service ?? "")|\(key)=second")
+        _ = act("set_keychain_item", "second")
         listing = try DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self).get()
         #expect(listing.aliases.first { $0.alias == key }?.value == "second")
+        #expect(!listing.aliases.contains { $0.alias == String(key.prefix { $0 != "=" }) })
 
-        _ = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: "\(item.service ?? "")|\(key)")
+        _ = act("delete_keychain_item", nil)
         listing = try DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self).get()
         #expect(!listing.aliases.contains { $0.alias == key })
+        #expect(DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "|k=v") == "Enter a key and a value.")
     }
 
     @Test("A SQLite database lists its tables and rows, pages, and runs SQL")
@@ -198,6 +209,76 @@ struct SharedResourcesScreensTests {
         let select = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT body FROM notes ORDER BY id"], as: DebugTableData.self).get()
         #expect(select.rows.map { $0.first ?? nil } == ["one", "two", "three"])
         #expect((try? DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT * FROM missing"], as: DebugTableData.self).get()) == nil)
+
+        // A long result keeps one page of rows and reports how many there were.
+        let many = try DebugResourceClient.fetch(
+            "db.query",
+            ["db": database.name, "sql": "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 1200) SELECT x FROM n"],
+            as: DebugTableData.self
+        ).get()
+        #expect(many.rows.count == 500)
+        #expect(many.total == 1200)
+    }
+
+    @Test("Exporting a database in WAL mode includes what is still in the -wal file")
+    func exportIncludesWAL() throws {
+        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/shared-wal-\(UUID().uuidString.prefix(8)).sqlite")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer {
+            sqlite3_close(db)
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
+        }
+        // Keep the connection open with checkpoints off, so the rows stay in the -wal file.
+        sqlite3_exec(db, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('kept');", nil, nil, nil)
+        #expect(FileManager.default.fileExists(atPath: url.path + "-wal"))
+
+        let snapshot = try SharedPanelResources.sqliteSnapshot(of: url.path).get()
+        defer { try? FileManager.default.removeItem(at: snapshot.deletingLastPathComponent()) }
+        #expect(snapshot.lastPathComponent == url.lastPathComponent)
+        #expect(!FileManager.default.fileExists(atPath: snapshot.path + "-wal"))
+        var copy: OpaquePointer?
+        #expect(sqlite3_open_v2(snapshot.path, &copy, SQLITE_OPEN_READONLY, nil) == SQLITE_OK)
+        defer { sqlite3_close(copy) }
+        var statement: OpaquePointer?
+        #expect(sqlite3_prepare_v2(copy, "SELECT body FROM notes", -1, &statement, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(statement) }
+        #expect(sqlite3_step(statement) == SQLITE_ROW)
+        #expect(String(cString: sqlite3_column_text(statement, 0)) == "kept")
+    }
+
+    @Test("Databases in two App Groups with the same file name keep apart")
+    func appGroupDatabaseNames() throws {
+        let groups = ["group.debugswift.tests.one", "group.debugswift.tests.two"]
+        // The test app has no App Group entitlement, so folders outside its home stand in for the
+        // containers.
+        let containers = groups.map { _ in
+            URL(fileURLWithPath: NSHomeDirectory()).deletingLastPathComponent().appendingPathComponent("debugswift-group-\(UUID().uuidString.prefix(8))")
+        }
+        let lookup = DebugSwift.Resources.appGroupContainer
+        DebugSwift.Resources.appGroupContainer = { identifier in groups.firstIndex(of: identifier).map { containers[$0] } }
+        for (index, group) in groups.enumerated() {
+            DebugSwift.Resources.shared.addAppGroup(group)
+            let url = containers[index].appendingPathComponent("Documents/shared.sqlite")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            var db: OpaquePointer?
+            sqlite3_open(url.path, &db)
+            sqlite3_exec(db, "CREATE TABLE t\(index) (x INTEGER);", nil, nil, nil)
+            sqlite3_close(db)
+        }
+        defer {
+            groups.forEach { DebugSwift.Resources.shared.removeAppGroup($0) }
+            DebugSwift.Resources.appGroupContainer = lookup
+            containers.forEach { try? FileManager.default.removeItem(at: $0) }
+        }
+        let names = try DebugResourceClient.fetch("db.list", as: DebugDatabaseListing.self).get().databases.map(\.name)
+        for (index, group) in groups.enumerated() {
+            let name = "\(group)/Documents/shared.sqlite"
+            #expect(names.contains(name))
+            let tables = try DebugResourceClient.fetch("db.tables", ["db": name], as: DebugTableListing.self).get()
+            #expect(tables.tables.map(\.name) == ["t\(index)"])
+        }
     }
 
     @Test("Cookies are grouped by host")

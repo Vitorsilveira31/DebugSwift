@@ -36,7 +36,7 @@ final class DatabaseFileManager: @unchecked Sendable {
         }
         
         DebugSwift.Resources.shared.appGroupIdentifiers.forEach { identifier in
-            if let path = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)?.path {
+            if let path = DebugSwift.Resources.appGroupContainer(identifier)?.path {
                 databaseFiles.append(contentsOf: findDatabaseFiles(in: path))
             }
         }

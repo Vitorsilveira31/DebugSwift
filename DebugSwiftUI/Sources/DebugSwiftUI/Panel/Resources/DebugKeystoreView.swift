@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// Secure storage: on Android the Keystore aliases with what the system reports about each key (key
@@ -90,6 +91,14 @@ struct DebugKeychainEditView: View {
     @State var status = ""
     @Environment(\.dismiss) var dismiss
 
+    /// The keychain actions take JSON, so a key with "=" or a service with "|" stays whole.
+    static func payload(service: String, key: String, value: String?) -> String {
+        var object = ["service": service, "key": key]
+        if let value { object["value"] = value }
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return "" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     init(service: String, key: String, value: String, isNew: Bool) {
         self.service = service
         _key = State(initialValue: key)
@@ -114,11 +123,11 @@ struct DebugKeychainEditView: View {
             }
             Section {
                 Button("Save") {
-                    status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "\(service)|\(key)=\(value)")
+                    status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: Self.payload(service: service, key: key, value: value))
                 }
                 if !isNew {
                     Button("Delete", role: .destructive) {
-                        status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: "\(service)|\(key)")
+                        status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: Self.payload(service: service, key: key, value: nil))
                         dismiss()
                     }
                 }

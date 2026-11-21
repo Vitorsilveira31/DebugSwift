@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import SQLite3
 import Security
 
 /// The Resources area of the shared panel on iOS: the app's files, its UserDefaults and HTTP
@@ -67,8 +68,17 @@ final class SharedPanelResources {
             return deleteKeychainItem(value)
         case ("database", "export_database"):
             guard let path = databasePath(value) else { return "No database named \(value)." }
-            FileSharingManager.share(URL(fileURLWithPath: path))
-            return "Sharing \(value)."
+            if Self.isRealm(path) {
+                FileSharingManager.share(URL(fileURLWithPath: path))
+                return "Sharing \(value)."
+            }
+            switch Self.sqliteSnapshot(of: path) {
+            case let .success(url):
+                FileSharingManager.share(url)
+                return "Sharing \(value)."
+            case let .failure(message):
+                return message.text
+            }
         case ("preferences", "snapshot_preferences"):
             defaultsDiff.snapshotNow()
             snapshotAt = Date()
@@ -279,31 +289,33 @@ final class SharedPanelResources {
         ]
     }
 
-    /// "service|key=value"; an empty service uses the app's default one.
+    /// The editor's JSON, `{"service", "key", "value"}`, so any text fits in each field. An empty
+    /// service uses the app's default one.
+    private static func keychainPayload(_ value: String) -> (service: String, key: String, value: String?)? {
+        guard let object = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any],
+              let key = object["key"] as? String, !key.isEmpty else { return nil }
+        return (object["service"] as? String ?? "", key, object["value"] as? String)
+    }
+
     private func setKeychainItem(_ value: String) -> String {
-        let parts = value.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 2 else { return "Enter service|key=value." }
-        let pair = parts[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
-        guard pair.count == 2, !pair[0].isEmpty else { return "Enter a key." }
-        let keychain = parts[0].isEmpty ? Keychain() : Keychain(service: parts[0])
+        guard let item = Self.keychainPayload(value), let text = item.value else { return "Enter a key and a value." }
+        let keychain = item.service.isEmpty ? Keychain() : Keychain(service: item.service)
         do {
-            try keychain.set(pair[1], key: pair[0])
-            return "Saved \(pair[0])."
+            try keychain.set(text, key: item.key)
+            return "Saved \(item.key)."
         } catch {
-            return "Could not save \(pair[0]): \(error.localizedDescription)"
+            return "Could not save \(item.key): \(error.localizedDescription)"
         }
     }
 
-    /// "service|key".
     private func deleteKeychainItem(_ value: String) -> String {
-        let parts = value.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 2, !parts[1].isEmpty else { return "Enter service|key." }
-        let keychain = parts[0].isEmpty ? Keychain() : Keychain(service: parts[0])
+        guard let item = Self.keychainPayload(value) else { return "Enter a key." }
+        let keychain = item.service.isEmpty ? Keychain() : Keychain(service: item.service)
         do {
-            try keychain.remove(parts[1])
-            return "Deleted \(parts[1])."
+            try keychain.remove(item.key)
+            return "Deleted \(item.key)."
         } catch {
-            return "Could not delete \(parts[1]): \(error.localizedDescription)"
+            return "Could not delete \(item.key): \(error.localizedDescription)"
         }
     }
 
@@ -320,13 +332,55 @@ final class SharedPanelResources {
                 files.append((url.path, (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0))
             }
         }
+        // Each name leads back to one file: the path under the app's home folder, or under an App
+        // Group container after the group's identifier, or else the full path.
         let home = NSHomeDirectory() + "/"
+        let groups = DebugSwift.Resources.shared.getAccessibleAppGroups()
+            .map { (identifier: $0.identifier, prefix: $0.url.standardizedFileURL.path + "/") }
         var seen = Set<String>()
         return files.compactMap { path, size in
             guard seen.insert(path).inserted else { return nil }
-            let name = path.hasPrefix(home) ? String(path.dropFirst(home.count)) : (path as NSString).lastPathComponent
+            let name: String
+            if path.hasPrefix(home) {
+                name = String(path.dropFirst(home.count))
+            } else if let group = groups.first(where: { path.hasPrefix($0.prefix) }) {
+                name = group.identifier + "/" + path.dropFirst(group.prefix.count)
+            } else {
+                name = path
+            }
             return (name, path, size)
         }.sorted { $0.name < $1.name }
+    }
+
+    struct ExportFailure: Error { let text: String }
+
+    /// A standalone copy of a SQLite database, written by `VACUUM INTO` so changes still in the
+    /// `-wal` file are part of it. It keeps the database's file name.
+    static func sqliteSnapshot(of path: String) -> Result<URL, ExportFailure> {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("debugswift-export-\(UUID().uuidString)")
+        let target = folder.appendingPathComponent((path as NSString).lastPathComponent)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        } catch {
+            return .failure(ExportFailure(text: "Could not prepare the export: \(error.localizedDescription)"))
+        }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            return .failure(ExportFailure(text: "Could not open the database to export it."))
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "VACUUM INTO ?", -1, &statement, nil) == SQLITE_OK else {
+            return .failure(ExportFailure(text: "Could not export: \(String(cString: sqlite3_errmsg(db)))"))
+        }
+        defer { sqlite3_finalize(statement) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(statement, 1, target.path, -1, transient)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            return .failure(ExportFailure(text: "Could not export: \(String(cString: sqlite3_errmsg(db)))"))
+        }
+        return .success(target)
     }
 
     private static func isSQLite(_ url: URL) -> Bool {
@@ -376,9 +430,9 @@ final class SharedPanelResources {
         guard let path = databasePath(name) else { return ["error": "No database named \(name)."] }
         guard !Self.isRealm(path) else { return ["error": "SQL runs on SQLite databases, not Realm files."] }
         guard !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return ["error": "Enter a SQL statement."] }
-        switch SQLiteManager.shared.executeQuery(path: path, query: sql) {
-        case let .select(columns, rows):
-            return ["columns": columns, "rows": rows.prefix(Self.pageSize).map(Self.texts), "total": rows.count]
+        switch SQLiteManager.shared.executeQuery(path: path, query: sql, maxRows: Self.pageSize) {
+        case let .select(columns, rows, total):
+            return ["columns": columns, "rows": rows.map(Self.texts), "total": total]
         case let .update(affected):
             return ["columns": [String](), "rows": [[String]](), "message": affected == 1 ? "1 row changed." : "\(affected) rows changed."]
         case let .error(message):
