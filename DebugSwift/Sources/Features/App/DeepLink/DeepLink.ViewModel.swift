@@ -71,15 +71,8 @@ final class DeepLinkViewModel {
         
         let type = detectLinkType(url)
         
-        // Check if URL can be opened
-        guard UIApplication.shared.canOpenURL(url) else {
-            let status = DeepLinkStatus.failed("Cannot open URL. The app may not be configured to handle this URL scheme.")
-            let entry = DeepLinkEntry(url: url, type: type, status: status)
-            addToHistory(entry)
-            completion(false, "Cannot open URL. The app may not be configured to handle this URL scheme.")
-            return
-        }
-        
+        // No canOpenURL check first: it answers false for schemes the app does not list in
+        // LSApplicationQueriesSchemes, even when an app handles them. open reports the outcome.
         // Minimize DebugSwift to floating mode before opening deep link
         WindowManager.removeDebugger()
         

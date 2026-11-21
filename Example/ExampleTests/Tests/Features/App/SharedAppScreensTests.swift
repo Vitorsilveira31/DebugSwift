@@ -21,42 +21,52 @@ struct SharedAppScreensTests {
         #expect(listing.screenshots?.count == listing.reports.count)
     }
 
-    @Test("The system log decodes and honors the minimum level")
-    func systemLog() throws {
-        DebugSwiftLogProbe.logError("shared-screens-probe")
-        let all = try DebugResourceClient.fetch("app.logcat", ["filter": "", "level": "V"], as: DebugLogListing.self).get()
-        let errors = try DebugResourceClient.fetch("app.logcat", ["filter": "", "level": "E"], as: DebugLogListing.self).get()
-        #expect(errors.entries.count <= all.entries.count)
-        #expect(errors.entries.allSatisfy { ["E", "F"].contains($0.level) })
+    @Test("The system log keeps entries at or above the minimum level")
+    func systemLog() async throws {
+        let marker = UUID().uuidString.prefix(8)
+        DebugSwiftLogProbe.logNotice("level-notice-\(marker)")
+        DebugSwiftLogProbe.logError("level-error-\(marker)")
+        func messages(_ level: String) throws -> [String] {
+            try DebugResourceClient.fetch("app.logcat", ["filter": "level-", "level": level], as: DebugLogListing.self).get().entries.map(\.message)
+        }
+        var all: [String] = []
+        // The first read covers the last five minutes of a busy test process, which takes a while.
+        for _ in 0..<300 where !(all.contains("level-notice-\(marker)") && all.contains("level-error-\(marker)")) {
+            try await Task.sleep(nanoseconds: 200_000_000)
+            all = try messages("V")
+        }
+        #expect(all.contains("level-notice-\(marker)"))
+        #expect(all.contains("level-error-\(marker)"))
+        let errors = try messages("E")
+        #expect(errors.contains("level-error-\(marker)"))
+        #expect(!errors.contains("level-notice-\(marker)"))
     }
 
     @Test("Clearing the log hides what was logged before, and new entries appear")
     func clearLog() async throws {
-        func messages() async throws -> [String] {
-            var listing = try DebugResourceClient.fetch("app.logcat", ["filter": "logclear-", "level": "V"], as: DebugLogListing.self).get()
-            for _ in 0..<40 where listing.pending == true {
-                try await Task.sleep(nanoseconds: 100_000_000)
-                listing = try DebugResourceClient.fetch("app.logcat", ["filter": "logclear-", "level": "V"], as: DebugLogListing.self).get()
-            }
-            return listing.entries.map(\.message)
+        let before = "logclear-before-\(UUID().uuidString.prefix(8))"
+        let after = "logclear-after-\(UUID().uuidString.prefix(8))"
+        func messages() throws -> [String] {
+            try DebugResourceClient.fetch("app.logcat", ["filter": "logclear-", "level": "V"], as: DebugLogListing.self).get().entries.map(\.message)
         }
-        DebugSwiftLogProbe.logError("logclear-before")
+        DebugSwiftLogProbe.logError(before)
         var seen: [String] = []
-        for _ in 0..<20 where !seen.contains("logclear-before") {
-            try await Task.sleep(nanoseconds: 300_000_000)
-            seen = try await messages()
+        for _ in 0..<300 where !seen.contains(before) {
+            try await Task.sleep(nanoseconds: 200_000_000)
+            seen = try messages()
         }
-        #expect(seen.contains("logclear-before"))
+        #expect(seen.contains(before))
 
         _ = try DebugResourceClient.fetch("app.logcat.clear", as: DebugActionReply.self).get()
         try await Task.sleep(nanoseconds: 50_000_000)
-        DebugSwiftLogProbe.logError("logclear-after")
-        for _ in 0..<20 where !seen.contains("logclear-after") {
-            try await Task.sleep(nanoseconds: 300_000_000)
-            seen = try await messages()
+        DebugSwiftLogProbe.logError(after)
+        seen = []
+        for _ in 0..<300 where !seen.contains(after) {
+            try await Task.sleep(nanoseconds: 200_000_000)
+            seen = try messages()
         }
-        #expect(seen.contains("logclear-after"))
-        #expect(!seen.contains("logclear-before"))
+        #expect(seen.contains(after))
+        #expect(!seen.contains(before))
     }
 
     @Test("Switching the Apple subsystems filter right after a read still reads the log")
@@ -82,11 +92,17 @@ struct SharedAppScreensTests {
         }
     }
 
-    @Test("A link no app can open reports the failure")
-    func deepLinkFailure() throws {
-        let reply = try DebugResourceClient.fetch("app.deeplink.open", ["uri": "debugswift-no-handler-scheme://x"], as: DebugActionReply.self).get()
-        #expect(reply.message?.hasPrefix("Opening") == false)
-        #expect(reply.message?.hasPrefix("Opened") == false)
+    @Test("A link no app handles ends up failed in the history")
+    func deepLinkFailure() async throws {
+        let link = "debugswift-no-handler-\(UUID().uuidString.prefix(6).lowercased())://x"
+        _ = try DebugResourceClient.fetch("app.deeplink.open", ["uri": link], as: DebugActionReply.self).get()
+        var history = try DebugResourceClient.fetch("app.deeplink.history", as: DebugDeepLinkHistory.self).get()
+        for _ in 0..<50 where history.pending == true || !history.entries.contains(where: { $0.url == link }) {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            history = try DebugResourceClient.fetch("app.deeplink.history", as: DebugDeepLinkHistory.self).get()
+        }
+        let entry = try #require(history.entries.first { $0.url == link })
+        #expect(entry.status != "Success")
     }
 
     @Test("The agent log state lists the newest lines of a large log")
@@ -103,6 +119,25 @@ struct SharedAppScreensTests {
         #expect(state.entries.count == 100)
         #expect(state.entries.first?.message == "line-2999")
         #expect(state.entries.last?.message == "line-2900")
+    }
+
+    @Test("A tail window that starts on a line boundary keeps its first line")
+    func agentLogTailBoundary() throws {
+        let url = AgentDebugLog.shared.currentLogPath()
+        let original = try? Data(contentsOf: url)
+        defer {
+            if let original { try? original.write(to: url) } else { try? FileManager.default.removeItem(at: url) }
+        }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // 1024-byte lines: the 64 KB window holds exactly 64 whole lines, starting right after a newline.
+        let lines = (0..<200).map { index -> String in
+            let head = #"{"timestamp":\#(index),"kind":"app","location":"test","message":"line-\#(index)","pad":""#
+            return head + String(repeating: "x", count: 1023 - head.utf8.count - 2) + #""}"#
+        }
+        try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+        let state = try DebugResourceClient.fetch("app.agentlog.state", as: DebugAgentLogState.self).get()
+        #expect(state.entries.count == 64)
+        #expect(state.entries.last?.message == "line-136")
     }
 
     @Test("A log tail that starts inside a character still lists its whole lines")
@@ -181,6 +216,10 @@ struct SharedAppScreensTests {
 
 /// Writes an error-level entry to the unified log, so the log screen has something to filter.
 enum DebugSwiftLogProbe {
+    static func logNotice(_ message: String) {
+        Logger(subsystem: "DebugSwift.Tests", category: "probe").notice("\(message, privacy: .public)")
+    }
+
     static func logError(_ message: String) {
         Logger(subsystem: "DebugSwift.Tests", category: "probe").error("\(message, privacy: .public)")
     }

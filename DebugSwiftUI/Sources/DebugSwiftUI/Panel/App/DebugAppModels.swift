@@ -28,8 +28,10 @@ struct DebugLogEntry: Decodable {
 
 struct DebugLogListing: Decodable {
     let entries: [DebugLogEntry]
-    /// iOS only: newer entries are still being read; ask again shortly.
+    /// iOS only: newer entries are still being read.
     let pending: Bool?
+    /// iOS only: the log is read in the background; ask again every second while shown.
+    let live: Bool?
 }
 
 /// The reply to an action: a message to show, and for mock location whether it is running.

@@ -7,6 +7,8 @@ struct DebugDeepLinksView: View {
     @State var lastLink = ""
     @State var status = ""
     @State var history: [DebugDeepLinkEntry]? = nil
+    /// A link is still opening: its outcome lands in the history when it answers.
+    @State var opening = false
 
     /// Links to try without typing.
     let quickLinks = ["debugswift://profile/123", "https://github.com/DebugSwift/DebugSwift"]
@@ -64,6 +66,12 @@ struct DebugDeepLinksView: View {
         }
         .navigationTitle("Deep Links")
         .onAppear { load() }
+        .task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
+                if opening { load() }
+            }
+        }
     }
 
     func open() {
@@ -74,11 +82,6 @@ struct DebugDeepLinksView: View {
             status = error.message
         }
         load()
-        // Opening finishes after the call returns; its outcome then shows in the history.
-        Task {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            load()
-        }
     }
 
     func load() {
@@ -86,6 +89,7 @@ struct DebugDeepLinksView: View {
         // Android keeps no history of its own: the section shows only where the platform has one.
         if case let .success(listing) = DebugResourceClient.fetch("app.deeplink.history", as: DebugDeepLinkHistory.self) {
             history = listing.entries
+            opening = listing.pending == true
         }
     }
 }
@@ -99,4 +103,6 @@ struct DebugDeepLinkEntry: Decodable {
 
 struct DebugDeepLinkHistory: Decodable {
     let entries: [DebugDeepLinkEntry]
+    /// iOS only: a link is still opening.
+    let pending: Bool?
 }
