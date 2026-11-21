@@ -119,7 +119,54 @@ final class SQLiteManager: @unchecked Sendable {
         }
         
         defer { sqlite3_close(db) }
-        
+        return readPage(db: db, table: table, limit: limit, offset: offset, orderBy: orderBy, ascending: ascending)
+    }
+
+    /// Whether a statement only reads, decided by SQLite without running it. A statement that
+    /// doesn't compile counts as reading: running it reports SQLite's error and changes nothing.
+    func isReadOnly(path: String, query: String) -> Bool {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            return false
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK else { return true }
+        defer { sqlite3_finalize(statement) }
+        return sqlite3_stmt_readonly(statement) != 0
+    }
+
+    /// A page of rows and the table's row count, read in one transaction so both describe the
+    /// same state of the database.
+    func getTablePage(from path: String, table: String, limit: Int, offset: Int) -> (columns: [String], rows: [[Any?]], total: Int?) {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            return ([], [], nil)
+        }
+        defer { sqlite3_close(db) }
+        sqlite3_exec(db, "BEGIN", nil, nil, nil)
+        defer { sqlite3_exec(db, "COMMIT", nil, nil, nil) }
+        var total: Int?
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM \(quotedIdentifier(table))", -1, &statement, nil) == SQLITE_OK,
+           sqlite3_step(statement) == SQLITE_ROW {
+            total = Int(sqlite3_column_int64(statement, 0))
+        }
+        sqlite3_finalize(statement)
+        let page = readPage(db: db, table: table, limit: limit, offset: offset, orderBy: nil, ascending: true)
+        return (page.columns, page.rows, total)
+    }
+
+    private func readPage(
+        db: OpaquePointer?,
+        table: String,
+        limit: Int,
+        offset: Int,
+        orderBy: String?,
+        ascending: Bool
+    ) -> (columns: [String], rows: [[Any?]]) {
         // Get column names
         let columns = getColumnNames(for: table, db: db)
         

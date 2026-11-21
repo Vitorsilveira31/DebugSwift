@@ -222,6 +222,18 @@ class DebugSwiftPanelTest {
         assertTrue("Deleting answered: $deleted", deleted.optString("message") == "Deleted session.")
         assertTrue("Only session was deleted: ${names()}", names() == listOf("theme"))
         manager.setCookie("https://$host", "theme=; Max-Age=0")
+
+        // A cookie set for the parent domain is seen by the host and deleted there too.
+        val parent = "debugswift-parent-${System.nanoTime()}.test"
+        manager.setCookie("https://$parent", "shared=1; Domain=$parent; Path=/")
+        val child = "api.$parent"
+        fun childNames() = manager.getCookie("https://$child").orEmpty().split(';').map { it.trim().substringBefore('=') }
+        assertTrue("The subdomain sees the parent's cookie: ${childNames()}", "shared" in childNames())
+        val parentDeleted = org.json.JSONObject(
+            debug.swift.android.DebugSwiftResourceAPI.handle("cookies.delete", org.json.JSONObject().put("host", child).put("name", "shared").toString())
+        )
+        assertTrue("Deleting answered: $parentDeleted", parentDeleted.optString("message") == "Deleted shared.")
+        assertTrue("The parent's cookie is gone: ${childNames()}", "shared" !in childNames())
     }
 
     @Test
