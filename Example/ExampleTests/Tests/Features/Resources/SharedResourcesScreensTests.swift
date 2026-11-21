@@ -210,14 +210,16 @@ struct SharedResourcesScreensTests {
         #expect(select.rows.map { $0.first ?? nil } == ["one", "two", "three"])
         #expect((try? DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT * FROM missing"], as: DebugTableData.self).get()) == nil)
 
-        // A long result keeps one page of rows and reports how many there were.
+        // A long result stops after one page of rows and says so.
         let many = try DebugResourceClient.fetch(
             "db.query",
             ["db": database.name, "sql": "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 1200) SELECT x FROM n"],
             as: DebugTableData.self
         ).get()
         #expect(many.rows.count == 500)
-        #expect(many.total == 1200)
+        #expect(many.total == nil)
+        #expect(many.message == "Showing the first 500 rows.")
+        #expect(select.total == 3)
     }
 
     @Test("Exporting a database in WAL mode includes what is still in the -wal file")

@@ -431,8 +431,10 @@ final class SharedPanelResources {
         guard !Self.isRealm(path) else { return ["error": "SQL runs on SQLite databases, not Realm files."] }
         guard !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return ["error": "Enter a SQL statement."] }
         switch SQLiteManager.shared.executeQuery(path: path, query: sql, maxRows: Self.pageSize) {
-        case let .select(columns, rows, total):
-            return ["columns": columns, "rows": rows.map(Self.texts), "total": total]
+        case let .select(columns, rows, hasMore):
+            // Reading stops after one page, so a long result doesn't hold up the screen.
+            guard hasMore else { return ["columns": columns, "rows": rows.map(Self.texts), "total": rows.count] }
+            return ["columns": columns, "rows": rows.map(Self.texts), "message": "Showing the first \(rows.count) rows."]
         case let .update(affected):
             return ["columns": [String](), "rows": [[String]](), "message": affected == 1 ? "1 row changed." : "\(affected) rows changed."]
         case let .error(message):
