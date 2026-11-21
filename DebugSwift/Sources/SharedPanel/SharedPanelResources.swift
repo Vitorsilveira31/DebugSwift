@@ -417,8 +417,17 @@ final class SharedPanelResources {
         return (try? handle.read(upToCount: 16)) == Data("SQLite format 3\0".utf8)
     }
 
+    /// Each name's file from the last listing, so opening a table or a page doesn't search the
+    /// sandbox again.
+    private var databasePaths: [String: String] = [:]
+
+    /// The file a database name stands for: from the last listing while that file is still there,
+    /// otherwise found again.
     private func databasePath(_ name: String) -> String? {
-        databaseFiles().first { $0.name == name }?.path
+        if let path = databasePaths[name], FileManager.default.fileExists(atPath: path) { return path }
+        let files = databaseFiles()
+        databasePaths = Dictionary(files.map { ($0.name, $0.path) }, uniquingKeysWith: { first, _ in first })
+        return databasePaths[name]
     }
 
     /// Realm files show their header as one informational table, as the iOS browser did.
@@ -427,7 +436,9 @@ final class SharedPanelResources {
     }
 
     private func databases() -> [String: Any] {
-        ["databases": databaseFiles().map { ["name": $0.name, "size": $0.size] }]
+        let files = databaseFiles()
+        databasePaths = Dictionary(files.map { ($0.name, $0.path) }, uniquingKeysWith: { first, _ in first })
+        return ["databases": files.map { ["name": $0.name, "size": $0.size] }]
     }
 
     private func tables(_ name: String) -> [String: Any] {
