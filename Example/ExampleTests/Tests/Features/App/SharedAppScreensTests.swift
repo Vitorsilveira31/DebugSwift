@@ -157,8 +157,8 @@ struct SharedAppScreensTests {
         #expect(text.contains("Instance methods"))
     }
 
-    @Test("Push state decodes, and options, templates and the switch round-trip")
-    func push() throws {
+    @Test("Push state decodes, and options, templates, the switch and resending round-trip")
+    func push() async throws {
         let push = DebugSwift.PushNotification.self
         let wasEnabled = push.isEnabled
         let config = push.configuration
@@ -180,6 +180,24 @@ struct SharedAppScreensTests {
 
         _ = DebugPush.act("toggle")
         #expect(try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().enabled != wasEnabled)
+        if !push.isEnabled { _ = DebugPush.act("toggle") }
+
+        // Sending a notification again keeps its subtitle, badge and payload.
+        let original = SimulatedNotification(
+            title: "Resend", body: "Payload", subtitle: "Sub", badge: 3, sound: "default",
+            category: "contract", userInfo: ["order": "42"]
+        )
+        await PushNotificationSimulator.shared.simulateNotification(original)
+        _ = DebugPush.act("resend_notification", original.id)
+        var copy: SimulatedNotification?
+        for _ in 0..<50 where copy == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            copy = push.history.first { $0.id != original.id && $0.title == "Resend" }
+        }
+        #expect(copy?.userInfo["order"] == "42")
+        #expect(copy?.subtitle == "Sub")
+        #expect(copy?.badge == 3)
+        #expect(copy?.category == "contract")
         #expect(DebugPush.act("clear_push_history", "nope").contains("Type CLEAR"))
     }
 }

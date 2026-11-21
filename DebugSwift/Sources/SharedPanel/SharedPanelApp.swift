@@ -533,7 +533,17 @@ final class SharedPanelApp {
             return "Removed the notification."
         case "resend_notification":
             guard let record = push.history.first(where: { $0.id == value }) else { return "No simulated notification with ID '\(value)'." }
-            push.simulate(title: record.title, body: record.body)
+            // The same content and payload under a new identity, delivered now.
+            let copy = SimulatedNotification(
+                title: record.title,
+                body: record.body,
+                subtitle: record.subtitle,
+                badge: record.badge,
+                sound: record.sound,
+                category: record.category,
+                userInfo: record.userInfo
+            )
+            Task { await simulator.simulateNotification(copy) }
             return "Sent it again."
         case "clear_push_history":
             guard value == "CLEAR" else { return "Type CLEAR to remove notification history." }
