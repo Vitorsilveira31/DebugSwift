@@ -182,6 +182,29 @@ struct SharedResourcesScreensTests {
         #expect(DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "|k=v") == "Enter a key and a value.")
     }
 
+    @Test("An item with an empty service is edited and deleted there, not in the app's default service")
+    func keychainEmptyService() throws {
+        let key = "shared-keychain-empty-\(UUID().uuidString.prefix(8))"
+        func act(_ actionID: String, service: String?, _ value: String?) -> String {
+            DebugSwiftRuntime.perform(featureID: "keychain", actionID: actionID, value: DebugKeychainEditView.payload(service: service, key: key, value: value))
+        }
+        defer {
+            _ = act("delete_keychain_item", service: "", nil)
+            _ = act("delete_keychain_item", service: nil, nil)
+        }
+        try Keychain(service: "").set("empty", key: key)
+        #expect(act("set_keychain_item", service: "", "edited") == "Saved \(key).")
+        #expect(Keychain(service: "")[string: key] == "edited")
+        #expect(Keychain()[string: key] == nil)
+
+        // A new item, with no service given, goes to the default one.
+        _ = act("set_keychain_item", service: nil, "default")
+        #expect(Keychain()[string: key] == "default")
+        _ = act("delete_keychain_item", service: "", nil)
+        #expect(Keychain(service: "")[string: key] == nil)
+        #expect(Keychain()[string: key] == "default")
+    }
+
     @Test("A SQLite database lists its tables and rows, pages, and runs SQL")
     func database() throws {
         let name = "shared-db-\(UUID().uuidString.prefix(8)).sqlite"
@@ -209,6 +232,8 @@ struct SharedResourcesScreensTests {
         let select = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT body FROM notes ORDER BY id"], as: DebugTableData.self).get()
         #expect(select.rows.map { $0.first ?? nil } == ["one", "two", "three"])
         #expect((try? DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT * FROM missing"], as: DebugTableData.self).get()) == nil)
+        // A write that returns columns still reports its failure.
+        #expect((try? DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "INSERT INTO notes (id, body) VALUES (1, 'again') RETURNING id"], as: DebugTableData.self).get()) == nil)
 
         // A long result stops after one page of rows and says so.
         let many = try DebugResourceClient.fetch(
