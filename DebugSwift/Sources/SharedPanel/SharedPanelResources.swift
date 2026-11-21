@@ -38,6 +38,11 @@ final class SharedPanelResources {
         case "prefs.list": return preferences()
         case "prefs.diff": return preferenceChanges()
         case "cookies.list": return cookies()
+        case "cookies.delete": return deleteCookie(host: arguments["host"] ?? "", name: arguments["name"] ?? "")
+        case "cookies.clear":
+            let all = HTTPCookieStorage.shared.cookies ?? []
+            all.forEach(HTTPCookieStorage.shared.deleteCookie)
+            return ["message": all.count == 1 ? "Deleted 1 cookie." : "Deleted \(all.count) cookies."]
         case "keystore.list": return keychainItems()
         case "db.list": return databases()
         case "db.tables": return tables(arguments["db"] ?? "")
@@ -67,6 +72,7 @@ final class SharedPanelResources {
         case ("keychain", "delete_keychain_item"):
             return deleteKeychainItem(value)
         case ("database", "export_database"):
+            if SharedPanelRegisteredStores.isRegistered(value) { return "A registered store is shared through its SQLite file, when it has one." }
             guard let path = databasePath(value) else { return "No database named \(value)." }
             if Self.isRealm(path) {
                 FileSharingManager.share(URL(fileURLWithPath: path))
@@ -321,8 +327,9 @@ final class SharedPanelResources {
     /// has no service and goes to the app's default one; an existing item keeps its service, even
     /// an empty one.
     private static func keychainPayload(_ value: String) -> (keychain: Keychain, key: String, value: String?)? {
+        // A new item needs a key; an existing one (sent with its service) may have an empty account.
         guard let object = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any],
-              let key = object["key"] as? String, !key.isEmpty else { return nil }
+              let key = object["key"] as? String, !key.isEmpty || object["service"] != nil else { return nil }
         let keychain = (object["service"] as? String).map { Keychain(service: $0) } ?? Keychain()
         return (keychain, key, object["value"] as? String)
     }
@@ -438,10 +445,13 @@ final class SharedPanelResources {
     private func databases() -> [String: Any] {
         let files = databaseFiles()
         databasePaths = Dictionary(files.map { ($0.name, $0.path) }, uniquingKeysWith: { first, _ in first })
-        return ["databases": files.map { ["name": $0.name, "size": $0.size] }]
+        // Registered Core Data and SwiftData stores come after the files; in-memory ones have no file.
+        let registered = SharedPanelRegisteredStores.names().map { ["name": $0, "size": 0] as [String: Any] }
+        return ["databases": files.map { ["name": $0.name, "size": $0.size] } + registered]
     }
 
     private func tables(_ name: String) -> [String: Any] {
+        if SharedPanelRegisteredStores.isRegistered(name) { return SharedPanelRegisteredStores.tables(name) }
         guard let path = databasePath(name) else { return ["error": "No database named \(name)."] }
         return [
             "db": name,
@@ -453,6 +463,9 @@ final class SharedPanelResources {
     private static let pageSize = 500
 
     private func rows(_ name: String, table: String, offset: Int) -> [String: Any] {
+        if SharedPanelRegisteredStores.isRegistered(name) {
+            return SharedPanelRegisteredStores.rows(name, entity: table, offset: offset, pageSize: Self.pageSize)
+        }
         guard let path = databasePath(name) else { return ["error": "No database named \(name)."] }
         if Self.isRealm(path) {
             let data = RealmManager.shared.getTableData(from: path, table: table)
@@ -471,6 +484,9 @@ final class SharedPanelResources {
     }
 
     private func query(_ name: String, sql: String) -> [String: Any] {
+        if SharedPanelRegisteredStores.isRegistered(name) {
+            return ["error": "SQL runs on SQLite files. A registered store is browsed by its entities; its SQLite file, if it has one, is listed too."]
+        }
         guard let path = databasePath(name) else { return ["error": "No database named \(name)."] }
         guard !Self.isRealm(path) else { return ["error": "SQL runs on SQLite databases, not Realm files."] }
         guard !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return ["error": "Enter a SQL statement."] }
@@ -496,6 +512,14 @@ final class SharedPanelResources {
     }
 
     // MARK: - Cookies
+
+    /// Every cookie with this name on this domain, whatever its path.
+    private func deleteCookie(host: String, name: String) -> [String: Any] {
+        let matches = (HTTPCookieStorage.shared.cookies ?? []).filter { $0.domain == host && $0.name == name }
+        guard !matches.isEmpty else { return ["error": "No cookie \(name) for \(host)."] }
+        matches.forEach(HTTPCookieStorage.shared.deleteCookie)
+        return ["message": "Deleted \(name)."]
+    }
 
     private func cookies() -> [String: Any] {
         let all = HTTPCookieStorage.shared.cookies ?? []
