@@ -39,6 +39,12 @@ struct SharedPerformanceScreensTests {
         #expect(superCalls.violations != nil)
     }
 
+    @Test("Opening the panel sets up DebugSwift on iOS, as the UIKit screens did")
+    func panelPreparesTheDebugger() {
+        DebugSwiftRuntime.startRuntime()
+        #expect(DebugSwiftRuntime.isIOSDebuggerPrepared)
+    }
+
     @Test("Slow frames are listed newest first")
     func slowFramesOrder() async throws {
         _ = DebugSwiftRuntime.perform(featureID: "frame_drops", actionID: "clear")
