@@ -96,6 +96,7 @@ final class SharedPanelInterface {
     private var history: [Int] = []
     private var lastTotal = 0
     private var lastSampleAt = Date()
+    private var lastGeneration = 0
     private var sampler: Timer?
 
     private func renderState() -> [String: Any] {
@@ -138,7 +139,14 @@ final class SharedPanelInterface {
         sampler = timer
     }
 
-    private func sample(now: Date = Date()) {
+    func sample(now: Date = Date()) {
+        // A reset from outside the panel (`clearStats()`) restarts the count: the new total is
+        // what was rendered since.
+        let generation = SwiftUIRenderTracker.shared.resetGeneration
+        if generation != lastGeneration {
+            lastGeneration = generation
+            lastTotal = 0
+        }
         record(total: Self.totalRenders(), at: now)
     }
 
@@ -169,6 +177,8 @@ final class SharedPanelInterface {
         let kind: String
         let start: CGPoint
         let end: CGPoint
+        /// The window the touch was in; its coordinates belong to that window only.
+        var window: ObjectIdentifier? = nil
     }
 
     private static let gestureLimit = 200
@@ -195,7 +205,8 @@ final class SharedPanelInterface {
 
     /// Keeps the app's taps and scrolls; touches on DebugSwift's own windows are left out.
     func record(_ event: UIEvent, in window: UIWindow) {
-        guard isRecording, event.type == .touches, Self.isAppWindow(window), let touches = event.allTouches else { return }
+        // Only this window's touches: an event can carry touches from other windows, in their coordinates.
+        guard isRecording, event.type == .touches, Self.isAppWindow(window), let touches = event.touches(for: window) else { return }
         // Looked up only when a touch starts, so moves and ends cost nothing extra.
         let panels = touches.contains { $0.phase == .began } ? Self.panelContainers(in: window) : []
         for touch in touches {
@@ -207,7 +218,7 @@ final class SharedPanelInterface {
                 touchStarts[key] = point
             case .ended:
                 guard let start = touchStarts.removeValue(forKey: key) else { continue }
-                recordTouch(from: start, to: point)
+                recordTouch(from: start, to: point, in: ObjectIdentifier(window))
             case .cancelled:
                 touchStarts.removeValue(forKey: key)
             default:
@@ -224,10 +235,10 @@ final class SharedPanelInterface {
     }
 
     /// Keeps one finished touch: a tap when it barely moved, a scroll otherwise.
-    func recordTouch(from start: CGPoint, to end: CGPoint) {
+    func recordTouch(from start: CGPoint, to end: CGPoint, in window: ObjectIdentifier? = nil) {
         guard isRecording else { return }
         let kind = hypot(end.x - start.x, end.y - start.y) >= Self.scrollDistance ? "scroll" : "tap"
-        gestures.append(Gesture(kind: kind, start: start, end: end))
+        gestures.append(Gesture(kind: kind, start: start, end: end, window: window))
         if gestures.count > Self.gestureLimit { gestures.removeFirst(gestures.count - Self.gestureLimit) }
     }
 
@@ -250,13 +261,20 @@ final class SharedPanelInterface {
 
     /// Draws the app's window with the last gestures numbered on it and saves it as a PNG.
     private func captureDocumentation() -> String {
-        guard let window = Self.appWindow() else { return "No app window is available." }
-        let (marks, firstNumber) = annotatedGestures()
+        // A failure is the result shown for this attempt; the last good screenshot stays available.
+        guard let window = Self.appWindow() else {
+            captureMessage = "No app window is available."
+            return captureMessage
+        }
+        let marks = annotatedGestures(in: ObjectIdentifier(window))
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { context in
             Self.drawApp(window, in: context.cgContext)
-            Self.annotate(context.cgContext, marks, firstNumber: firstNumber)
+            Self.annotate(context.cgContext, marks)
         }
-        guard let data = image.pngData() else { return "The screenshot could not be encoded." }
+        guard let data = image.pngData() else {
+            captureMessage = "The screenshot could not be encoded."
+            return captureMessage
+        }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("debugswift-screen-\(Int(Date().timeIntervalSince1970 * 1000)).png")
         do {
@@ -271,15 +289,17 @@ final class SharedPanelInterface {
         return captureMessage
     }
 
-    /// The gestures drawn on a capture, the last 24, and the number of the first one: the same
-    /// number it has in the recorder's list.
-    func annotatedGestures() -> (marks: [Gesture], firstNumber: Int) {
-        let marks = Array(gestures.suffix(Self.annotatedLimit))
-        return (marks, gestures.count - marks.count + 1)
+    /// The gestures drawn on a capture of a window: the last 24 made in it, each with the number
+    /// it has in the recorder's list.
+    func annotatedGestures(in window: ObjectIdentifier?) -> [(gesture: Gesture, number: Int)] {
+        let numbered = gestures.enumerated()
+            .filter { $0.element.window == nil || $0.element.window == window }
+            .map { (gesture: $0.element, number: $0.offset + 1) }
+        return Array(numbered.suffix(Self.annotatedLimit))
     }
 
     /// Numbered dots for taps; a numbered dot and an arrow for scrolls, as on Android.
-    static func annotate(_ context: CGContext, _ marks: [Gesture], firstNumber: Int) {
+    static func annotate(_ context: CGContext, _ marks: [(gesture: Gesture, number: Int)]) {
         let radius: CGFloat = 11
         context.setStrokeColor(UIColor.systemRed.cgColor)
         context.setFillColor(UIColor.systemRed.cgColor)
@@ -289,7 +309,7 @@ final class SharedPanelInterface {
             .font: UIFont.boldSystemFont(ofSize: 11),
             .foregroundColor: UIColor.white
         ]
-        for (index, mark) in marks.enumerated() {
+        for (mark, number) in marks {
             let dot = mark.kind == "scroll" ? mark.start : mark.end
             if mark.kind == "scroll" {
                 context.setStrokeColor(UIColor.systemRed.cgColor)
@@ -307,7 +327,7 @@ final class SharedPanelInterface {
             // Drawing a label leaves the context's fill white, so set red again for each dot.
             context.setFillColor(UIColor.systemRed.cgColor)
             context.fillEllipse(in: CGRect(x: dot.x - radius, y: dot.y - radius, width: radius * 2, height: radius * 2))
-            let label = NSAttributedString(string: "\(firstNumber + index)", attributes: attributes)
+            let label = NSAttributedString(string: "\(number)", attributes: attributes)
             let size = label.size()
             label.draw(at: CGPoint(x: dot.x - size.width / 2, y: dot.y - size.height / 2))
         }
@@ -361,12 +381,16 @@ final class SharedPanelInterface {
         let ranked = sums.sorted { $0.value.count == $1.value.count ? $0.key < $1.key : $0.value.count > $1.value.count }
         for (_, bucket) in ranked {
             let color = (red: bucket.red / bucket.count, green: bucket.green / bucket.count, blue: bucket.blue / bucket.count, count: bucket.count)
-            // Skip shades too close to one already taken, so the list shows distinct colors.
-            let distinct = chosen.allSatisfy { taken in
+            // A shade too close to a color already taken adds its pixels to that color, so the list
+            // shows distinct colors and each one's share includes its shades.
+            if let index = chosen.firstIndex(where: { taken in
                 let (dr, dg, db) = (Double(taken.red - color.red), Double(taken.green - color.green), Double(taken.blue - color.blue))
-                return (dr * dr + dg * dg + db * db).squareRoot() >= 28
+                return (dr * dr + dg * dg + db * db).squareRoot() < 28
+            }) {
+                chosen[index].count += color.count
+            } else if chosen.count < maxColors {
+                chosen.append(color)
             }
-            if chosen.count < maxColors, distinct { chosen.append(color) }
         }
         return chosen.map { color in
             [
@@ -409,9 +433,11 @@ final class SharedPanelInterface {
 
     /// DebugSwift's own windows (the debugger, the floating ball, overlays) are not the app.
     static func isAppWindow(_ window: UIWindow) -> Bool {
+        // DebugSwift's own windows by type, and the system's keyboard windows by exact class name,
+        // so an app window class that happens to share a name isn't mistaken for them.
+        if window is CustomWindow || window is MeasurementWindow { return false }
         let name = NSStringFromClass(type(of: window))
-        if name.contains("UITextEffectsWindow") || name.contains("UIRemoteKeyboardWindow") { return false }
-        if name.contains("CustomWindow") || name.contains("DebugSwift") { return false }
+        if name == "UITextEffectsWindow" || name == "UIRemoteKeyboardWindow" { return false }
         return window.windowLevel < .alert
     }
 

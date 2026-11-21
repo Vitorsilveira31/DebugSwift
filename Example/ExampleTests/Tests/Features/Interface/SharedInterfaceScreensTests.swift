@@ -159,10 +159,59 @@ struct SharedInterfaceScreensTests {
         for index in 0..<30 {
             recorder.recordTouch(from: CGPoint(x: index, y: 0), to: CGPoint(x: index, y: 0))
         }
-        let (marks, firstNumber) = recorder.annotatedGestures()
+        let marks = recorder.annotatedGestures(in: nil)
         #expect(marks.count == 24)
-        #expect(firstNumber == 7)
-        #expect(marks.first?.end.x == 6)
+        #expect(marks.first?.number == 7)
+        #expect(marks.first?.gesture.end.x == 6)
+    }
+
+    @Test("A capture of a window draws only the gestures made in it, with their list numbers")
+    func gesturesPerWindow() {
+        let recorder = SharedPanelInterface.shared
+        _ = DebugPerformanceDetail.act("app.doc.clear")
+        _ = DebugPerformanceDetail.act("app.doc.record", ["on": "true"])
+        defer {
+            _ = DebugPerformanceDetail.act("app.doc.record", ["on": "false"])
+            _ = DebugPerformanceDetail.act("app.doc.clear")
+        }
+        let (first, second) = (UIWindow(), UIWindow())
+        recorder.recordTouch(from: .zero, to: .zero, in: ObjectIdentifier(first))
+        recorder.recordTouch(from: .zero, to: .zero, in: ObjectIdentifier(second))
+        recorder.recordTouch(from: .zero, to: .zero, in: ObjectIdentifier(first))
+        #expect(recorder.annotatedGestures(in: ObjectIdentifier(first)).map(\.number) == [1, 3])
+        #expect(recorder.annotatedGestures(in: ObjectIdentifier(second)).map(\.number) == [2])
+    }
+
+    @Test("A window class of the app named like DebugSwift's is still the app's")
+    func hostWindowNamedCustomWindow() {
+        #expect(SharedPanelInterface.isAppWindow(HostApp.CustomWindow()))
+        #expect(!SharedPanelInterface.isAppWindow(CustomWindow()))
+    }
+
+    @Test("A reset made outside the panel restarts the render count")
+    func renderResetFromOutside() {
+        let interface = SharedPanelInterface.shared
+        let tracker = SwiftUIRenderTracker.shared
+        let wasEnabled = tracker.isEnabled
+        let previousStyle = tracker.overlayStyle
+        tracker.isEnabled = true
+        tracker.overlayStyle = .none
+        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear")
+        defer {
+            _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear")
+            tracker.isEnabled = wasEnabled
+            tracker.overlayStyle = previousStyle
+        }
+        let start = Date()
+        interface.sample(now: start)
+        let views = (0..<3).map { _ in UIView() }
+        views.forEach { tracker.trackRender(for: $0, viewType: "Counted") }
+        interface.sample(now: start.addingTimeInterval(1))
+        #expect(interface.renderHistory.last == 3)
+        tracker.clearStats()
+        views.prefix(2).forEach { tracker.trackRender(for: $0, viewType: "Counted") }
+        interface.sample(now: start.addingTimeInterval(2))
+        #expect(interface.renderHistory.last == 2)
     }
 
     @Test("Every marker on a capture is red, not only the first")
@@ -176,16 +225,21 @@ struct SharedInterfaceScreensTests {
         let image = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100), format: format).image { context in
             UIColor.white.setFill()
             context.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
-            SharedPanelInterface.annotate(context.cgContext, marks, firstNumber: 1)
+            SharedPanelInterface.annotate(context.cgContext, marks.enumerated().map { (gesture: $0.element, number: $0.offset + 1) })
         }
         let cgImage = try #require(image.cgImage)
+        // The context draws into the buffer only inside this closure, where the pointer is valid.
         var pixel = [UInt8](repeating: 0, count: 4)
-        let bitmap = try #require(CGContext(
-            data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ))
-        // A point inside the second dot, clear of its label.
-        bitmap.draw(cgImage, in: CGRect(x: -70, y: -(100 - 79), width: 100, height: 100))
+        let drawn = pixel.withUnsafeMutableBytes { buffer -> Bool in
+            guard let bitmap = CGContext(
+                data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            // A point inside the second dot, clear of its label.
+            bitmap.draw(cgImage, in: CGRect(x: -70, y: -(100 - 79), width: 100, height: 100))
+            return true
+        }
+        #expect(drawn)
         #expect(pixel[0] > 200)
         #expect(pixel[1] < 120)
         #expect(pixel[2] < 120)
@@ -214,7 +268,7 @@ struct SharedInterfaceScreensTests {
         #expect(!container.isHidden)
     }
 
-    @Test("The palette ranks colors by share, merges close shades, and skips see-through pixels")
+    @Test("The palette ranks colors by share, merges close shades into them, and skips see-through pixels")
     func paletteRanking() {
         func pixels(_ color: (UInt8, UInt8, UInt8, UInt8), _ count: Int) -> [UInt8] {
             Array(repeating: [color.0, color.1, color.2, color.3], count: count).flatMap { $0 }
@@ -225,7 +279,8 @@ struct SharedInterfaceScreensTests {
         let colors = SharedPanelInterface.dominantColors(rgba)
         #expect(colors.count == 2)
         #expect(colors.first?["hex"] as? String == "#FF0000")
-        #expect(colors.first?["percent"] as? Double == 60)
+        // The close shade counts toward red.
+        #expect(colors.first?["percent"] as? Double == 75)
         #expect(colors.last?["hex"] as? String == "#0000FF")
         #expect(colors.last?["percent"] as? Double == 25)
     }
@@ -249,4 +304,9 @@ struct SharedInterfaceScreensTests {
         }
         #expect(DebugSwift.debugInterfaceViewController(for: "grid") == nil)
     }
+}
+
+/// A host app's own window class that shares a name with DebugSwift's.
+enum HostApp {
+    final class CustomWindow: UIWindow {}
 }
