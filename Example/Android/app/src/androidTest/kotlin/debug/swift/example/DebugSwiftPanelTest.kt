@@ -209,6 +209,22 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun aCookieCanBeDeleted() {
+        val manager = android.webkit.CookieManager.getInstance()
+        val host = "debugswift-${System.nanoTime()}.test"
+        manager.setCookie("https://$host", "session=1")
+        manager.setCookie("https://$host", "theme=dark")
+        fun names() = manager.getCookie("https://$host").orEmpty().split(';').map { it.trim().substringBefore('=') }.filter { it.isNotEmpty() }
+        assertTrue("Both cookies are set: ${names()}", names().containsAll(listOf("session", "theme")))
+        val deleted = org.json.JSONObject(
+            debug.swift.android.DebugSwiftResourceAPI.handle("cookies.delete", org.json.JSONObject().put("host", host).put("name", "session").toString())
+        )
+        assertTrue("Deleting answered: $deleted", deleted.optString("message") == "Deleted session.")
+        assertTrue("Only session was deleted: ${names()}", names() == listOf("theme"))
+        manager.setCookie("https://$host", "theme=; Max-Age=0")
+    }
+
+    @Test
     fun aFolderListsAllItsEntries() {
         val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
         val folder = java.io.File(context.cacheDir, "debugswift-many-${System.nanoTime()}").apply { mkdirs() }
