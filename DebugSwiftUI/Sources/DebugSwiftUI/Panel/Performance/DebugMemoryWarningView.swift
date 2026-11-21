@@ -35,7 +35,9 @@ struct DebugMemoryWarningView: View {
                 }
             }
             Section {
-                Text(verbatim: "The button calls onLowMemory and the critical trim callback on the app and the foreground Activity. Android does not let an app put the whole system under real memory pressure.")
+                Text(verbatim: DebugPlatform.isAndroid
+                    ? "The button calls onLowMemory and the critical trim callback on the app and the foreground Activity. Android does not let an app put the whole system under real memory pressure."
+                    : "The button sends the app a memory warning and briefly allocates memory to put it under real pressure.")
                     .font(.caption)
                     .foregroundColor(Color.secondary)
             }

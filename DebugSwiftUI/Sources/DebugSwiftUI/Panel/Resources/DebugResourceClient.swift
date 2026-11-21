@@ -1,12 +1,16 @@
 import Foundation
+#if os(iOS)
+@_spi(DebugSwiftUI) import DebugSwift
+#endif
 
 /// Why a resource read failed; shown as is in the screens.
 struct DebugResourceFailure: Error {
     let message: String
 }
 
-/// Typed access to the Kotlin resource API (`DebugSwiftResourceAPI`). The Android tools answer every
-/// operation with a JSON object; a failure comes back as `{"error": "..."}`.
+/// Typed access to the tools' data: the Kotlin resource API (`DebugSwiftResourceAPI`) on Android,
+/// DebugSwift's `SharedPanelData` on iOS. Both answer every operation with a JSON object; a failure
+/// comes back as `{"error": "..."}`.
 enum DebugResourceClient {
     private struct ErrorBody: Decodable {
         let error: String?
@@ -17,11 +21,13 @@ enum DebugResourceClient {
         _ arguments: [String: String] = [:],
         as _: T.Type = T.self,
     ) -> Result<T, DebugResourceFailure> {
-        let arguments = (try? JSONEncoder().encode(arguments)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         #if os(Android)
-            let raw = DebugSwiftNativeBridge.resource(operation, arguments)
+            let encoded = (try? JSONEncoder().encode(arguments)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            let raw = DebugSwiftNativeBridge.resource(operation, encoded)
         #else
-            let raw = "{\"error\":\"These tools read Android app storage.\"}"
+            // DebugSwift answers the same operations on iOS, in the same shapes. The screens read
+            // from SwiftUI, on the main thread.
+            let raw = MainActor.assumeIsolated { SharedPanelData.resource(operation, arguments) }
         #endif
         guard let data = raw.data(using: .utf8) else {
             return .failure(DebugResourceFailure(message: "The tool returned unreadable data."))

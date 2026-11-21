@@ -36,6 +36,8 @@ final class HangDetectorRunner: @unchecked Sendable {
 
     /// Begin monitoring. Hangs are reported through the `onHang` callback.
     func start() {
+        // Several screens can start monitoring; one set of timers is enough.
+        guard timer == nil else { return }
         detector.onHang { [weak self] event in
             self?.record(event)
         }
@@ -72,9 +74,17 @@ final class HangDetectorRunner: @unchecked Sendable {
         detector.stop()
     }
 
-    private func record(_ event: HangEvent) {
+    func record(_ event: HangEvent) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            // The watchdog reports a stall on every tick while it lasts; ticks of one stall share
+            // its start (the last heartbeat), so they become one event with the longest duration.
+            let start = event.timestamp.addingTimeInterval(-event.duration)
+            if let last = self.events.last,
+               abs(last.timestamp.addingTimeInterval(-last.duration).timeIntervalSince(start)) < 0.05 {
+                self.events[self.events.count - 1] = event
+                return
+            }
             self.events.append(event)
             if self.events.count > self.maxEvents {
                 self.events.removeFirst(self.events.count - self.maxEvents)

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Activities that were destroyed but are still reachable after five seconds, a sign of a leak.
+/// Screens that were closed but are still reachable a few seconds later, a sign of a leak: Activities
+/// on Android, view controllers and views on iOS.
 struct DebugLeaksView: View {
     @State var detail: DebugLeakDetail? = nil
     @State var failure = ""
@@ -13,27 +14,37 @@ struct DebugLeaksView: View {
             }
             if let detail {
                 Section("Summary") {
-                    LabeledContent("Activities destroyed") { Text(verbatim: "\(detail.destroyed)") }
-                    LabeledContent("Still held after 5 s") { Text(verbatim: "\(detail.candidates.count)") }
+                    LabeledContent(DebugPlatform.isAndroid ? "Activities destroyed" : "Objects reported") { Text(verbatim: "\(detail.destroyed)") }
+                    LabeledContent(DebugPlatform.isAndroid ? "Still held after 5 s" : "Still in memory") { Text(verbatim: "\(detail.candidates.count)") }
                 }
-                Section("Retained Activities") {
+                Section(DebugPlatform.isAndroid ? "Retained Activities" : "Still in memory") {
                     if detail.candidates.isEmpty {
-                        Text(verbatim: "No retained Activity candidates detected.")
+                        Text(verbatim: DebugPlatform.isAndroid ? "No retained Activity candidates detected." : "No leaked view controllers or views detected.")
                             .foregroundColor(Color.secondary)
                     }
                     ForEach(0..<detail.candidates.count, id: \.self) { index in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: detail.candidates[index].className)
-                                .font(.system(.footnote, design: .monospaced))
-                            Text(verbatim: "destroyed \(detail.candidates[index].ageSeconds) s ago")
-                                .font(.caption)
-                                .foregroundColor(Color.secondary)
+                        if let report = detail.candidates[index].detail {
+                            NavigationLink {
+                                DebugTextDetailView(title: "Leak", text: report)
+                            } label: {
+                                Text(verbatim: detail.candidates[index].className)
+                                    .font(.system(.footnote, design: .monospaced))
+                                    .lineLimit(2)
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: detail.candidates[index].className)
+                                    .font(.system(.footnote, design: .monospaced))
+                                Text(verbatim: "destroyed \(detail.candidates[index].ageSeconds) s ago")
+                                    .font(.caption)
+                                    .foregroundColor(Color.secondary)
+                            }
                         }
                     }
                 }
             }
             Section {
-                Button("Collect garbage and recheck") {
+                Button(DebugPlatform.isAndroid ? "Collect garbage and recheck" : "Recheck") {
                     status = DebugPerformanceDetail.act("app.perf.gc")
                     load()
                 }
@@ -41,7 +52,7 @@ struct DebugLeaksView: View {
                 if !status.isEmpty {
                     Text(verbatim: status).font(.caption)
                 }
-                Text(verbatim: "This is a reachability check. Confirm a leak with the Android Studio Memory Profiler.")
+                Text(verbatim: DebugPlatform.isAndroid ? "This is a reachability check. Confirm a leak with the Android Studio Memory Profiler." : "This is a reachability check. Confirm a leak with the Xcode memory graph.")
                     .font(.caption)
                     .foregroundColor(Color.secondary)
             }

@@ -1,0 +1,62 @@
+//
+//  SharedPanelData.swift
+//  DebugSwift
+//
+
+import Foundation
+
+/// The data the shared SwiftUI panel (DebugSwiftUI) shows on iOS. On Android the Kotlin runtime
+/// answers the same operations, in the same JSON shapes, so one set of screens serves both.
+///
+/// Not part of DebugSwift's public API: DebugSwiftUI reaches it with
+/// `@_spi(DebugSwiftUI) import DebugSwift`.
+@_spi(DebugSwiftUI)
+public enum SharedPanelData {
+    /// Starts what the shared screens read continuously (frame timing, saved monitors). Called once
+    /// when the shared panel is set up.
+    @MainActor
+    public static func prepare() {
+        SharedPanelPerformance.shared.prepare()
+    }
+
+    /// Answers a data operation (`app.perf.sample`, `app.perf.detail`, …) with its JSON, or
+    /// `{"error": …}` when the operation is unknown or fails.
+    @MainActor
+    public static func resource(_ operation: String, _ arguments: [String: String]) -> String {
+        let reply: [String: Any]
+        if operation.hasPrefix("app.perf.") {
+            reply = SharedPanelPerformance.shared.resource(operation, arguments)
+        } else {
+            reply = ["error": "This tool is not available on iOS."]
+        }
+        return json(reply)
+    }
+
+    /// Runs a screen action, or returns nil when this feature's action is not handled here.
+    @MainActor
+    public static func perform(featureID: String, actionID: String, value: String) -> String? {
+        SharedPanelPerformance.shared.perform(featureID: featureID, actionID: actionID, value: value)
+    }
+
+    /// A feature's text snapshot, or nil when this feature is not handled here.
+    @MainActor
+    public static func snapshot(featureID: String) -> String? {
+        SharedPanelPerformance.shared.snapshot(featureID: featureID)
+    }
+
+    static func json(_ object: [String: Any]) -> String {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object),
+              let text = String(data: data, encoding: .utf8) else {
+            return #"{"error":"The tool returned data that could not be encoded."}"#
+        }
+        return text
+    }
+
+    static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return formatter
+    }()
+}

@@ -4,7 +4,7 @@ import Foundation
 import SwiftUI
 
 #if os(iOS)
-import DebugSwift
+@_spi(DebugSwiftUI) import DebugSwift
 import UIKit
 #endif
 
@@ -139,7 +139,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("disk", "Disk I/O", "Inspect app storage size and process read/write byte counters."),
                 .init("memory_warning", "Memory Warning", "Trigger the platform's low-memory callback path and inspect its response."),
                 .init("frame_drops", "Frame Drops", "Record slow frames and inspect their timing on a timeline."),
-                .init("hangs", "Hangs and ANRs", "Detect main thread stalls and inspect captured stack traces."),
+                .init("hangs", DebugPlatform.isAndroid ? "Hangs and ANRs" : "Hangs", "Detect main thread stalls and inspect captured stack traces."),
                 .init("backtraces", "Backtraces", "Capture and browse call stacks on demand."),
                 .init("leaks", "Leak Detection", "Find UI objects that remain reachable after their expected lifetime."),
                 .init("thread_checker", "Thread Checker", "Capture thread violations, inspect details, and configure dispatch handling."),
@@ -317,9 +317,8 @@ struct DebugSwiftFeatureDestination: View {
             DebugSwiftWebSocketInspectorView()
         } else if feature.id == "network_history" {
             DebugSwiftNetworkSessionHistoryView()
-        } else if ["performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls"].contains(feature.id) {
-            DebugSwiftIOSNativePerformanceHost(featureID: feature.id)
-                .ignoresSafeArea(edges: .bottom)
+        } else if DebugPerformanceDestination.featureIDs.contains(feature.id) {
+            DebugPerformanceDestination(featureID: feature.id)
         } else if ["touches", "colorize", "animations", "dark_mode", "measurement"].contains(feature.id) {
             DebugSwiftInterfaceSettingView(featureID: feature.id)
         } else if ["swiftui_render", "doc_recorder", "color_palette"].contains(feature.id) {
@@ -352,28 +351,8 @@ struct DebugSwiftFeatureDestination: View {
             DebugColorPaletteView()
         } else if feature.id == "animation_control" {
             DebugAnimationControlView()
-        } else if feature.id == "performance_overview" {
-            DebugLiveMetricsView()
-        } else if feature.id == "performance_widget" {
-            DebugPerformanceWidgetView()
-        } else if feature.id == "frame_drops" {
-            DebugFrameDropsView()
-        } else if feature.id == "hangs" {
-            DebugHangsView()
-        } else if feature.id == "backtraces" {
-            DebugBacktracesView()
-        } else if feature.id == "leaks" {
-            DebugLeaksView()
-        } else if feature.id == "thread_checker" {
-            DebugThreadCheckerView()
-        } else if feature.id == "super_calls" {
-            DebugSuperCallsView()
-        } else if feature.id == "memory_warning" {
-            DebugMemoryWarningView()
-        } else if feature.id == "battery" {
-            DebugBatteryView()
-        } else if feature.id == "disk" {
-            DebugDiskView()
+        } else if DebugPerformanceDestination.featureIDs.contains(feature.id) {
+            DebugPerformanceDestination(featureID: feature.id)
         } else if feature.id == "crashes" {
             DebugCrashesView()
         } else if feature.id == "oslog_console" {
@@ -1018,18 +997,35 @@ struct DebugSwiftIOSNativeNetworkHost: UIViewControllerRepresentable {
 
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}
 }
+#endif
 
-struct DebugSwiftIOSNativePerformanceHost: UIViewControllerRepresentable {
+/// The Performance tools: the same screens on iOS and Android, each reading its platform's data.
+struct DebugPerformanceDestination: View {
+    static let featureIDs: Set<String> = [
+        "performance_overview", "performance_widget", "battery", "disk", "memory_warning",
+        "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls"
+    ]
+
     let featureID: String
 
-    func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftRuntime.prepareIOSDebugger()
-        return DebugSwift.debugPerformanceViewController(for: featureID) ?? UIViewController()
+    @ViewBuilder
+    var body: some View {
+        switch featureID {
+        case "performance_overview": DebugLiveMetricsView()
+        case "performance_widget": DebugPerformanceWidgetView()
+        case "frame_drops": DebugFrameDropsView()
+        case "hangs": DebugHangsView()
+        case "backtraces": DebugBacktracesView()
+        case "leaks": DebugLeaksView()
+        case "thread_checker": DebugThreadCheckerView()
+        case "super_calls": DebugSuperCallsView()
+        case "memory_warning": DebugMemoryWarningView()
+        case "battery": DebugBatteryView()
+        case "disk": DebugDiskView()
+        default: EmptyView()
+        }
     }
-
-    func updateUIViewController(_ viewController: UIViewController, context: Context) {}
 }
-#endif
 
 struct DebugSwiftFeatureDetail: View {
     let feature: DebugSwiftTool
@@ -1244,12 +1240,14 @@ public enum DebugSwiftRuntime {
     static func prepareIOSDebugger(betaFeatures: [DebugSwiftBetaFeature] = []) {
         guard !isIOSDebuggerPrepared else { return }
         DebugSwift().setup(enableBetaFeatures: betaFeatures)
+        SharedPanelData.prepare()
         isIOSDebuggerPrepared = true
     }
 
     /// Records that the host already ran `DebugSwift().setup()`, so the hosted UIKit screens do not run it again.
     @MainActor
     static func markIOSDebuggerPrepared() {
+        SharedPanelData.prepare()
         isIOSDebuggerPrepared = true
     }
     #endif
@@ -1451,6 +1449,7 @@ public enum DebugSwiftRuntime {
             return native
         }
         #else
+        if let text = SharedPanelData.snapshot(featureID: featureID) { return text }
         switch featureID {
         case "console":
             guard let data = try? JSONEncoder().encode(DebugSwift.Console.shared.messages()),
@@ -1536,6 +1535,9 @@ public enum DebugSwiftRuntime {
         }
         return DebugSwiftNativeBridge.perform(featureID, actionID, value)
         #else
+        if let message = SharedPanelData.perform(featureID: featureID, actionID: actionID, value: value) {
+            return message
+        }
         if featureID == "console" {
             switch actionID {
             case "clear":
