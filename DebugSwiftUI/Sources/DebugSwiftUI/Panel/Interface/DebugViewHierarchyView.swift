@@ -143,7 +143,8 @@ struct DebugViewNodeDetailView: View {
             Section("Layout") {
                 LabeledContent("Position") { Text(verbatim: "\(tree.dp(node.left)), \(tree.dp(node.top))") }
                 LabeledContent("Size") { Text(verbatim: "\(tree.dp(node.width)) × \(tree.dp(node.height))") }
-                LabeledContent("In pixels") {
+                // The raw values: pixels on Android, window points on iOS.
+                LabeledContent(DebugPlatform.isAndroid ? "In pixels" : "In points") {
                     Text(verbatim: "\(node.left),\(node.top) to \(node.right),\(node.bottom)")
                 }
                 LabeledContent("Children") { Text(verbatim: "\(node.children.count)") }
