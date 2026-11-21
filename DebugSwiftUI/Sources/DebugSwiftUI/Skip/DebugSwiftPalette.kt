@@ -84,9 +84,14 @@ object DebugSwiftPalette {
         val chosen = mutableListOf<Pair<Int, Long>>()
         sums.values.sortedByDescending { it[3] }.forEach { bucket ->
             val color = Color.rgb((bucket[0] / bucket[3]).toInt(), (bucket[1] / bucket[3]).toInt(), (bucket[2] / bucket[3]).toInt())
-            // Skip shades too close to one already taken, so the list shows distinct colors.
-            if (chosen.size < MAX_COLORS && chosen.none { distance(it.first, color) < 28 }) chosen += color to bucket[3]
+            // A shade too close to a color already taken adds its pixels to that color, so the list
+            // shows distinct colors and each one's share includes its shades.
+            val index = chosen.indexOfFirst { distance(it.first, color) < 28 }
+            if (index >= 0) chosen[index] = chosen[index].first to chosen[index].second + bucket[3]
+            else if (chosen.size < MAX_COLORS) chosen += color to bucket[3]
         }
+        // Merging can lift a color above one listed earlier: rank by the final shares.
+        chosen.sortByDescending { it.second }
         val result = JSONArray()
         chosen.forEach { (color, count) ->
             result.put(
