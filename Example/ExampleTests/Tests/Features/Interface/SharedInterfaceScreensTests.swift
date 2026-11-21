@@ -135,6 +135,32 @@ struct SharedInterfaceScreensTests {
         #expect(marks.first?.end.x == 6)
     }
 
+    @Test("Every marker on a capture is red, not only the first")
+    func markerColors() throws {
+        let marks = [
+            SharedPanelInterface.Gesture(kind: "tap", start: CGPoint(x: 20, y: 20), end: CGPoint(x: 20, y: 20)),
+            SharedPanelInterface.Gesture(kind: "tap", start: CGPoint(x: 70, y: 70), end: CGPoint(x: 70, y: 70))
+        ]
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100), format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
+            SharedPanelInterface.annotate(context.cgContext, marks, firstNumber: 1)
+        }
+        let cgImage = try #require(image.cgImage)
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let bitmap = try #require(CGContext(
+            data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        // A point inside the second dot, clear of its label.
+        bitmap.draw(cgImage, in: CGRect(x: -70, y: -(100 - 79), width: 100, height: 100))
+        #expect(pixel[0] > 200)
+        #expect(pixel[1] < 120)
+        #expect(pixel[2] < 120)
+    }
+
     @Test("Captures leave out the shared panel when it is presented in the app's window")
     func capturesSkipThePanel() throws {
         let window = try #require(SharedPanelInterface.appWindow())

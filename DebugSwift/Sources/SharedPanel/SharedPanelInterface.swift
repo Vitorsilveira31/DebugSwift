@@ -279,7 +279,7 @@ final class SharedPanelInterface {
     }
 
     /// Numbered dots for taps; a numbered dot and an arrow for scrolls, as on Android.
-    private static func annotate(_ context: CGContext, _ marks: [Gesture], firstNumber: Int) {
+    static func annotate(_ context: CGContext, _ marks: [Gesture], firstNumber: Int) {
         let radius: CGFloat = 11
         context.setStrokeColor(UIColor.systemRed.cgColor)
         context.setFillColor(UIColor.systemRed.cgColor)
@@ -292,6 +292,7 @@ final class SharedPanelInterface {
         for (index, mark) in marks.enumerated() {
             let dot = mark.kind == "scroll" ? mark.start : mark.end
             if mark.kind == "scroll" {
+                context.setStrokeColor(UIColor.systemRed.cgColor)
                 let angle = atan2(mark.end.y - mark.start.y, mark.end.x - mark.start.x)
                 let head: CGFloat = 12
                 let spread = CGFloat.pi / 6
@@ -303,6 +304,8 @@ final class SharedPanelInterface {
                 context.addLine(to: CGPoint(x: mark.end.x - head * cos(angle + spread), y: mark.end.y - head * sin(angle + spread)))
                 context.strokePath()
             }
+            // Drawing a label leaves the context's fill white, so set red again for each dot.
+            context.setFillColor(UIColor.systemRed.cgColor)
             context.fillEllipse(in: CGRect(x: dot.x - radius, y: dot.y - radius, width: radius * 2, height: radius * 2))
             let label = NSAttributedString(string: "\(firstNumber + index)", attributes: attributes)
             let size = label.size()
