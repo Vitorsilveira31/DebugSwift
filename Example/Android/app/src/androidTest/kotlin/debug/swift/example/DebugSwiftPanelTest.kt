@@ -104,6 +104,12 @@ class DebugSwiftPanelTest {
             assertTrue("${masked.requestHeaders}", masked.requestHeaders["Accept"] == listOf("a", "b"))
             assertTrue(masked.requestBody, masked.requestBody.contains(""""pin":"<redacted>"""") && !masked.requestBody.contains(marker))
             assertTrue(masked.decryptedResponseBody, masked.decryptedResponseBody == "pin=<redacted> note=kept")
+            // A JSON null leaves password masking on.
+            debug.swift.android.DebugSwiftNetworkSanitizer.configureJSON("""{"redactsURLPassword":null}""")
+            val stillMasked = debug.swift.android.DebugSwiftNetworkSanitizer.sanitize(
+                "https://user:pw@api.example.test/", emptyMap(), emptyMap(), "", "", ""
+            )
+            assertTrue(stillMasked.url, stillMasked.url == "https://user:%3Credacted%3E@api.example.test/")
         } finally {
             debug.swift.android.DebugSwiftNetworkSanitizer.configure(
                 bodyKeys = debug.swift.android.DebugSwiftNetworkSanitizer.defaultBodyKeys,
