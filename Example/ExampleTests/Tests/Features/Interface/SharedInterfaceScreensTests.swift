@@ -283,6 +283,12 @@ struct SharedInterfaceScreensTests {
         #expect(colors.first?["percent"] as? Double == 75)
         #expect(colors.last?["hex"] as? String == "#0000FF")
         #expect(colors.last?["percent"] as? Double == 25)
+
+        // Two blue shades together cover more than red, so blue comes first.
+        let shades = pixels((255, 0, 0, 255), 40) + pixels((0, 0, 255, 255), 35) + pixels((10, 10, 235, 255), 25)
+        let ranked = SharedPanelInterface.dominantColors(shades)
+        #expect(ranked.first?["hex"] as? String == "#0000FF")
+        #expect(ranked.first?["percent"] as? Double == 60)
     }
 
     @Test("The palette reads the app's window")
