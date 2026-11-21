@@ -161,6 +161,50 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun aPendingNotificationKeepsItsIdAndRejectionsAreReported() {
+        fun simulate(id: String) = org.json.JSONObject(AndroidDebugTools.hostAPI("push.simulate", org.json.JSONObject()
+            .put("id", id).put("title", "Pending").put("body", "owned").put("delay", 60).toString()))
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        AndroidDebugTools.setPushSimulationEnabled(true)
+        try {
+            // A pending notification keeps its id after its history entry is cleared: scheduling the
+            // id again is rejected, and reported as a failure.
+            assertTrue("Scheduling failed", simulate("pending-$marker").optBoolean("ok"))
+            AndroidDebugTools.hostAPI("push.clearHistory", "{}")
+            val again = simulate("pending-$marker")
+            assertTrue("A second schedule took the pending id: $again", !again.optBoolean("ok"))
+            assertTrue("The rejection lost its reason: $again", again.optString("message").contains("already exists"))
+
+            // An id with spaces around it is stored as removal and interaction look it up.
+            assertTrue("Scheduling a padded id failed", simulate("  padded-$marker  ").optBoolean("ok"))
+            assertTrue("The padded id was stored as given", AndroidDebugTools.pushStateJSON().contains("\"padded-$marker\""))
+            val removed = AndroidDebugTools.hostAPI("push.remove", org.json.JSONObject().put("id", "padded-$marker").toString())
+            assertTrue("Removing the trimmed id failed: $removed", org.json.JSONObject(removed).optBoolean("ok"))
+        } finally {
+            // Turning simulation off cancels what is pending and frees its ids.
+            AndroidDebugTools.setPushSimulationEnabled(false)
+            AndroidDebugTools.setPushSimulationEnabled(true)
+        }
+    }
+
+    @Test
+    fun aPatchLeavesAFailureArmedMeanwhile() {
+        val original = AndroidDebugTools.networkInjectionSettingsJSON()
+        try {
+            AndroidDebugTools.failNextNetworkRequest()
+            val patched = AndroidDebugTools.hostAPI("network.injection.patch", org.json.JSONObject()
+                .put("sections", org.json.JSONObject().put("delay", org.json.JSONObject().put("isEnabled", true).put("fixedDelay", 1)))
+                .toString())
+            assertTrue("The patch failed: $patched", org.json.JSONObject(patched).optBoolean("ok"))
+            val state = AndroidDebugTools.snapshot("network_injection")
+            assertTrue("The delay patch disarmed the next failure: $state", state.contains("Fail next request: true"))
+        } finally {
+            // Replacing the settings as a whole clears the armed failure too.
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(original)
+        }
+    }
+
+    @Test
     fun simulatedNotificationsKeepTheIdTheyWereGiven() {
         val id = "check-" + java.util.UUID.randomUUID().toString().take(8)
         AndroidDebugTools.setPushSimulationEnabled(true)

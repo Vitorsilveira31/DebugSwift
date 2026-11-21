@@ -21,7 +21,9 @@ for file in Network/DebugSwiftURLSessionCapture.swift Network/DebugSwiftNetworkI
 done
 
 swift build --swift-sdk aarch64-unknown-linux-android28 -c debug
-binary=$(find .build -type f -name CaptureCheck -perm -u+x -path '*android*' | head -1)
+# The executable this build just made, not an older one left in .build.
+binary="$(swift build --swift-sdk aarch64-unknown-linux-android28 -c debug --show-bin-path)/CaptureCheck"
+[ -x "$binary" ] || { echo "No CaptureCheck executable at $binary" >&2; exit 1; }
 sdk=$(find "$HOME/Library/org.swift.swiftpm/swift-sdks" "$HOME/.swiftpm/swift-sdks" -maxdepth 1 -name '*android*' 2>/dev/null | sort | tail -1)/swift-android
 libs="$sdk/swift-resources/usr/lib/swift-aarch64/android"
 cxx=$(find "$sdk" -name libc++_shared.so -path '*aarch64*' | head -1)

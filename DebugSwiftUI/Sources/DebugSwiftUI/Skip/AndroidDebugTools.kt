@@ -129,6 +129,8 @@ object AndroidDebugTools {
     private val pushHistory = CopyOnWriteArrayList<PushNotificationRecord>()
     private val pushTemplates = CopyOnWriteArrayList<PushNotificationTemplate>()
     private val pendingPushNotifications = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    /** Which scheduled delivery owns each notification id; see `schedulePush`. */
+    private val pushScheduleOwners = ConcurrentHashMap<String, Any>()
     private val notificationExecutor = Executors.newSingleThreadScheduledExecutor { task ->
         Thread(task, "DebugSwiftNotifications").apply { isDaemon = true }
     }
@@ -1116,7 +1118,15 @@ object AndroidDebugTools {
 
     @JvmStatic
     @Synchronized
-    fun applyNetworkInjectionSettingsJSON(json: String): String {
+    fun applyNetworkInjectionSettingsJSON(json: String): String = applyNetworkInjectionSettings(json, resetTransientState = true)
+
+    /**
+     * Applies the delay, failure and rewrite settings. `resetTransientState` also clears the
+     * one-shot and quick controls (`failNextNetworkRequest()`, the fixed delay and HTTP error, the
+     * quick rewrites): true when the settings are replaced as a whole, false for a patch of a few
+     * fields, which must not disarm a failure armed meanwhile.
+     */
+    private fun applyNetworkInjectionSettings(json: String, resetTransientState: Boolean): String {
         val parsed = runCatching { JSONObject(json) }.getOrElse {
             return "Settings are not valid JSON: ${it.message}"
         }
@@ -1171,10 +1181,12 @@ object AndroidDebugTools {
         )
         val settings = NetworkInjectionSettings(delay, failure, rewrite)
         networkInjectionSettings = settings
-        requestDelayMs = 0L
-        httpErrorCode = 0
-        responseRewrites.clear()
-        failNextRequest.set(false)
+        if (resetTransientState) {
+            requestDelayMs = 0L
+            httpErrorCode = 0
+            responseRewrites.clear()
+            failNextRequest.set(false)
+        }
         appContext?.getSharedPreferences(NETWORK_INJECTION_STATE_PREFS, Context.MODE_PRIVATE)?.edit()
             ?.putString("settings", networkInjectionSettingsJSONObject(settings).toString())
             ?.apply()
@@ -4100,6 +4112,7 @@ object AndroidDebugTools {
         }
         pendingPushNotifications.values.forEach { it.cancel(true) }
         pendingPushNotifications.clear()
+        pushScheduleOwners.clear()
         pushHistory.filter { it.status == "Scheduled" }.forEach { record ->
             notificationExecutor.execute { NotificationManagerCompat.from(context).cancel(record.id.hashCode()) }
             updatePushNotification(context, record.id, "Dismissed", persist = persist)
@@ -4159,6 +4172,9 @@ object AndroidDebugTools {
         publishEvent("app", "Notification $id status: $status")
     }
 
+    /** What scheduling a simulated notification did: `accepted` only when it was queued. */
+    private class PushScheduleResult(val accepted: Boolean, val message: String)
+
     private fun schedulePushNotification(
         context: Context,
         title: String,
@@ -4170,17 +4186,38 @@ object AndroidDebugTools {
         category: String? = null,
         userInfo: Map<String, String> = emptyMap(),
         requestedID: String? = null
-    ): String {
-        if (!pushEnabled) return "Enable push notification simulation before creating a notification."
-        // The caller's id is kept, as on iOS, so removing or interacting by that id finds it.
-        if (requestedID != null && pushHistory.any { it.id == requestedID }) {
-            return "A simulated notification with id '$requestedID' already exists."
+    ): String = schedulePush(context, title, body, delaySeconds, subtitle, badge, sound, category, userInfo, requestedID).message
+
+    private fun schedulePush(
+        context: Context,
+        title: String,
+        body: String,
+        delaySeconds: Long = 0,
+        subtitle: String? = null,
+        badge: Int? = null,
+        sound: String? = null,
+        category: String? = null,
+        userInfo: Map<String, String> = emptyMap(),
+        requestedID: String? = null
+    ): PushScheduleResult {
+        fun rejected(message: String) = PushScheduleResult(false, message)
+        if (!pushEnabled) return rejected("Enable push notification simulation before creating a notification.")
+        // The caller's id is kept, as on iOS, so removing or interacting by that id finds it. It is
+        // trimmed here as removal and interaction trim it, so all three agree.
+        val callerID = requestedID?.trim()?.takeIf { it.isNotEmpty() }
+        if (callerID != null && (pushHistory.any { it.id == callerID } || pushScheduleOwners.containsKey(callerID))) {
+            return rejected("A simulated notification with id '$callerID' already exists.")
         }
-        if (delaySeconds < 0) return "Delay must be zero or more seconds."
+        if (delaySeconds < 0) return rejected("Delay must be zero or more seconds.")
         val permissionMessage = requestNotificationPermission(context)
-        if (permissionMessage.isNotEmpty()) return permissionMessage
+        if (permissionMessage.isNotEmpty()) return rejected(permissionMessage)
         val boundedDelay = delaySeconds.coerceAtMost(86_400L)
-        val id = requestedID?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
+        val id = callerID ?: UUID.randomUUID().toString()
+        // Owns `id` until this delivery runs or is cancelled. A delivery that no longer owns it (its
+        // history was cleared and the id scheduled again) does nothing, so it never removes, posts
+        // or marks the newer notification.
+        val owner = Any()
+        pushScheduleOwners[id] = owner
         val record = PushNotificationRecord(
             id = id,
             title = title,
@@ -4198,6 +4235,7 @@ object AndroidDebugTools {
         )
         addPushRecord(context, record)
         val deliver = Runnable {
+            if (!pushScheduleOwners.remove(id, owner)) return@Runnable
             pendingPushNotifications.remove(id)
             if (!pushEnabled) {
                 updatePushNotification(context, id, "Dismissed")
@@ -4258,10 +4296,10 @@ object AndroidDebugTools {
         }
         if (boundedDelay == 0L) {
             notificationExecutor.execute(deliver)
-            return "Local notification queued for immediate delivery: $title."
+            return PushScheduleResult(true, "Local notification queued for immediate delivery: $title.")
         }
         pendingPushNotifications[id] = notificationExecutor.schedule(deliver, boundedDelay, TimeUnit.SECONDS)
-        return "Local notification scheduled in $boundedDelay seconds (ID: $id)."
+        return PushScheduleResult(true, "Local notification scheduled in $boundedDelay seconds (ID: $id).")
     }
 
     private fun resolveNotificationSound(context: Context, soundName: String): Uri? {
@@ -4457,6 +4495,7 @@ object AndroidDebugTools {
         if (id.isBlank()) return "Enter the notification ID shown in its history entry."
         val record = pushHistory.firstOrNull { it.id == id } ?: return "No simulated notification with ID '$id'."
         pendingPushNotifications.remove(id)?.cancel(true)
+        pushScheduleOwners.remove(id)
         notificationExecutor.execute { NotificationManagerCompat.from(context).cancel(id.hashCode()) }
         pushHistory.remove(record)
         savePushHistory(context)
@@ -5218,7 +5257,7 @@ object AndroidDebugTools {
                     val section = current.optJSONObject(name) ?: JSONObject().also { current.put(name, it) }
                     fields.keys().forEach { field -> section.put(field, fields.get(field)) }
                 }
-                val message = applyNetworkInjectionSettingsJSON(current.toString())
+                val message = applyNetworkInjectionSettings(current.toString(), resetTransientState = false)
                 if (message == "Network injection settings applied.") ok(message) else fail(message)
             }
             "network.history.reload" -> {
@@ -5322,7 +5361,7 @@ object AndroidDebugTools {
                 val ctx = context ?: return fail("Android runtime has not been installed.")
                 val info = args.optJSONObject("userInfo")
                 val userInfo = info?.keys()?.asSequence()?.associateWith { info.optString(it) } ?: emptyMap()
-                ok(schedulePushNotification(
+                val result = schedulePush(
                     ctx,
                     args.optString("title"),
                     args.optString("body"),
@@ -5333,7 +5372,8 @@ object AndroidDebugTools {
                     args.optString("category").ifEmpty { null },
                     userInfo,
                     requestedID = args.optString("id").ifBlank { null }
-                ))
+                )
+                if (result.accepted) ok(result.message) else fail(result.message)
             }
             "push.template" -> ok(simulatePushNotificationFromTemplate(args.optString("name"), args.optDouble("delay", 0.0).toLong()))
             "push.interact" -> ok(simulatePushNotificationInteraction(args.optString("id")))

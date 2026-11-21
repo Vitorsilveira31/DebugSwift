@@ -281,18 +281,23 @@ final class DebugSwiftURLProtocol: URLProtocol {
 
     /// The protocol Foundation would have picked for `task` had DebugSwift not been first: the
     /// first one after DebugSwift's in the task's own session configuration, so a protocol the
-    /// host added (a mock, a custom transport) still answers. Foundation's defaults are the
-    /// fallback when the session cannot be read.
+    /// host added there (a mock, a custom transport) still answers. Like Foundation, it asks each
+    /// class `canInit(with:)` with the task's current request.
+    ///
+    /// When none of the session's classes takes the request, Foundation asks the classes registered
+    /// with `URLProtocol.registerClass(_:)`. swift-corelibs-foundation keeps that list internal, so
+    /// Foundation's built-in protocols answer instead: a protocol only registered globally doesn't
+    /// see requests DebugSwift captures. Listing it in the session's `protocolClasses` keeps it.
     private static func foundationProtocol(for task: URLSessionTask) -> URLProtocol.Type? {
+        guard let request = task.currentRequest ?? task.originalRequest else { return nil }
         let capture = ObjectIdentifier(DebugSwiftURLProtocol.self)
         func first(in classes: [AnyClass]?) -> URLProtocol.Type? {
             (classes ?? [])
                 .compactMap { $0 as? URLProtocol.Type }
-                .first { ObjectIdentifier($0) != capture && $0.canInit(with: task) }
+                .first { ObjectIdentifier($0) != capture && $0.canInit(with: request) }
         }
-        // Foundation's own order: the session's classes first, and when none of them takes the
-        // request, its built-in protocols. URLSession.shared lists none of its own, so its requests
-        // always come to the second step.
+        // The session's classes first, then Foundation's built-in protocols. URLSession.shared lists
+        // none of its own, so its requests always come to the second step.
         return first(in: session(of: task)?.configuration.protocolClasses)
             ?? first(in: URLSessionConfiguration.default.protocolClasses)
     }
@@ -480,9 +485,12 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
     }
 
     func urlProtocol(_ protocol: URLProtocol, didFailWithError error: Error) {
-        if (error as? URLError)?.code != .cancelled, markRecorded() {
-            DebugSwiftURLProtocol.record(request, startedAt: startedAt, outcome: .failure(description: error.localizedDescription))
-        }
+        // A failure reported after the load was stopped is not recorded: the app cancelled it.
+        guard report({
+            if (error as? URLError)?.code != .cancelled, markRecorded() {
+                DebugSwiftURLProtocol.record(request, startedAt: startedAt, outcome: .failure(description: error.localizedDescription))
+            }
+        }) else { return }
         guard report({ client?.urlProtocol(`protocol`, didFailWithError: error) }) else { return }
         report { if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didFailWithError: error) } }
     }

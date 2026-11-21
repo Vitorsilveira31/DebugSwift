@@ -71,7 +71,10 @@ real body, which Foundation streams to it directly; and download tasks honor del
 failures, not rules that answer with an HTTP response. For a task read through a session delegate
 (no completion handler, no `async`), the inspector shows status, headers and timing but not the
 body: corelibs hands those chunks from its protocol straight to the session's delegate, which is
-fixed when the session is created. Swift `URLSessionWebSocketTask` sockets are
+fixed when the session is created. A protocol registered only with
+`URLProtocol.registerClass(_:)` doesn't answer captured requests: corelibs keeps that registry
+internal, so DebugSwift can't consult it, and Foundation's built-in protocols send the request
+instead. List such a protocol in the session's `protocolClasses` to keep it. Swift `URLSessionWebSocketTask` sockets are
 not captured on Android; OkHttp sockets wrapped in `DebugSwiftWebSocketListener` are.
 `Example/Android/CaptureCheck/run.sh` checks this capture against corelibs on a device or emulator:
 host protocols, downloads, timeouts, masking of large bodies, rewrites, and stops during injected

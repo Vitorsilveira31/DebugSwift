@@ -55,6 +55,21 @@ final class HostProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+/// A host protocol that, like Foundation, decides from the request: it accepts `request-only.test`
+/// requests and rejects the task overload, which Foundation never asks.
+final class RequestOnlyProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "request-only.test" }
+    override class func canInit(with task: URLSessionTask) -> Bool { false }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("request-only".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
 func capturedSession(_ configure: (URLSessionConfiguration) -> Void = { _ in }) -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [HostProtocol.self]
@@ -74,9 +89,16 @@ func fetch(_ session: URLSession, _ url: String) async -> (status: Int, body: St
     return result
 }
 
+/// The newest record for a URL ending in `suffix`. Recording runs in its own task, so it is polled
+/// for up to five seconds rather than read once after a fixed sleep.
 func latestRecord(endingWith suffix: String) async -> NetworkRecord? {
-    try? await Task.sleep(nanoseconds: 300_000_000)
-    return await NetworkRecorder.shared.snapshot().last { $0.url.hasSuffix(suffix) }
+    for _ in 0..<100 {
+        if let record = await NetworkRecorder.shared.snapshot().last(where: { $0.url.hasSuffix(suffix) }) {
+            return record
+        }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+    return nil
 }
 
 /// Records what the capture reports to `DebugSwift.Network.shared.delegate`.
@@ -163,6 +185,11 @@ DebugSwiftURLSessionCapture.add(to: assetConfiguration)
 let assetSession = await fetch(URLSession(configuration: assetConfiguration), "https://jsonplaceholder.typicode.com/todos/3")
 check("session listing only another scheme's protocol", assetSession.status == 200,
       "status \(assetSession.status), error \(assetSession.error.map { "\($0)" } ?? "none")")
+
+// 1d. A protocol is picked as Foundation picks it, by `canInit(with: URLRequest)`.
+let requestOnly = await fetch(capturedSession { $0.protocolClasses = [RequestOnlyProtocol.self] }, "https://request-only.test/check")
+check("protocol picked by its request check", requestOnly.status == 200 && requestOnly.body == "request-only",
+      "status \(requestOnly.status), body \(requestOnly.body), error \(requestOnly.error.map { "\($0)" } ?? "none")")
 
 // 2. Downloads, with a completion handler and with a delegate, through the real network.
 let downloadURL = URL(string: "https://jsonplaceholder.typicode.com/todos/1")!
@@ -276,6 +303,16 @@ presentation.setShowing(false, for: second)
 presentation.sheetDidDismiss(for: second)
 check("closing the panel clears the route", !presentation.isPresented && presentation.route == nil,
       "presented \(presentation.isPresented), route \(presentation.route ?? "nil")")
+
+// The last presenter leaving closes the panel, so a later presenter does not reopen an old route.
+let lonely = DebugSwiftPresentation()
+let only = UUID()
+lonely.attach(only)
+lonely.present(route: "measurement")
+lonely.detach(only)
+lonely.attach(UUID())
+check("the last presenter leaving closes the panel", !lonely.isPresented && lonely.route == nil,
+      "presented \(lonely.isPresented), route \(lonely.route ?? "nil")")
 
 // 9. An injection call sends the fields it sets, with its own values, and the runtime writes them
 //    into its current rules (as `network.injection.patch` does): a write made between the call's

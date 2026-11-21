@@ -38,11 +38,14 @@ final class DebugSwiftPresentation {
     }
 
     /// Called when a presenter disappears. Others still on screen keep presenting; when the last
-    /// one leaves, the handler the host had before comes back, so `present` never calls itself.
+    /// one leaves, the panel closes with it (so `Measurement.isActive` is false and a later presenter
+    /// doesn't reopen an old route) and the handler the host had before comes back, so `present`
+    /// never calls itself.
     func detach(_ id: UUID) {
         guard presenters.contains(id) else { return }
         presenters.removeAll { $0 == id }
         guard presenters.isEmpty else { return }
+        dismiss()
         DebugFloatingButton.onTap = hostTap
         hostTap = nil
     }
