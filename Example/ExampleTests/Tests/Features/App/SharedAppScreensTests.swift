@@ -82,6 +82,27 @@ struct SharedAppScreensTests {
         #expect(state.entries.last?.message == "line-2900")
     }
 
+    @Test("A log tail that starts inside a character still lists its whole lines")
+    func agentLogTailUnicode() throws {
+        let url = AgentDebugLog.shared.currentLogPath()
+        let original = try? Data(contentsOf: url)
+        defer {
+            if let original { try? original.write(to: url) } else { try? FileManager.default.removeItem(at: url) }
+        }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Each line is 3-byte characters only, so the 64 KB window starts inside one of them.
+        let lines = (0..<2000).map { #"{"timestamp":\#($0),"kind":"app","location":"中中中","message":"中-\#($0)"}"# }
+        var data = Data((lines.joined(separator: "\n") + "\n").utf8)
+        let window = 64 * 1024
+        // Each newline added at the end moves the window's first byte one byte on; stop at the
+        // second byte of a "中" (E4 B8 AD), leaving two continuation bytes before the next one.
+        while data[data.count - window] != 0xB8 { data.append(UInt8(ascii: "\n")) }
+        try data.write(to: url)
+        let state = try DebugResourceClient.fetch("app.agentlog.state", as: DebugAgentLogState.self).get()
+        #expect(state.entries.count == 100)
+        #expect(state.entries.first?.message == "中-1999")
+    }
+
     @Test("Mocking a location reports it and stopping clears it")
     func location() throws {
         let previous = LocationToolkit.shared.simulatedLocation
