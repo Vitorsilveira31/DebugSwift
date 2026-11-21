@@ -118,10 +118,15 @@ enum SharedPanelRegisteredStores {
     /// `coreDataReadOnly` for Core Data, `swiftDataReadOnly` for SwiftData.
     static func isReadOnlyStoreFile(_ path: String) -> Bool {
         let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        func same(_ url: URL?) -> Bool { url.map { $0.resolvingSymlinksInPath().path == target } ?? false }
+        @Sendable func same(_ url: URL?) -> Bool { url.map { $0.resolvingSymlinksInPath().path == target } ?? false }
         if DebugSwift.Resources.shared.coreDataReadOnly,
            CoreDataManager.shared.getAvailableContexts().contains(where: { entry in
-               (entry.context.persistentStoreCoordinator?.persistentStores ?? []).contains { same($0.url) }
+               // On the context's queue: a private-queue context's coordinator is read there.
+               var backs = false
+               entry.context.performAndWait {
+                   backs = (entry.context.persistentStoreCoordinator?.persistentStores ?? []).contains { same($0.url) }
+               }
+               return backs
            }) {
             return true
         }

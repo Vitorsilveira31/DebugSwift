@@ -489,6 +489,8 @@ final class SharedPanelResources {
         // This table's count and page, read together: listing every table would count each of
         // them, and two separate reads could see two states of the file.
         let data = SQLiteManager.shared.getTablePage(from: path, table: table, limit: Self.pageSize, offset: max(0, offset))
+        // A failed read is an error, not an empty table.
+        if let error = data.error { return ["error": "\(table) could not be read: \(error)"] }
         var result: [String: Any] = ["columns": data.columns, "rows": data.rows.map(Self.texts), "offset": max(0, offset)]
         if let total = data.total { result["total"] = total }
         return result
