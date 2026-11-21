@@ -84,29 +84,42 @@ final class SharedPanelResources {
 
     // MARK: - Files
 
-    /// The sandbox folders the browser starts from.
-    private static let roots = ["Documents", "Library", "tmp"]
+    /// The sandbox folders the browser starts from, then each App Group container set with
+    /// `DebugSwift.Resources.shared.configureAppGroups(_:)`, named by its identifier.
+    private func roots() -> [(name: String, url: URL)] {
+        let home = URL(fileURLWithPath: NSHomeDirectory())
+        let sandbox = ["Documents", "Library", "tmp"].map { (name: $0, url: home.appendingPathComponent($0)) }
+        let groups = DebugSwift.Resources.shared.getAccessibleAppGroups()
+            .filter { group in !group.identifier.isEmpty && !group.identifier.contains("/") && !sandbox.contains { $0.name == group.identifier } }
+            .map { (name: $0.identifier, url: $0.url) }
+        return (sandbox + groups).map { (name: $0.name, url: $0.url.standardizedFileURL) }
+    }
 
     /// A path inside one of the roots, or nil for anything outside them.
+    ///
+    /// The check uses the location with symbolic links resolved, so a link inside a root can't
+    /// reach outside it; a link to somewhere else in the same root is followed. The URL returned
+    /// keeps the link itself, so deleting a link removes the link, not what it points to.
     private func resolve(_ path: String) -> URL? {
         let parts = path.split(separator: "/").map(String.init)
-        guard let root = parts.first, Self.roots.contains(root) else { return nil }
-        let base = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(root).standardizedFileURL
+        guard let name = parts.first, let base = roots().first(where: { $0.name == name })?.url else { return nil }
         let target = parts.dropFirst().reduce(base) { $0.appendingPathComponent($1) }.standardizedFileURL
-        guard target.path == base.path || target.path.hasPrefix(base.path + "/") else { return nil }
+        let resolvedBase = base.resolvingSymlinksInPath().path
+        let resolvedTarget = target.resolvingSymlinksInPath().path
+        guard resolvedTarget == resolvedBase || resolvedTarget.hasPrefix(resolvedBase + "/") else { return nil }
         return target
     }
 
     private func listFiles(_ path: String) -> [String: Any] {
-        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if trimmed.isEmpty {
             return [
                 "path": "",
-                "entries": Self.roots.map { ["name": $0, "isDirectory": true, "size": 0, "modified": 0] }
+                "entries": roots().map { ["name": $0.name, "isDirectory": true, "size": 0, "modified": 0] }
             ]
         }
         guard let directory = resolve(trimmed) else {
-            return ["error": "The file browser is limited to the app's Documents, Library and tmp folders."]
+            return ["error": "The file browser is limited to the app's Documents, Library and tmp folders and its configured App Groups."]
         }
         let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
         guard let items = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys) else {
@@ -155,9 +168,11 @@ final class SharedPanelResources {
     }
 
     private func deleteFile(_ path: String) -> [String: Any] {
-        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let url = resolve(trimmed) else { return ["error": "Path is outside the app's private storage."] }
-        guard trimmed.contains("/") else { return ["error": "Cannot delete a storage root."] }
+        // Compare the resolved URL: "tmp/." or "Documents/child/.." name a root too.
+        let rootPaths = roots().map(\.url.path)
+        guard !rootPaths.contains(url.path) else { return ["error": "Cannot delete a storage root."] }
         guard FileManager.default.fileExists(atPath: url.path) else { return ["error": "Path not found: \(path)"] }
         do {
             try FileManager.default.removeItem(at: url)
@@ -188,7 +203,10 @@ final class SharedPanelResources {
         let defaults = UserDefaults.standard.dictionaryRepresentation()
         let values: [[String: Any]] = defaults.keys.sorted().filter { !Self.hiddenDefaults.contains($0) }.map { key in
             let value = defaults[key] ?? ""
-            return ["key": key, "type": Self.typeName(value), "value": "\(value)"]
+            let type = Self.typeName(value)
+            // A Boolean prints as 1 or 0; show true or false, which is what saving accepts.
+            let text = type == "Boolean" ? String((value as? Bool) ?? false) : "\(value)"
+            return ["key": key, "type": type, "value": text]
         }
         return ["stores": [["name": Self.standardStore, "values": values]]]
     }

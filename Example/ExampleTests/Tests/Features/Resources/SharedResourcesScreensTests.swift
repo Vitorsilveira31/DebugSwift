@@ -32,10 +32,78 @@ struct SharedResourcesScreensTests {
 
         #expect((try? DebugResourceClient.fetch("files.list", ["path": "Documents/../../"], as: DebugFileListing.self).get()) == nil)
         #expect((try? DebugResourceClient.fetch("files.delete", ["path": "tmp"], as: DebugFileDeletion.self).get()) == nil)
+        for root in ["tmp/.", "Documents/child/..", "tmp/"] {
+            #expect((try? DebugResourceClient.fetch("files.delete", ["path": root], as: DebugFileDeletion.self).get()) == nil)
+        }
+        #expect(FileManager.default.fileExists(atPath: url.path))
+
+        // A name ending in a space is its own file: deleting it leaves the one without the space.
+        let spaced = url.appendingPathExtension("bak")
+        try "plain".write(to: spaced, atomically: true, encoding: .utf8)
+        try "spaced".write(to: URL(fileURLWithPath: spaced.path + " "), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: spaced) }
+        let spacedDeletion = try DebugResourceClient.fetch("files.delete", ["path": "tmp/\(name).bak "], as: DebugFileDeletion.self).get()
+        #expect(spacedDeletion.ok)
+        #expect(FileManager.default.fileExists(atPath: spaced.path))
+        #expect(!FileManager.default.fileExists(atPath: spaced.path + " "))
 
         let deletion = try DebugResourceClient.fetch("files.delete", ["path": "tmp/\(name)"], as: DebugFileDeletion.self).get()
         #expect(deletion.ok)
         #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test("A configured App Group is a root of the file browser")
+    func appGroups() throws {
+        let identifier = "group.debugswift.tests"
+        // The test app has no App Group entitlement, so a folder stands in for the container.
+        let container = FileManager.default.temporaryDirectory.appendingPathComponent("group-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        let lookup = DebugSwift.Resources.appGroupContainer
+        DebugSwift.Resources.appGroupContainer = { $0 == identifier ? container : nil }
+        DebugSwift.Resources.shared.addAppGroup(identifier)
+        defer {
+            DebugSwift.Resources.shared.removeAppGroup(identifier)
+            DebugSwift.Resources.appGroupContainer = lookup
+            try? FileManager.default.removeItem(at: container)
+        }
+        let name = "shared-group-\(UUID().uuidString.prefix(8)).txt"
+        try "from the group".write(to: container.appendingPathComponent(name), atomically: true, encoding: .utf8)
+
+        let roots = try DebugResourceClient.fetch("files.list", ["path": ""], as: DebugFileListing.self).get()
+        #expect(roots.entries.map(\.name) == ["Documents", "Library", "tmp", identifier])
+        let listing = try DebugResourceClient.fetch("files.list", ["path": identifier], as: DebugFileListing.self).get()
+        #expect(listing.entries.contains { $0.name == name })
+        let content = try DebugResourceClient.fetch("files.read", ["path": "\(identifier)/\(name)"], as: DebugFileContent.self).get()
+        #expect(content.text == "from the group")
+        #expect((try? DebugResourceClient.fetch("files.delete", ["path": identifier], as: DebugFileDeletion.self).get()) == nil)
+    }
+
+    @Test("A symbolic link can't lead the file browser out of its folder, and deleting a link keeps its target")
+    func symbolicLinks() throws {
+        let documents = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
+        try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+        let tag = UUID().uuidString.prefix(8)
+        let outside = documents.appendingPathComponent("outside-\(tag)")
+        let folder = documents.appendingPathComponent("folder-\(tag)")
+        let inside = documents.appendingPathComponent("inside-\(tag)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "kept".write(to: folder.appendingPathComponent("note.txt"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: outside, withDestinationURL: Bundle.main.bundleURL)
+        try FileManager.default.createSymbolicLink(at: inside, withDestinationURL: folder)
+        defer { [outside, inside, folder].forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        let plist = Bundle.main.bundleURL.appendingPathComponent("Info.plist")
+        #expect((try? DebugResourceClient.fetch("files.list", ["path": "Documents/outside-\(tag)"], as: DebugFileListing.self).get()) == nil)
+        #expect((try? DebugResourceClient.fetch("files.read", ["path": "Documents/outside-\(tag)/Info.plist"], as: DebugFileContent.self).get()) == nil)
+        #expect((try? DebugResourceClient.fetch("files.delete", ["path": "Documents/outside-\(tag)/Info.plist"], as: DebugFileDeletion.self).get()) == nil)
+        #expect(FileManager.default.fileExists(atPath: plist.path))
+
+        let content = try DebugResourceClient.fetch("files.read", ["path": "Documents/inside-\(tag)/note.txt"], as: DebugFileContent.self).get()
+        #expect(content.text == "kept")
+        let deletion = try DebugResourceClient.fetch("files.delete", ["path": "Documents/inside-\(tag)"], as: DebugFileDeletion.self).get()
+        #expect(deletion.ok)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: inside.path)) == nil)
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("note.txt").path))
     }
 
     @Test("Preferences list, save with the key's type, delete, and show changes since a snapshot")
@@ -76,6 +144,10 @@ struct SharedResourcesScreensTests {
         #expect(values.first { $0.key == number }?.type == "Int")
         #expect(values.first { $0.key == number + "-double" }?.type == "Double")
         #expect(values.first { $0.key == flag }?.type == "Boolean")
+        #expect(values.first { $0.key == flag }?.value == "true")
+        // The value shown saves back unchanged.
+        #expect(DebugSwiftRuntime.perform(featureID: "preferences", actionID: "set_preference", value: "Standard|\(flag)=false") == "Saved \(flag).")
+        #expect(UserDefaults.standard.object(forKey: flag) as? Bool == false)
         _ = DebugSwiftRuntime.perform(featureID: "preferences", actionID: "set_preference", value: "Standard|\(number)=2")
         #expect(UserDefaults.standard.integer(forKey: number) == 2)
     }
