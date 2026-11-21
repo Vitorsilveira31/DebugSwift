@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// This process's Logcat, filterable by minimum level and by text in the tag or message.
+/// This process's log (Logcat on Android, OSLog on iOS), filterable by minimum level and by text in
+/// the tag or message.
 struct DebugLogcatView: View {
     @State var entries: [DebugLogEntry] = []
     @State var filter = ""
     @State var level = "V"
+    @State var includeApple = false
     @State var failure = ""
 
     let levels = ["V", "D", "I", "W", "E"]
@@ -24,6 +26,15 @@ struct DebugLogcatView: View {
                     Spacer()
                     Button("Refresh") { load() }
                 }
+                if !DebugPlatform.isAndroid {
+                    Toggle("Include Apple subsystems", isOn: Binding(
+                        get: { includeApple },
+                        set: { include in
+                            includeApple = include
+                            load()
+                        },
+                    ))
+                }
             }
             if !failure.isEmpty {
                 Text(verbatim: failure).foregroundColor(Color.red)
@@ -37,11 +48,15 @@ struct DebugLogcatView: View {
     }
 
     func load() {
-        let result = DebugResourceClient.fetch("app.logcat", ["filter": filter, "level": level], as: DebugLogListing.self)
+        let result = DebugResourceClient.fetch(
+            "app.logcat",
+            ["filter": filter, "level": level, "apple": includeApple ? "true" : "false"],
+            as: DebugLogListing.self,
+        )
         switch result {
         case let .success(value):
             entries = value.entries
-            failure = value.entries.isEmpty ? "No matching Logcat records." : ""
+            failure = value.entries.isEmpty ? (DebugPlatform.isAndroid ? "No matching Logcat records." : "No matching log entries.") : ""
         case let .failure(error):
             failure = error.message
         }

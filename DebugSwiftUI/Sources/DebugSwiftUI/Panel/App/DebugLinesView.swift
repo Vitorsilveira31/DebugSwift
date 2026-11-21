@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A tool whose snapshot is one entry per line (the event timeline), with a text filter.
+/// A tool whose snapshot is one entry per line (the event timeline), with a text filter and Clear.
 struct DebugLinesView: View {
     let featureID: String
     let title: String
@@ -16,6 +16,10 @@ struct DebugLinesView: View {
             Section {
                 TextField("Filter", text: $filter)
                 Button("Refresh") { load() }
+                Button("Clear", role: .destructive) {
+                    _ = DebugSwiftRuntime.perform(featureID: featureID, actionID: "clear")
+                    load()
+                }
             }
             ForEach(0..<visible.count, id: \.self) { index in
                 Text(verbatim: visible[index])

@@ -15,6 +15,8 @@ struct DebugCrashExit: Decodable, Identifiable {
 struct DebugCrashListing: Decodable {
     let reports: [String]
     let exits: [DebugCrashExit]
+    /// iOS only: each report's screen at the moment of the crash, as base64 PNG ("" when none).
+    let screenshots: [String]?
 }
 
 struct DebugLogEntry: Decodable {
