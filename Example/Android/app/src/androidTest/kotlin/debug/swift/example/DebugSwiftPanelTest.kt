@@ -200,7 +200,7 @@ class DebugSwiftPanelTest {
     }
 
     @Test
-    fun pushStateComesBackExactlyAfterARestart() {
+    fun pushStateComesBackExactlyAfterAReload() {
         fun state() = org.json.JSONObject(AndroidDebugTools.pushStateJSON())
         val preferences = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
             .getSharedPreferences("DebugSwift.PushNotifications", android.content.Context.MODE_PRIVATE)
@@ -218,7 +218,7 @@ class DebugSwiftPanelTest {
             }
             preferences.edit().putString("history", history.toString()).commit()
 
-            // Load the push state again from what was saved, as a restart does.
+            // Load the push state again from what was saved, through the launch path (PushRestartTest restarts the process).
             AndroidDebugTools.hostAPI("push.reloadState", "{}")
             assertTrue("The delay changed: ${state().optDouble("interactionDelay")}", state().optDouble("interactionDelay") == 2.7)
             assertTrue("The history limit changed: ${state().optInt("maxHistory")}", state().optInt("maxHistory") == 1_500)

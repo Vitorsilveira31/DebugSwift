@@ -277,23 +277,57 @@ presentation.sheetDidDismiss(for: second)
 check("closing the panel clears the route", !presentation.isPresented && presentation.route == nil,
       "presented \(presentation.isPresented), route \(presentation.route ?? "nil")")
 
-// 9. An injection change sends only the fields it changed, so rules another writer set stay.
-var rewriting = DebugSwiftNetworkInjection()
-rewriting.rewrite.isEnabled = true
-rewriting.rewrite.rules = [.init(urlPattern: "https://a.test/*", responseBody: "A")]
-var disabled = rewriting
-disabled.rewrite.isEnabled = false
-let disabling = disabled.changedSections(from: rewriting)
+// 9. An injection call sends the fields it sets, with its own values, and the runtime writes them
+//    into its current rules (as `network.injection.patch` does): a write made between the call's
+//    read and its patch keeps every field the call doesn't set.
+func patched(_ settings: DebugSwiftNetworkInjection, with sections: [String: [String: Any]]) -> DebugSwiftNetworkInjection {
+    let data = try! JSONEncoder().encode(settings)
+    var json = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+    for (name, fields) in sections {
+        var section = json[name] as? [String: Any] ?? [:]
+        for (key, value) in fields { section[key] = value is NSNull ? nil : value }
+        json[name] = section
+    }
+    return try! JSONDecoder().decode(DebugSwiftNetworkInjection.self, from: JSONSerialization.data(withJSONObject: json))
+}
+var rulesA = DebugSwiftNetworkInjection()
+rulesA.rewrite.isEnabled = true
+rulesA.rewrite.rules = [.init(urlPattern: "https://a.test/*", responseBody: "A")]
+let disabling = DebugSwiftNetworkInjection.Change.disableRewrite.sections(on: rulesA)
 check("disabling a rewrite sends only isEnabled",
       Set(disabling.keys) == ["rewrite"] && Set(disabling["rewrite"]?.keys ?? [:].keys) == ["isEnabled"] && disabling["rewrite"]?["isEnabled"] as? Bool == false,
       "\(disabling)")
-var delayed = rewriting
-delayed.delay.isEnabled = true
-delayed.delay.fixedDelay = 2
-let delaying = delayed.changedSections(from: rewriting)
-check("enabling a delay sends only its delay fields",
-      Set(delaying.keys) == ["delay"] && Set(delaying["delay"]?.keys ?? [:].keys) == ["isEnabled", "fixedDelay"],
+var rulesB = rulesA
+rulesB.rewrite.rules = [.init(urlPattern: "https://b.test/*", responseBody: "B")]
+let afterImport = patched(rulesB, with: disabling)
+check("disabling a rewrite keeps rules imported meanwhile",
+      !afterImport.rewrite.isEnabled && afterImport.rewrite.rules.map(\.urlPattern) == ["https://b.test/*"],
+      "\(afterImport.rewrite)")
+
+// enableRequestDelay(3) reads an enabled 1 s delay; a native writer then disables it at 2 s.
+var oneSecond = DebugSwiftNetworkInjection()
+oneSecond.delay.isEnabled = true
+oneSecond.delay.fixedDelay = 1
+let delaying = DebugSwiftNetworkInjection.Change.delay(fixedDelay: 3, urlPatterns: [], httpMethods: []).sections(on: oneSecond)
+check("enabling a delay sends every field it sets, even unchanged ones",
+      Set(delaying.keys) == ["delay"] && Set(delaying["delay"]?.keys ?? [:].keys) == ["isEnabled", "fixedDelay", "urlPatterns", "httpMethods"],
       "\(delaying)")
+var nativeWrite = oneSecond
+nativeWrite.delay.isEnabled = false
+nativeWrite.delay.fixedDelay = 2
+let delayed = patched(nativeWrite, with: delaying)
+check("a delay enabled after a native write is on at its own value",
+      delayed.delay.isEnabled && delayed.delay.fixedDelay == 3, "\(delayed.delay)")
+
+// A range delay clears the fixed delay; a timeout failure leaves the status codes alone.
+let ranging = DebugSwiftNetworkInjection.Change.delay(fixedDelay: nil, minDelay: 1, maxDelay: 4, urlPatterns: [], httpMethods: []).sections(on: oneSecond)
+check("a range delay clears the fixed delay", ranging["delay"]?["fixedDelay"] is NSNull && patched(oneSecond, with: ranging).delay.fixedDelay == nil,
+      "\(ranging)")
+let timeout = DebugSwiftNetworkInjection.Change.failure(rate: 0.5, type: "timeout", urlPatterns: [], httpMethods: []).sections(on: oneSecond)
+check("a timeout failure leaves the status codes alone", timeout["failure"]?["customStatusCodes"] == nil && timeout["failure"]?["isEnabled"] as? Bool == true,
+      "\(timeout)")
+let both = DebugSwiftNetworkInjection.Change.disableDelay.then(.disableFailure).sections(on: oneSecond)
+check("combined changes send each section's fields", Set(both.keys) == ["delay", "failure"], "\(both)")
 
 print(failures.isEmpty ? "ALL PASSED" : "FAILED: \(failures.joined(separator: ", "))")
 exit(failures.isEmpty ? 0 : 1)

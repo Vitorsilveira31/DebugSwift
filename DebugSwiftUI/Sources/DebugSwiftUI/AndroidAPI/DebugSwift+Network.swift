@@ -300,12 +300,7 @@ extension DebugSwift {
         // MARK: - Network Injection
 
         public func enableRequestDelay(_ delay: TimeInterval, urlPatterns: [String] = [], httpMethods: [String] = []) {
-            Self.updateInjection { settings in
-                settings.delay.isEnabled = true
-                settings.delay.fixedDelay = delay
-                settings.delay.urlPatterns = urlPatterns
-                settings.delay.httpMethods = httpMethods
-            }
+            Self.updateInjection(.delay(fixedDelay: delay, urlPatterns: urlPatterns, httpMethods: httpMethods))
         }
 
         public func enableRequestDelay(
@@ -314,18 +309,17 @@ extension DebugSwift {
             urlPatterns: [String] = [],
             httpMethods: [String] = []
         ) {
-            Self.updateInjection { settings in
-                settings.delay.isEnabled = true
-                settings.delay.fixedDelay = nil
-                settings.delay.minDelay = minDelay
-                settings.delay.maxDelay = Swift.max(minDelay, maxDelay)
-                settings.delay.urlPatterns = urlPatterns
-                settings.delay.httpMethods = httpMethods
-            }
+            Self.updateInjection(.delay(
+                fixedDelay: nil,
+                minDelay: minDelay,
+                maxDelay: Swift.max(minDelay, maxDelay),
+                urlPatterns: urlPatterns,
+                httpMethods: httpMethods
+            ))
         }
 
         public func disableRequestDelay() {
-            Self.updateInjection { $0.delay.isEnabled = false }
+            Self.updateInjection(.disableDelay)
         }
 
         public func enableFailureInjection(
@@ -334,13 +328,12 @@ extension DebugSwift {
             urlPatterns: [String] = [],
             httpMethods: [String] = []
         ) {
-            Self.updateInjection { settings in
-                settings.failure.isEnabled = true
-                settings.failure.failureRate = Swift.min(Swift.max(failureRate, 0), 1)
-                settings.failure.urlPatterns = urlPatterns
-                settings.failure.httpMethods = httpMethods
-                Self.apply(failureType, to: &settings.failure)
-            }
+            Self.updateInjection(Self.failure(
+                rate: Swift.min(Swift.max(failureRate, 0), 1),
+                type: failureType,
+                urlPatterns: urlPatterns,
+                httpMethods: httpMethods
+            ))
         }
 
         public func enableHTTPErrorInjection(
@@ -349,18 +342,17 @@ extension DebugSwift {
             urlPatterns: [String] = [],
             httpMethods: [String] = []
         ) {
-            Self.updateInjection { settings in
-                settings.failure.isEnabled = true
-                settings.failure.failureRate = Swift.min(Swift.max(failureRate, 0), 1)
-                settings.failure.failureType = "httpError"
-                settings.failure.customStatusCodes = statusCodes
-                settings.failure.urlPatterns = urlPatterns
-                settings.failure.httpMethods = httpMethods
-            }
+            Self.updateInjection(.failure(
+                rate: Swift.min(Swift.max(failureRate, 0), 1),
+                type: "httpError",
+                statusCodes: statusCodes,
+                urlPatterns: urlPatterns,
+                httpMethods: httpMethods
+            ))
         }
 
         public func disableFailureInjection() {
-            Self.updateInjection { $0.failure.isEnabled = false }
+            Self.updateInjection(.disableFailure)
         }
 
         public func configureNetworkInjection(
@@ -368,39 +360,39 @@ extension DebugSwift {
             failureConfig: NetworkFailureConfig? = nil,
             rewriteConfig: ResponseBodyRewriteConfig? = nil
         ) {
-            Self.updateInjection { settings in
-                if let delayConfig {
-                    settings.delay.isEnabled = delayConfig.isEnabled
-                    settings.delay.fixedDelay = delayConfig.fixedDelay
-                    settings.delay.minDelay = delayConfig.minDelay
-                    settings.delay.maxDelay = delayConfig.maxDelay
-                    settings.delay.urlPatterns = delayConfig.urlPatterns
-                    settings.delay.httpMethods = delayConfig.httpMethods
-                }
-                if let failureConfig {
-                    settings.failure.isEnabled = failureConfig.isEnabled
-                    settings.failure.failureRate = failureConfig.failureRate
-                    settings.failure.urlPatterns = failureConfig.urlPatterns
-                    settings.failure.httpMethods = failureConfig.httpMethods
-                    settings.failure.customStatusCodes = failureConfig.customStatusCodes
-                    Self.apply(failureConfig.failureType, to: &settings.failure)
-                }
-                if let rewriteConfig {
-                    settings.rewrite.isEnabled = rewriteConfig.isEnabled
-                    settings.rewrite.rules = rewriteConfig.rules.map(Self.rule)
-                }
+            var change = DebugSwiftNetworkInjection.Change()
+            if let delayConfig {
+                change = change.then(.delay(
+                    isEnabled: delayConfig.isEnabled,
+                    fixedDelay: delayConfig.fixedDelay,
+                    minDelay: delayConfig.minDelay,
+                    maxDelay: delayConfig.maxDelay,
+                    urlPatterns: delayConfig.urlPatterns,
+                    httpMethods: delayConfig.httpMethods
+                ))
             }
+            if let failureConfig {
+                change = change.then(Self.failure(
+                    isEnabled: failureConfig.isEnabled,
+                    rate: failureConfig.failureRate,
+                    type: failureConfig.failureType,
+                    statusCodes: failureConfig.customStatusCodes,
+                    urlPatterns: failureConfig.urlPatterns,
+                    httpMethods: failureConfig.httpMethods
+                ))
+            }
+            if let rewriteConfig {
+                change = change.then(.rewrite(isEnabled: rewriteConfig.isEnabled, rules: rewriteConfig.rules.map(Self.rule)))
+            }
+            Self.updateInjection(change)
         }
 
         public func enableResponseBodyRewrite(rules: [ResponseBodyRewriteRule]) {
-            Self.updateInjection { settings in
-                settings.rewrite.isEnabled = true
-                settings.rewrite.rules = rules.map(Self.rule)
-            }
+            Self.updateInjection(.rewrite(isEnabled: true, rules: rules.map(Self.rule)))
         }
 
         public func disableResponseBodyRewrite() {
-            Self.updateInjection { $0.rewrite.isEnabled = false }
+            Self.updateInjection(.disableRewrite)
         }
 
         private static func rule(_ rule: ResponseBodyRewriteRule) -> DebugSwiftNetworkInjection.Rule {
@@ -415,43 +407,60 @@ extension DebugSwift {
             return converted
         }
 
-        private static func apply(_ type: NetworkFailureConfig.FailureType, to failure: inout DebugSwiftNetworkInjection.Failure) {
+        /// The failure change for a public failure type. An `httpError` with a status answers with
+        /// that status alone; otherwise `statusCodes` (when given) are the statuses kept.
+        private static func failure(
+            isEnabled: Bool = true,
+            rate: Double,
+            type: NetworkFailureConfig.FailureType,
+            statusCodes: [Int]? = nil,
+            urlPatterns: [String],
+            httpMethods: [String]
+        ) -> DebugSwiftNetworkInjection.Change {
+            let name: String
+            var codes = statusCodes
+            var custom: (domain: String, code: Int, description: String)?
             switch type {
-            case .timeout: failure.failureType = "timeout"
-            case .connectionLost: failure.failureType = "connectionLost"
-            case .notConnectedToInternet: failure.failureType = "notConnectedToInternet"
-            case .cannotFindHost: failure.failureType = "cannotFindHost"
-            case .dnsLookupFailed: failure.failureType = "dnsLookupFailed"
-            case .sslError: failure.failureType = "sslError"
-            case .cancelled: failure.failureType = "cancelled"
+            case .timeout: name = "timeout"
+            case .connectionLost: name = "connectionLost"
+            case .notConnectedToInternet: name = "notConnectedToInternet"
+            case .cannotFindHost: name = "cannotFindHost"
+            case .dnsLookupFailed: name = "dnsLookupFailed"
+            case .sslError: name = "sslError"
+            case .cancelled: name = "cancelled"
             case let .httpError(statusCode):
-                failure.failureType = "httpError"
-                if let statusCode { failure.customStatusCodes = [statusCode] }
+                name = "httpError"
+                if let statusCode { codes = [statusCode] }
             case let .custom(domain, code, description):
-                failure.failureType = "custom"
-                failure.customDomain = domain
-                failure.customCode = code
-                failure.customDescription = description
+                name = "custom"
+                custom = (domain, code, description)
             }
+            return .failure(
+                isEnabled: isEnabled,
+                rate: rate,
+                type: name,
+                statusCodes: codes,
+                custom: custom,
+                urlPatterns: urlPatterns,
+                httpMethods: httpMethods
+            )
         }
 
         private static let injectionLock = NSLock()
 
-        /// Changes the rules and applies the change before returning, so a request started right
-        /// after the call already sees it. Only the fields the change touched are sent (for
-        /// `disableResponseBodyRewrite()`, just `rewrite.isEnabled`), and the runtime writes them
-        /// into its current rules under the lock its other writers use. So rules an import or the
-        /// panel wrote in the meantime are kept, and nothing needs retrying.
-        private static func updateInjection(_ change: (inout DebugSwiftNetworkInjection) -> Void) {
+        /// Applies the change before returning, so a request started right after the call already
+        /// sees it. Only the fields the call sets are sent (for `disableResponseBodyRewrite()`, just
+        /// `rewrite.isEnabled`), with the call's values, and the runtime writes them into its current
+        /// rules under the lock its other writers use. The call lands as if it ran after any other
+        /// writer: rules an import or the panel wrote meanwhile are kept, and nothing needs retrying.
+        private static func updateInjection(_ change: DebugSwiftNetworkInjection.Change) {
             injectionLock.lock()
             defer { injectionLock.unlock() }
             let reply = DebugSwiftHost.object("network.injection.get")
             guard let raw = reply["settings"],
                   let data = try? JSONSerialization.data(withJSONObject: raw),
-                  let before = try? JSONDecoder().decode(DebugSwiftNetworkInjection.self, from: data) else { return }
-            var after = before
-            change(&after)
-            let sections = after.changedSections(from: before)
+                  let current = try? JSONDecoder().decode(DebugSwiftNetworkInjection.self, from: data) else { return }
+            let sections = change.sections(on: current)
             guard !sections.isEmpty else { return }
             DebugSwiftHost.call("network.injection.patch", ["sections": sections])
         }
