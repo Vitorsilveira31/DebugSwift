@@ -64,6 +64,10 @@ public enum HAREncoder {
     /// Encode captures into a HAR 1.2 dictionary — the 1.2 schema is the lingua
     /// franca of network tooling, so the output imports into Chrome DevTools,
     /// Charles and Proxyman without conversion.
+    ///
+    /// Bodies are written as given: callers pass them already masked by `NetworkSanitizer`, whose
+    /// built-in rules cover JSON (also when there is no `Content-Type`) and form-encoded bodies only.
+    /// A secret in a `text/*`, XML or other body reaches the export unless a `customBodyRedactor` masks it.
     public static func encode(_ captures: [HARCapture]) -> [String: Any] {
         let entries = captures.map { capture -> [String: Any] in
             var request: [String: Any] = [
