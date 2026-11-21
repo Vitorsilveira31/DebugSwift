@@ -110,7 +110,8 @@ struct DebugKeystoreListing: Decodable {
 
 struct DebugDatabaseInfo: Decodable, Identifiable {
     let name: String
-    let size: Int
+    /// Absent for a registered Core Data or SwiftData store, which is read through its context.
+    let size: Int?
     var id: String { name }
 }
 

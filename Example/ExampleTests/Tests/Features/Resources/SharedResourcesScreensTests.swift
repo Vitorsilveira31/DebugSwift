@@ -354,7 +354,9 @@ struct SharedResourcesScreensTests {
         CoreDataManager.shared.configure(contexts: ["Notes": container.viewContext])
 
         let listing = try DebugResourceClient.fetch("db.list", as: DebugDatabaseListing.self).get()
-        #expect(listing.databases.contains { $0.name == "Core Data/Notes" })
+        let registered = try #require(listing.databases.first { $0.name == "Core Data/Notes" })
+        // No file, so no size.
+        #expect(registered.size == nil)
         let tables = try DebugResourceClient.fetch("db.tables", ["db": "Core Data/Notes"], as: DebugTableListing.self).get()
         #expect(tables.tables.first { $0.name == "Note" }?.rows == 3)
         let rows = try DebugResourceClient.fetch("db.rows", ["db": "Core Data/Notes", "table": "Note", "offset": "1"], as: DebugTableData.self).get()
