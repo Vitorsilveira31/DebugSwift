@@ -198,12 +198,28 @@ final class SharedPanelResources {
     }
 
     /// "store|key=value". The value keeps the type the key already has (String for a new key).
+    /// The shared editor's JSON, `{"store", "key", "value"}`, so a key may hold "=" or "|". Plain
+    /// `store|key=value` text still works for keys without them.
+    static func preferencePayload(_ value: String) -> (key: String, value: String?)? {
+        guard value.hasPrefix("{") else { return nil }
+        guard let object = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any],
+              let key = object["key"] as? String else { return ("", nil) }
+        return (key, object["value"] as? String)
+    }
+
     private func setPreference(_ value: String) -> String {
-        let parts = value.split(separator: "|", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return "Enter store|key=value." }
-        let pair = parts[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
-        guard pair.count == 2, !pair[0].isEmpty else { return "Enter key=value." }
-        let (key, text) = (pair[0], pair[1])
+        let key: String
+        let text: String
+        if let payload = Self.preferencePayload(value) {
+            guard !payload.key.isEmpty, let entered = payload.value else { return "Enter a key and a value." }
+            (key, text) = (payload.key, entered)
+        } else {
+            let parts = value.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return "Enter store|key=value." }
+            let pair = parts[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            guard pair.count == 2, !pair[0].isEmpty else { return "Enter key=value." }
+            (key, text) = (pair[0], pair[1])
+        }
         let defaults = UserDefaults.standard
         switch defaults.object(forKey: key).map(Self.typeName) {
         case "Boolean":
@@ -225,10 +241,16 @@ final class SharedPanelResources {
 
     /// "store|key".
     private func deletePreference(_ value: String) -> String {
-        let parts = value.split(separator: "|", maxSplits: 1).map(String.init)
-        guard parts.count == 2, !parts[1].isEmpty else { return "Enter store|key." }
-        UserDefaults.standard.removeObject(forKey: parts[1])
-        return "Deleted \(parts[1])."
+        let key: String
+        if let payload = Self.preferencePayload(value) {
+            key = payload.key
+        } else {
+            let parts = value.split(separator: "|", maxSplits: 1).map(String.init)
+            key = parts.count == 2 ? parts[1] : ""
+        }
+        guard !key.isEmpty else { return "Enter store|key." }
+        UserDefaults.standard.removeObject(forKey: key)
+        return "Deleted \(key)."
     }
 
     private func preferenceChanges() -> [String: Any] {
