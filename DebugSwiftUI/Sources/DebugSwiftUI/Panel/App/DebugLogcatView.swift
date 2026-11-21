@@ -7,8 +7,8 @@ struct DebugLogcatView: View {
     @State var filter = ""
     @State var level = "V"
     @State var includeApple = false
-    /// A read was still running at the last load: ask again shortly, while the screen is shown.
-    @State var pending = false
+    /// The platform reads the log in the background (iOS): ask again every second while shown.
+    @State var live = false
     @State var failure = ""
 
     let levels = ["V", "D", "I", "W", "E"]
@@ -54,8 +54,8 @@ struct DebugLogcatView: View {
         // Tied to the screen: it stops when the screen goes away.
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 700_000_000)
-                if pending { load() }
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                if live { load() }
             }
         }
     }
@@ -69,7 +69,7 @@ struct DebugLogcatView: View {
         switch result {
         case let .success(value):
             entries = value.entries
-            pending = value.pending == true
+            live = value.live == true
             failure = value.entries.isEmpty ? (DebugPlatform.isAndroid ? "No matching Logcat records." : "No matching log entries.") : ""
         case let .failure(error):
             failure = error.message

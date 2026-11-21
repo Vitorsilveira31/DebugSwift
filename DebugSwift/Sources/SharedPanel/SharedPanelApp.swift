@@ -18,6 +18,8 @@ final class SharedPanelApp {
 
     private static let logLimit = 500
     private let deepLinks = DeepLinkViewModel()
+    /// Links still opening; their outcome lands in the history when open answers.
+    private var deepLinksOpening = 0
 
     private init() {}
 
@@ -36,6 +38,7 @@ final class SharedPanelApp {
             return openDeepLink(arguments["uri"] ?? "")
         case "app.deeplink.history":
             return [
+                "pending": deepLinksOpening > 0,
                 "entries": deepLinks.history.map {
                     [
                         "url": $0.urlString,
@@ -204,6 +207,8 @@ final class SharedPanelApp {
     private var logIncludesApple = false
     private var logReading = false
     private var logReadAt = Date.distantPast
+    /// Why the last read failed, until a read succeeds.
+    private var logError: String?
     /// The system log can't be erased; Clear hides what was logged before it.
     private var logClearedAt: Date?
 
@@ -216,6 +221,7 @@ final class SharedPanelApp {
             logReadAt = .distantPast
         }
         readNewLogEntries()
+        if let logError, logItems.isEmpty { return ["error": logError] }
         let minimumRank = Self.rank(minimumLevel)
         let time = SharedPanelData.timeFormatter
         let entries: [[String: Any]] = logItems.filter { item in
@@ -225,8 +231,8 @@ final class SharedPanelApp {
         }.suffix(Self.logLimit).map {
             ["time": time.string(from: $0.date), "level": $0.level, "tag": $0.tag, "message": $0.message]
         }
-        // While a read is running the screen asks again shortly, so new entries appear.
-        return ["entries": entries, "pending": logReading]
+        // The screen asks again every second while it is shown (live), so new entries appear.
+        return ["entries": entries, "pending": logReading, "live": true]
     }
 
     private func readNewLogEntries() {
@@ -235,11 +241,14 @@ final class SharedPanelApp {
         let since = logItems.last?.date
         let includeApple = logIncludesApple
         Task.detached(priority: .utility) {
-            let items = Self.readLog(since: since, includeApple: includeApple, limit: Self.logCapacity)
+            let read = Self.readLog(since: since, includeApple: includeApple, limit: Self.logCapacity)
             await MainActor.run {
                 let app = SharedPanelApp.shared
-                if includeApple == app.logIncludesApple {
-                    app.logItems.append(contentsOf: items)
+                if let error = read.error {
+                    app.logError = "The system log could not be read: \(error)"
+                } else if includeApple == app.logIncludesApple {
+                    app.logError = nil
+                    app.logItems.append(contentsOf: read.items)
                     if app.logItems.count > Self.logCapacity {
                         app.logItems.removeFirst(app.logItems.count - Self.logCapacity)
                     }
@@ -252,20 +261,28 @@ final class SharedPanelApp {
 
     /// Entries logged after `since`, oldest first; the first read covers the last five minutes.
     /// Only the newest `limit` are kept.
-    nonisolated private static func readLog(since: Date?, includeApple: Bool, limit: Int) -> [LogItem] {
-        guard let store = try? OSLogStore(scope: .currentProcessIdentifier) else { return [] }
+    nonisolated private static func readLog(since: Date?, includeApple: Bool, limit: Int) -> (items: [LogItem], error: String?) {
         let start = since ?? Date().addingTimeInterval(-300)
-        guard let entries = try? store.getEntries(at: store.position(date: start)) else { return [] }
+        let opened = Result {
+            let store = try OSLogStore(scope: .currentProcessIdentifier)
+            return try store.getEntries(at: store.position(date: start))
+        }
+        guard case let .success(entries) = opened else {
+            if case let .failure(error) = opened { return ([], error.localizedDescription) }
+            return ([], nil)
+        }
         var items: [LogItem] = []
         for case let entry as OSLogEntryLog in entries {
-            // The position for a date is approximate: check each entry's own date.
+            // The process store may ignore the position: check each entry's own date, after the
+            // last entry kept, or within the five minutes on the first read.
             if let since, entry.date <= since { continue }
+            if since == nil, entry.date < start { continue }
             if !includeApple, entry.subsystem.hasPrefix("com.apple") { continue }
             let tag = [entry.subsystem, entry.category].filter { !$0.isEmpty }.joined(separator: " · ")
             items.append(LogItem(date: entry.date, level: levelLetter(entry.level), tag: tag, message: entry.composedMessage))
             if items.count > limit * 2 { items.removeFirst(items.count - limit) }
         }
-        return Array(items.suffix(limit))
+        return (Array(items.suffix(limit)), nil)
     }
 
     /// The screen's levels (Logcat's V D I W E) and OSLog's notice and fault, in order.
@@ -295,7 +312,11 @@ final class SharedPanelApp {
         // A link no app handles fails at once; opening one that can be opened finishes later and
         // shows in the history.
         var immediate: (opened: Bool, error: String?)?
-        deepLinks.openDeepLink(trimmed) { opened, error in immediate = (opened, error) }
+        deepLinksOpening += 1
+        deepLinks.openDeepLink(trimmed) { [weak self] opened, error in
+            immediate = (opened, error)
+            self?.deepLinksOpening -= 1
+        }
         if let immediate {
             return ["message": immediate.opened ? "Opened \(trimmed)." : (immediate.error ?? "Could not open \(trimmed).")]
         }
@@ -308,7 +329,7 @@ final class SharedPanelApp {
         let log = AgentDebugLog.shared
         let url = log.currentLogPath()
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-        let lines = Self.tail(of: url, size: size).suffix(100)
+        let lines = Self.tail(of: url).suffix(100)
         let entries: [[String: Any]] = lines.reversed().compactMap { line in
             guard let data = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -593,19 +614,23 @@ final class SharedPanelApp {
         }
     }
 
-    /// The last lines of a file, read from its final 64 KB: the log grows without a limit.
-    private static func tail(of url: URL, size: Int) -> [Substring] {
+    /// The last whole lines of a file, read from at most its final 64 KB: the log grows without a
+    /// limit. The byte before the window tells whether the window starts on a line boundary.
+    private static func tail(of url: URL) -> [Substring] {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
         defer { try? handle.close() }
-        let window = 64 * 1024
-        let offset = max(0, size - window)
-        try? handle.seek(toOffset: UInt64(offset))
-        guard var data = try? handle.readToEnd() else { return [] }
-        // Starting mid-file, the first line is cut, maybe inside a character: drop its bytes up to
-        // the first newline before decoding.
-        if offset > 0 {
-            guard let newline = data.firstIndex(of: UInt8(ascii: "\n")) else { return [] }
-            data = data[data.index(after: newline)...]
+        guard let end = try? handle.seekToEnd() else { return [] }
+        let window: UInt64 = 64 * 1024
+        let start = end > window ? end - window - 1 : 0
+        guard (try? handle.seek(toOffset: start)) != nil,
+              var data = try? handle.read(upToCount: Int(end - start)) else { return [] }
+        if start > 0, let before = data.first {
+            data = data.dropFirst()
+            // Starting mid-line (maybe mid-character), drop the cut line's bytes before decoding.
+            if before != UInt8(ascii: "\n") {
+                guard let newline = data.firstIndex(of: UInt8(ascii: "\n")) else { return [] }
+                data = data[data.index(after: newline)...]
+            }
         }
         guard let text = String(data: data, encoding: .utf8) else { return [] }
         return text.split(separator: "\n", omittingEmptySubsequences: true)
