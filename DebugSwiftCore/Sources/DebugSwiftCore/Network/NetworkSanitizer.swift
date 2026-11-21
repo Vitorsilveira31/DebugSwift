@@ -129,6 +129,52 @@ public struct NetworkSanitizer: Sendable {
         return result
     }
 
+    /// Masks text whose format is unknown, such as a decrypted body: as JSON when it parses, and
+    /// otherwise every `key=value` or `key: value` pair whose key is a masked one. Quoted values may
+    /// hold escaped quotes, so the whole quoted value is masked.
+    public func sanitize(unformattedText text: String) -> String {
+        guard !text.isEmpty else { return text }
+        return applyingCustomRedactor(to: maskingKeys(inUnformattedText: text))
+    }
+
+    private func maskingKeys(inUnformattedText text: String) -> String {
+        guard !normalizedBodyKeys.isEmpty else { return text }
+        if let json = sanitizeJSON(Data(text.utf8)), let result = String(data: json, encoding: .utf8) {
+            return result
+        }
+        if (try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed])) != nil {
+            return text
+        }
+        let source = text as NSString
+        var result = ""
+        var cursor = 0
+        for match in Self.keyValuePattern.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            let name = source.substring(with: match.range(at: 2))
+            // Keys can be percent-encoded, as in form bodies (`pass%77ord`): compare them decoded.
+            let decoded = name.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? name
+            guard normalizedBodyKeys.contains(Self.normalize(decoded)) else { continue }
+            let valueRange = match.range(at: 4)
+            result += source.substring(with: NSRange(location: cursor, length: valueRange.location - cursor))
+            result += Self.redactedValue
+            cursor = valueRange.location + valueRange.length
+        }
+        guard cursor > 0 else { return text }
+        return result + source.substring(from: cursor)
+    }
+
+    /// The host's redactor over text whose type is unknown; output that isn't UTF-8 becomes the
+    /// placeholder rather than the unmasked text.
+    private func applyingCustomRedactor(to text: String) -> String {
+        guard let customBodyRedactor else { return text }
+        return String(data: customBodyRedactor(Data(text.utf8), nil), encoding: .utf8) ?? Self.redactedValue
+    }
+
+    private static let keyValuePattern = try! NSRegularExpression(
+        // Spaces and tabs only around `:` or `=`: an empty value at a line's end must not take the
+        // next line's key as its value and leave that key's value unmasked.
+        pattern: #"(^|[\s&;,{"'])([A-Za-z0-9_.%+-]+)(["']?[ \t]*[:=][ \t]*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,}]+)"#
+    )
+
     // MARK: - Records
 
     public func sanitize(_ record: NetworkRecord) -> NetworkRecord {
@@ -154,10 +200,8 @@ public struct NetworkSanitizer: Sendable {
             requestHeaders: sanitize(headers: record.requestHeaders),
             requestBody: record.requestBody.map { sanitize(body: $0, contentType: requestType) },
             outcome: outcome,
-            // Plaintext a decryptor produced, masked like a JSON body; its real type is unknown.
-            decryptedResponseBody: record.decryptedResponseBody.map {
-                sanitize(text: $0, contentType: "application/json")
-            }
+            // Plaintext a decryptor produced: its format is unknown, so JSON or key/value pairs.
+            decryptedResponseBody: record.decryptedResponseBody.map { sanitize(unformattedText: $0) }
         )
     }
 
@@ -191,7 +235,8 @@ public struct NetworkSanitizer: Sendable {
 
     private func sanitize(text: String, contentType: String?) -> String {
         let sanitized = sanitize(body: Data(text.utf8), contentType: contentType)
-        return String(data: sanitized, encoding: .utf8) ?? text
+        // A custom redactor may return bytes that aren't UTF-8: never fall back to the original.
+        return String(data: sanitized, encoding: .utf8) ?? Self.redactedValue
     }
 
     private static func contentType(in headers: [String: String]) -> String? {

@@ -83,6 +83,42 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun rulesSetFromKotlinMaskThroughDebugSwiftCore() {
+        // DebugSwiftNetworkSanitizer hands the rules to DebugSwiftCore over JNI; a key added here is masked there.
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        debug.swift.android.DebugSwiftNetworkSanitizer.configure(
+            bodyKeys = debug.swift.android.DebugSwiftNetworkSanitizer.defaultBodyKeys + "pin",
+            headers = debug.swift.android.DebugSwiftNetworkSanitizer.defaultHeaders + "X-Session"
+        )
+        try {
+            val masked = debug.swift.android.DebugSwiftNetworkSanitizer.sanitize(
+                url = "https://user:pw@api.example.test/a?token=t-$marker&page=2",
+                requestHeaders = mapOf("X-Session" to listOf("s-$marker"), "Accept" to listOf("a", "b")),
+                responseHeaders = emptyMap(),
+                requestBody = """{"pin":"1234-$marker","name":"ana"}""",
+                responseBody = "",
+                decryptedResponseBody = "pin=9-$marker note=kept"
+            )
+            assertTrue(masked.url, masked.url == "https://user:%3Credacted%3E@api.example.test/a?token=%3Credacted%3E&page=2")
+            assertTrue("${masked.requestHeaders}", masked.requestHeaders["X-Session"] == listOf("<redacted>"))
+            assertTrue("${masked.requestHeaders}", masked.requestHeaders["Accept"] == listOf("a", "b"))
+            assertTrue(masked.requestBody, masked.requestBody.contains(""""pin":"<redacted>"""") && !masked.requestBody.contains(marker))
+            assertTrue(masked.decryptedResponseBody, masked.decryptedResponseBody == "pin=<redacted> note=kept")
+            // A JSON null leaves password masking on.
+            debug.swift.android.DebugSwiftNetworkSanitizer.configureJSON("""{"redactsURLPassword":null}""")
+            val stillMasked = debug.swift.android.DebugSwiftNetworkSanitizer.sanitize(
+                "https://user:pw@api.example.test/", emptyMap(), emptyMap(), "", "", ""
+            )
+            assertTrue(stillMasked.url, stillMasked.url == "https://user:%3Credacted%3E@api.example.test/")
+        } finally {
+            debug.swift.android.DebugSwiftNetworkSanitizer.configure(
+                bodyKeys = debug.swift.android.DebugSwiftNetworkSanitizer.defaultBodyKeys,
+                headers = debug.swift.android.DebugSwiftNetworkSanitizer.defaultHeaders
+            )
+        }
+    }
+
+    @Test
     fun decryptedBodiesAreMaskedLiveAndInSavedHistory() {
         // A decrypted form body whose key is percent-encoded: `pass%77ord` is `password`.
         val marker = java.util.UUID.randomUUID().toString().take(8)
