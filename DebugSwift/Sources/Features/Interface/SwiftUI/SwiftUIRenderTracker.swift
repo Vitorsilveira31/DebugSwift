@@ -186,6 +186,8 @@ public class SwiftUIRenderTracker: @unchecked Sendable {
     
     internal func trackRender(for view: UIView, viewType: String) {
         guard isEnabled else { return }
+        // The debugger's own views (its window, or the shared panel shown as a sheet) aren't the app's.
+        guard !SharedPanelInterface.isDebuggerView(view) else { return }
         
         let identifier = "\(viewType)_\(ObjectIdentifier(view))"
         
