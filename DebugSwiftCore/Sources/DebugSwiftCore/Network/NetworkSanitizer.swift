@@ -124,7 +124,7 @@ public struct NetworkSanitizer: Sendable {
                 result = sanitizeJSON(body) ?? body
             } else if type.hasPrefix("text/") || type.contains("xml"), let text = String(data: body, encoding: .utf8) {
                 // Other text (plain, XML…) may still carry `password=…` pairs: mask them as key/value text.
-                let masked = maskingKeys(inUnformattedText: text)
+                let masked = maskingKeys(inUnformattedText: text, xml: type.contains("xml"))
                 if masked != text { result = Data(masked.utf8) }
             }
         }
@@ -142,7 +142,8 @@ public struct NetworkSanitizer: Sendable {
         return applyingCustomRedactor(to: maskingKeys(inUnformattedText: text))
     }
 
-    private func maskingKeys(inUnformattedText text: String) -> String {
+    /// `xml` escapes the placeholder, so a masked attribute or element stays well-formed XML.
+    private func maskingKeys(inUnformattedText text: String, xml: Bool = false) -> String {
         guard !normalizedBodyKeys.isEmpty else { return text }
         if let json = sanitizeJSON(Data(text.utf8)), let result = String(data: json, encoding: .utf8) {
             return result
@@ -158,9 +159,14 @@ public struct NetworkSanitizer: Sendable {
             // Keys can be percent-encoded, as in form bodies (`pass%77ord`): compare them decoded.
             let decoded = name.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? name
             guard normalizedBodyKeys.contains(Self.normalize(decoded)) else { continue }
-            let valueRange = match.range(at: 4)
+            var valueRange = match.range(at: 4)
+            // A quoted value keeps its quotes; only what is between them is replaced.
+            let first = source.substring(with: NSRange(location: valueRange.location, length: 1))
+            if first == "\"" || first == "'", valueRange.length >= 2 {
+                valueRange = NSRange(location: valueRange.location + 1, length: valueRange.length - 2)
+            }
             result += source.substring(with: NSRange(location: cursor, length: valueRange.location - cursor))
-            result += Self.redactedValue
+            result += xml ? "&lt;redacted&gt;" : Self.redactedValue
             cursor = valueRange.location + valueRange.length
         }
         guard cursor > 0 else { return text }
@@ -177,7 +183,8 @@ public struct NetworkSanitizer: Sendable {
     private static let keyValuePattern = try! NSRegularExpression(
         // Spaces and tabs only around `:` or `=`: an empty value at a line's end must not take the
         // next line's key as its value and leave that key's value unmasked.
-        pattern: #"(^|[\s&;,{"'])([A-Za-z0-9_.%+-]+)(["']?[ \t]*[:=][ \t]*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,}]+)"#
+        // A key starts after anything that can't be part of one: a space, `&`, `(`, `<`, a quote…
+        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(["']?[ \t]*[:=][ \t]*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,})\]<>]+)"#
     )
 
     // MARK: - Records
