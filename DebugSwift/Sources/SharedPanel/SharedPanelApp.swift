@@ -566,13 +566,15 @@ final class SharedPanelApp {
         let window = 64 * 1024
         let offset = max(0, size - window)
         try? handle.seek(toOffset: UInt64(offset))
-        guard let data = try? handle.readToEnd(), let text = String(data: data, encoding: .utf8) ?? String(data: data.dropFirst(), encoding: .utf8) else {
-            return []
+        guard var data = try? handle.readToEnd() else { return [] }
+        // Starting mid-file, the first line is cut, maybe inside a character: drop its bytes up to
+        // the first newline before decoding.
+        if offset > 0 {
+            guard let newline = data.firstIndex(of: UInt8(ascii: "\n")) else { return [] }
+            data = data[data.index(after: newline)...]
         }
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-        // Starting mid-file, the first line is cut.
-        if offset > 0, !lines.isEmpty { lines.removeFirst() }
-        return lines
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n", omittingEmptySubsequences: true)
     }
 
     // MARK: - Sharing
