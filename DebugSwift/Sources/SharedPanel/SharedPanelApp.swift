@@ -24,6 +24,9 @@ final class SharedPanelApp {
         switch operation {
         case "app.crashes":
             return crashes()
+        case "app.logcat.clear":
+            logClearedAt = Date()
+            return ["message": "Log cleared."]
         case "app.logcat":
             return log(filter: arguments["filter"] ?? "", minimumLevel: arguments["level"] ?? "V", includeApple: arguments["apple"] == "true")
         case "app.deeplink.open":
@@ -123,6 +126,15 @@ final class SharedPanelApp {
 
     // MARK: - Crashes
 
+    /// Whether the bundled symbol map is loaded, trying once.
+    private lazy var symbolsLoaded: Bool = {
+        if !SymbolicatorAdapter.shared.isSymbolTableLoaded,
+           let map = Bundle.main.url(forResource: "symbol_map", withExtension: "json") {
+            _ = SymbolicatorAdapter.shared.load(from: map.path)
+        }
+        return SymbolicatorAdapter.shared.isSymbolTableLoaded
+    }()
+
     private func crashModels() -> [CrashModel] {
         (CrashManager.shared.recover(ofType: .nsexception) + CrashManager.shared.recover(ofType: .signal))
             .sorted { $0.details.date > $1.details.date }
@@ -139,8 +151,10 @@ final class SharedPanelApp {
                 "App \(crash.details.appVersion ?? "?") (\(crash.details.appBuild ?? "?")) · iOS \(crash.details.iosVersion) · \(crash.details.deviceModel)",
                 "Connection: \(crash.details.reachability)"
             ]
-            for trace in crash.traces {
-                lines.append("\n\(trace.title)\n\(trace.detail)")
+            // With the app's symbol_map.json, traces show function names and source locations.
+            let titles = symbolsLoaded ? SymbolicatorAdapter.shared.symbolicate(traces: crash.traces) : crash.traces.map(\.title)
+            for (title, trace) in zip(titles, crash.traces) {
+                lines.append("\n\(title)\n\(trace.detail)")
             }
             if !crash.context.errorOutput.isEmpty {
                 lines.append("\nError log\n\(crash.context.errorOutput)")
@@ -164,34 +178,81 @@ final class SharedPanelApp {
 
     // MARK: - System log
 
+    /// One system log entry, kept between reads.
+    private struct LogItem: Sendable {
+        let date: Date
+        let level: String
+        let tag: String
+        let message: String
+    }
+
+    /// The newest entries, oldest first, read off the main actor: the first read covers the last
+    /// five minutes, each later one only what was logged after the last entry kept, and the cache
+    /// holds at most this many.
+    nonisolated private static let logCapacity = 2000
+    private var logItems: [LogItem] = []
+    private var logIncludesApple = false
+    private var logReading = false
+    private var logReadAt = Date.distantPast
+    /// The system log can't be erased; Clear hides what was logged before it.
+    private var logClearedAt: Date?
+
     private func log(filter: String, minimumLevel: String, includeApple: Bool) -> [String: Any] {
-        let minimumRank = Self.rank(minimumLevel)
-        do {
-            let store = try OSLogStore(scope: .currentProcessIdentifier)
-            let start = store.position(timeIntervalSinceLatestBoot: 0)
-            let time = SharedPanelData.timeFormatter
-            var entries: [[String: Any]] = []
-            for case let entry as OSLogEntryLog in try store.getEntries(at: start) {
-                if !includeApple, entry.subsystem.hasPrefix("com.apple") { continue }
-                let level = Self.levelLetter(entry.level)
-                if Self.rank(level) < minimumRank { continue }
-                let tag = [entry.subsystem, entry.category].filter { !$0.isEmpty }.joined(separator: " · ")
-                if !filter.isEmpty,
-                   !entry.composedMessage.localizedCaseInsensitiveContains(filter),
-                   !tag.localizedCaseInsensitiveContains(filter) {
-                    continue
-                }
-                entries.append([
-                    "time": time.string(from: entry.date),
-                    "level": level,
-                    "tag": tag,
-                    "message": entry.composedMessage
-                ])
-            }
-            return ["entries": Array(entries.suffix(Self.logLimit).reversed())]
-        } catch {
-            return ["error": "The system log could not be read: \(error.localizedDescription)"]
+        if includeApple != logIncludesApple {
+            logIncludesApple = includeApple
+            logItems = []
         }
+        readNewLogEntries()
+        let minimumRank = Self.rank(minimumLevel)
+        let time = SharedPanelData.timeFormatter
+        let entries: [[String: Any]] = logItems.filter { item in
+            (logClearedAt.map { item.date >= $0 } ?? true)
+                && Self.rank(item.level) >= minimumRank
+                && (filter.isEmpty || item.message.localizedCaseInsensitiveContains(filter) || item.tag.localizedCaseInsensitiveContains(filter))
+        }.suffix(Self.logLimit).map {
+            ["time": time.string(from: $0.date), "level": $0.level, "tag": $0.tag, "message": $0.message]
+        }
+        // While a read is running the screen asks again shortly, so new entries appear.
+        return ["entries": entries, "pending": logReading]
+    }
+
+    private func readNewLogEntries() {
+        guard !logReading, Date().timeIntervalSince(logReadAt) >= 0.5 else { return }
+        logReading = true
+        let since = logItems.last?.date
+        let includeApple = logIncludesApple
+        Task.detached(priority: .utility) {
+            let items = Self.readLog(since: since, includeApple: includeApple, limit: Self.logCapacity)
+            await MainActor.run {
+                let app = SharedPanelApp.shared
+                if includeApple == app.logIncludesApple {
+                    app.logItems.append(contentsOf: items)
+                    if app.logItems.count > Self.logCapacity {
+                        app.logItems.removeFirst(app.logItems.count - Self.logCapacity)
+                    }
+                }
+                app.logReading = false
+                app.logReadAt = Date()
+            }
+        }
+    }
+
+    /// Entries logged after `since`, oldest first; the first read covers the last five minutes.
+    /// Only the newest `limit` are kept.
+    nonisolated private static func readLog(since: Date?, includeApple: Bool, limit: Int) -> [LogItem] {
+        guard let store = try? OSLogStore(scope: .currentProcessIdentifier) else { return [] }
+        let start = since ?? Date().addingTimeInterval(-300)
+        guard let entries = try? store.getEntries(at: store.position(date: start)) else { return [] }
+        var items: [LogItem] = []
+        for case let entry as OSLogEntryLog in entries {
+            // The position for a date is approximate: check each entry's own date.
+            if let since, entry.date <= since { continue }
+            if !includeApple, entry.subsystem.hasPrefix("com.apple") { continue }
+            let tag = [entry.subsystem, entry.category].filter { !$0.isEmpty }.joined(separator: " · ")
+            items.append(LogItem(date: entry.date, level: levelLetter(entry.level), tag: tag, message: entry.composedMessage))
+            if items.count > limit * 2 { items.removeFirst(items.count - limit) }
+        }
+        return Array(items.suffix(limit))
     }
 
     /// The screen's levels (Logcat's V D I W E) and OSLog's notice and fault, in order.
@@ -199,7 +260,7 @@ final class SharedPanelApp {
         ["V": 0, "D": 1, "I": 2, "N": 3, "W": 3, "E": 4, "F": 5][letter] ?? 0
     }
 
-    private static func levelLetter(_ level: OSLogEntryLog.Level) -> String {
+    nonisolated private static func levelLetter(_ level: OSLogEntryLog.Level) -> String {
         switch level {
         case .debug: "D"
         case .info: "I"
@@ -218,7 +279,13 @@ final class SharedPanelApp {
         guard validation.isValid else {
             return ["message": validation.error ?? "Enter a valid URL."]
         }
-        deepLinks.openDeepLink(trimmed) { _, _ in }
+        // A link no app handles fails at once; opening one that can be opened finishes later and
+        // shows in the history.
+        var immediate: (opened: Bool, error: String?)?
+        deepLinks.openDeepLink(trimmed) { opened, error in immediate = (opened, error) }
+        if let immediate {
+            return ["message": immediate.opened ? "Opened \(trimmed)." : (immediate.error ?? "Could not open \(trimmed).")]
+        }
         return ["message": "Opening \(trimmed)."]
     }
 
@@ -228,9 +295,7 @@ final class SharedPanelApp {
         let log = AgentDebugLog.shared
         let url = log.currentLogPath()
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-        let lines = (try? String(contentsOf: url, encoding: .utf8))?
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .suffix(100) ?? []
+        let lines = Self.tail(of: url, size: size).suffix(100)
         let entries: [[String: Any]] = lines.reversed().compactMap { line in
             guard let data = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -248,6 +313,22 @@ final class SharedPanelApp {
             "size": size,
             "entries": entries
         ]
+    }
+
+    /// The last lines of a file, read from its final 64 KB: the log grows without a limit.
+    private static func tail(of url: URL, size: Int) -> [Substring] {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        let window = 64 * 1024
+        let offset = max(0, size - window)
+        try? handle.seek(toOffset: UInt64(offset))
+        guard let data = try? handle.readToEnd(), let text = String(data: data, encoding: .utf8) ?? String(data: data.dropFirst(), encoding: .utf8) else {
+            return []
+        }
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        // Starting mid-file, the first line is cut.
+        if offset > 0, !lines.isEmpty { lines.removeFirst() }
+        return lines
     }
 
     // MARK: - Sharing

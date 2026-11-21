@@ -188,6 +188,21 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun clearingTheLogHidesWhatWasLoggedBefore() {
+        fun log() = debug.swift.android.DebugSwiftAppAPI.handle("app.logcat", org.json.JSONObject().put("filter", "logclear-").put("level", "V").toString())
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        android.util.Log.i("DebugSwiftTest", "logclear-before-$marker")
+        waitUntil("the first line reaches Logcat") { log().contains("logclear-before-$marker") }
+        Thread.sleep(20)
+        val cleared = debug.swift.android.DebugSwiftAppAPI.handle("app.logcat.clear", "{}")
+        Thread.sleep(20)
+        android.util.Log.i("DebugSwiftTest", "logclear-after-$marker")
+        waitUntil("the second line reaches Logcat") { log().contains("logclear-after-$marker") }
+        val after = log()
+        assertTrue("A line from before Clear is still listed: $cleared $after", !after.contains("logclear-before-$marker"))
+    }
+
+    @Test
     fun aPatchLeavesAFailureArmedMeanwhile() {
         val original = AndroidDebugTools.networkInjectionSettingsJSON()
         try {

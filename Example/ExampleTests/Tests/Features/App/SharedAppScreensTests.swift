@@ -30,6 +30,58 @@ struct SharedAppScreensTests {
         #expect(errors.entries.allSatisfy { ["E", "F"].contains($0.level) })
     }
 
+    @Test("Clearing the log hides what was logged before, and new entries appear")
+    func clearLog() async throws {
+        func messages() async throws -> [String] {
+            var listing = try DebugResourceClient.fetch("app.logcat", ["filter": "logclear-", "level": "V"], as: DebugLogListing.self).get()
+            for _ in 0..<40 where listing.pending == true {
+                try await Task.sleep(nanoseconds: 100_000_000)
+                listing = try DebugResourceClient.fetch("app.logcat", ["filter": "logclear-", "level": "V"], as: DebugLogListing.self).get()
+            }
+            return listing.entries.map(\.message)
+        }
+        DebugSwiftLogProbe.logError("logclear-before")
+        var seen: [String] = []
+        for _ in 0..<20 where !seen.contains("logclear-before") {
+            try await Task.sleep(nanoseconds: 300_000_000)
+            seen = try await messages()
+        }
+        #expect(seen.contains("logclear-before"))
+
+        _ = try DebugResourceClient.fetch("app.logcat.clear", as: DebugActionReply.self).get()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        DebugSwiftLogProbe.logError("logclear-after")
+        for _ in 0..<20 where !seen.contains("logclear-after") {
+            try await Task.sleep(nanoseconds: 300_000_000)
+            seen = try await messages()
+        }
+        #expect(seen.contains("logclear-after"))
+        #expect(!seen.contains("logclear-before"))
+    }
+
+    @Test("A link no app can open reports the failure")
+    func deepLinkFailure() throws {
+        let reply = try DebugResourceClient.fetch("app.deeplink.open", ["uri": "debugswift-no-handler-scheme://x"], as: DebugActionReply.self).get()
+        #expect(reply.message?.hasPrefix("Opening") == false)
+        #expect(reply.message?.hasPrefix("Opened") == false)
+    }
+
+    @Test("The agent log state lists the newest lines of a large log")
+    func agentLogTail() throws {
+        let url = AgentDebugLog.shared.currentLogPath()
+        let original = try? Data(contentsOf: url)
+        defer {
+            if let original { try? original.write(to: url) } else { try? FileManager.default.removeItem(at: url) }
+        }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let lines = (0..<3000).map { #"{"timestamp":\#($0),"kind":"app","location":"test","message":"line-\#($0)"}"# }
+        try (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+        let state = try DebugResourceClient.fetch("app.agentlog.state", as: DebugAgentLogState.self).get()
+        #expect(state.entries.count == 100)
+        #expect(state.entries.first?.message == "line-2999")
+        #expect(state.entries.last?.message == "line-2900")
+    }
+
     @Test("Mocking a location reports it and stopping clears it")
     func location() throws {
         let previous = LocationToolkit.shared.simulatedLocation

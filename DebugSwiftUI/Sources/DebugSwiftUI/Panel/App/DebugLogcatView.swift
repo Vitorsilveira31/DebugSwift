@@ -25,6 +25,10 @@ struct DebugLogcatView: View {
                     }
                     Spacer()
                     Button("Refresh") { load() }
+                    Button("Clear") {
+                        _ = DebugResourceClient.fetch("app.logcat.clear", as: DebugActionReply.self)
+                        load()
+                    }
                 }
                 if !DebugPlatform.isAndroid {
                     Toggle("Include Apple subsystems", isOn: Binding(
@@ -56,6 +60,12 @@ struct DebugLogcatView: View {
         switch result {
         case let .success(value):
             entries = value.entries
+            if value.pending == true {
+                Task {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    load()
+                }
+            }
             failure = value.entries.isEmpty ? (DebugPlatform.isAndroid ? "No matching Logcat records." : "No matching log entries.") : ""
         case let .failure(error):
             failure = error.message
