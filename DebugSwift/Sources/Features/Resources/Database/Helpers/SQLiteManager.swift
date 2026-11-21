@@ -200,7 +200,9 @@ final class SQLiteManager: @unchecked Sendable {
     
     // MARK: - Query Execution
     
-    func executeQuery(path: String, query: String) -> QueryResult {
+    /// Runs one statement. A query reads at most `maxRows` rows, then stops: `hasMore` says
+    /// whether the result went on.
+    func executeQuery(path: String, query: String, maxRows: Int = .max) -> QueryResult {
         var db: OpaquePointer?
         
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
@@ -217,9 +219,8 @@ final class SQLiteManager: @unchecked Sendable {
         
         defer { sqlite3_finalize(statement) }
         
-        // Check if it's a SELECT query
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        if trimmedQuery.hasPrefix("SELECT") {
+        // A statement that returns columns is a query (SELECT, WITH ... SELECT, PRAGMA, ...).
+        if sqlite3_column_count(statement) > 0 {
             var columns: [String] = []
             var rows: [[Any?]] = []
             
@@ -232,7 +233,12 @@ final class SQLiteManager: @unchecked Sendable {
             }
             
             // Get rows
+            var hasMore = false
             while sqlite3_step(statement) == SQLITE_ROW {
+                guard rows.count < maxRows else {
+                    hasMore = true
+                    break
+                }
                 var row: [Any?] = []
                 
                 for i in 0..<columnCount {
@@ -267,7 +273,7 @@ final class SQLiteManager: @unchecked Sendable {
                 rows.append(row)
             }
             
-            return .select(columns: columns, rows: rows)
+            return .select(columns: columns, rows: rows, hasMore: hasMore)
         } else {
             // Execute non-SELECT query
             let result = sqlite3_step(statement)
@@ -358,7 +364,7 @@ final class SQLiteManager: @unchecked Sendable {
 // MARK: - Query Result
 
 enum QueryResult {
-    case select(columns: [String], rows: [[Any?]])
+    case select(columns: [String], rows: [[Any?]], hasMore: Bool)
     case update(affectedRows: Int)
     case error(String)
 }
