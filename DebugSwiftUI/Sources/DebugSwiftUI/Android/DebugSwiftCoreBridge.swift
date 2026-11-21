@@ -13,6 +13,10 @@ import SkipFuse
 /// - `url.matches`: `{url, patterns, full, queryExact}`; whether the URL matches any of the wildcard
 ///   patterns, as iOS matches injection and rewrite rules: `full` for the whole URL rather than a part,
 ///   `queryExact` for exactly the pattern's query items rather than at least them.
+/// - `graphql.label`: `{body}`; the operation label the inspector lists ("Query: GetUser"), or "".
+/// - `har.encode`: `{records: [{method, url, startedAt (ms), durationMs, status, requestHeaders,
+///   responseHeaders, requestBody, responseBody}]}`; answers `{json}`, a HAR 1.2 log.
+/// - `curl.command`: `{method, url, headers, body}`; a cURL command, credentials masked.
 /// - `sanitize.record`: `{url, requestHeaders, responseHeaders, requestBody, responseBody,
 ///   decryptedResponseBody}`, headers as `{name: [values]}`; answers the same fields masked.
 enum DebugSwiftCoreBridge {
@@ -42,6 +46,9 @@ enum DebugSwiftCoreBridge {
         ]
         case "sanitize.record": sanitizeRecord(input)
         case "url.matches": ["matches": urlMatches(input)]
+        case "graphql.label": ["label": GraphQLInspector.operationLabel(from: input["body"] as? String ?? "")]
+        case "har.encode": ["json": HAREncoder.encodeJSON(harCaptures(input)) ?? ""]
+        case "curl.command": ["command": curlCommand(input)]
         default: ["error": "Unknown DebugSwiftCore operation: \(operation)."]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: output),
@@ -61,6 +68,45 @@ enum DebugSwiftCoreBridge {
             if let password { sanitizer.redactsURLPassword = password }
         }
         return [:]
+    }
+
+    /// Headers as Core keeps them: one value per name, several joined as HTTP does.
+    private static func joined(_ value: Any?) -> [String: String] {
+        (value as? [String: [String]] ?? [:]).mapValues { $0.joined(separator: ", ") }
+    }
+
+    private static func harCaptures(_ input: [String: Any]) -> [HARCapture] {
+        (input["records"] as? [[String: Any]] ?? []).map { record in
+            let requestBody = record["requestBody"] as? String ?? ""
+            let responseBody = record["responseBody"] as? String ?? ""
+            let started = (record["startedAt"] as? NSNumber)?.doubleValue ?? 0
+            return HARCapture(
+                request: HARRequest(
+                    method: record["method"] as? String ?? "GET",
+                    url: record["url"] as? String ?? "",
+                    headers: joined(record["requestHeaders"]),
+                    body: requestBody.isEmpty ? nil : requestBody
+                ),
+                response: HARResponse(
+                    status: record["status"] as? Int ?? 0,
+                    headers: joined(record["responseHeaders"]),
+                    body: responseBody.isEmpty ? nil : responseBody
+                ),
+                startedDateTime: Date(timeIntervalSince1970: started / 1000),
+                time: (record["durationMs"] as? NSNumber)?.doubleValue ?? 0
+            )
+        }
+    }
+
+    private static func curlCommand(_ input: [String: Any]) -> String {
+        let body = input["body"] as? String ?? ""
+        let request = HARRequest(
+            method: input["method"] as? String ?? "GET",
+            url: input["url"] as? String ?? "",
+            headers: HAREncoder.redactHeaders(joined(input["headers"])),
+            body: body.isEmpty ? nil : body
+        )
+        return HAREncoder.curlCommand(for: HARCapture(request: request, response: HARResponse(status: 0, headers: [:])))
     }
 
     private static func urlMatches(_ input: [String: Any]) -> Bool {

@@ -1842,47 +1842,24 @@ object AndroidDebugTools {
             "network_history" -> liveHistoryRecords()
             else -> networkRecords.toList()
         }
+        // DebugSwiftCore writes the HAR, as on iOS; the records are already masked.
         records.forEach { record ->
-            val request = org.json.JSONObject()
-                .put("method", record.method)
-                .put("url", record.url)
-                .put("httpVersion", "HTTP/1.1")
-                .put("headers", harHeaders(record.requestHeaders))
-                .put("queryString", org.json.JSONArray())
-                .put("cookies", org.json.JSONArray())
-                .put("headersSize", -1)
-                .put("bodySize", record.requestBytes)
-            if (record.requestBody.isNotEmpty()) {
-                request.put("postData", org.json.JSONObject()
-                    .put("mimeType", headerValue(record.requestHeaders, "Content-Type") ?: "application/octet-stream")
-                    .put("text", record.requestBody))
-            }
-            val responseContent = org.json.JSONObject()
-                .put("size", record.responseBytes)
-                .put("mimeType", headerValue(record.responseHeaders, "Content-Type") ?: "application/octet-stream")
-            record.responseBody.takeIf { it.isNotEmpty() }?.let { responseContent.put("text", it) }
             entries.put(
                 org.json.JSONObject()
-                    .put("startedDateTime", harTimestamp(record.timestamp))
-                    .put("time", record.durationMs)
-                    .put("request", request)
-                    .put("response", org.json.JSONObject()
-                        .put("status", record.status)
-                        .put("statusText", record.error)
-                        .put("httpVersion", "HTTP/1.1")
-                        .put("headers", harHeaders(record.responseHeaders))
-                        .put("cookies", org.json.JSONArray())
-                        .put("content", responseContent)
-                        .put("redirectURL", "")
-                        .put("headersSize", -1)
-                        .put("bodySize", record.responseBytes))
-                    .put("cache", org.json.JSONObject())
-                    .put("timings", org.json.JSONObject().put("send", -1).put("wait", record.durationMs).put("receive", -1))
+                    .put("method", record.method)
+                    .put("url", record.url)
+                    .put("startedAt", record.timestamp)
+                    .put("durationMs", record.durationMs)
+                    .put("status", record.status)
+                    .put("requestHeaders", headersJSON(record.requestHeaders))
+                    .put("responseHeaders", headersJSON(record.responseHeaders))
+                    .put("requestBody", record.requestBody)
+                    .put("responseBody", record.responseBody)
             )
         }
-        val har = org.json.JSONObject().put("log", org.json.JSONObject().put("version", "1.2").put("creator", org.json.JSONObject().put("name", "DebugSwift Android").put("version", "1.0")).put("entries", entries))
+        val reply = JSONObject(DebugSwiftCoreBridge.call("har.encode", JSONObject().put("records", entries).toString()))
         val file = File(context.cacheDir, "debugswift-${System.currentTimeMillis()}.har")
-        file.writeText(har.toString(2))
+        file.writeText(reply.optString("json"))
         publishEvent("resources", "Exported ${entries.length()} network requests to ${file.name}")
         return file
     }
@@ -2022,21 +1999,11 @@ object AndroidDebugTools {
         }
     }
 
-    private fun harHeaders(headers: Map<String, List<String>>): org.json.JSONArray = org.json.JSONArray().also { array ->
-        headers.forEach { (name, values) -> values.forEach { value ->
-            array.put(org.json.JSONObject().put("name", name).put("value", value))
-        } }
-    }
-
     private fun headerValue(headers: Map<String, List<String>>, name: String): String? =
         headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
 
     private fun formatHeaders(headers: Map<String, List<String>>): String =
         headers.entries.joinToString("\n") { (name, values) -> "$name: ${values.joinToString(", ")}" }
-
-    private fun harTimestamp(timestamp: Long): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-        timeZone = java.util.TimeZone.getTimeZone("UTC")
-    }.format(Date(timestamp))
 
     private fun networkSnapshot(featureID: String): String {
         if (featureID == "network_injection") {
@@ -2408,17 +2375,15 @@ object AndroidDebugTools {
         append("\n------- MIME TYPE -------\n${headerValue(record.responseHeaders, "Content-Type") ?: "No data"}")
     }
 
-    private fun networkRecordCurl(record: NetworkRecord): String = buildString {
-        append("curl -X ").append(record.method).append(" '").append(record.url.replace("'", "'\\''")).append("'")
-        record.requestHeaders.forEach { (name, values) ->
-            val sensitive = name.equals("Authorization", true) || name.equals("Cookie", true) || name.equals("Set-Cookie", true)
-            val value = if (sensitive) "<redacted>" else values.joinToString(", ")
-            append(" -H '").append(name.replace("'", "'\\''")).append(": ").append(value.replace("'", "'\\''")).append("'")
-        }
-        if (record.requestBody.isNotEmpty()) {
-            append(" --data-raw '").append(record.requestBody.replace("'", "'\\''")).append("'")
-        }
+    /** DebugSwiftCore's cURL command for the request, credentials masked, as on iOS. */
+    private fun networkRecordCurl(record: NetworkRecord): String {
+        val input = JSONObject().put("method", record.method).put("url", record.url)
+            .put("headers", headersJSON(record.requestHeaders)).put("body", record.requestBody)
+        return JSONObject(DebugSwiftCoreBridge.call("curl.command", input.toString())).optString("command")
     }
+
+    private fun headersJSON(headers: Map<String, List<String>>): JSONObject =
+        JSONObject().also { json -> headers.forEach { (name, values) -> json.put(name, org.json.JSONArray(values)) } }
 
     private fun replayNetworkRecord(record: NetworkRecord): String {
         val method = record.method.uppercase(Locale.ROOT)
@@ -5024,12 +4989,10 @@ object AndroidDebugTools {
         if (writeImmediately) writeRecord() else persistenceExecutor.execute { writeRecord() }
     }
 
+    /** DebugSwiftCore's label for a GraphQL body ("Query: GetUser"), the one iOS lists; "" otherwise. */
     private fun graphqlOperation(body: String): String {
         if (body.isBlank()) return ""
-        val name = Regex("\"operationName\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.getOrNull(1)
-        if (name != null) return name
-        val operation = Regex("\\b(query|mutation|subscription)\\s+([A-Za-z_][A-Za-z0-9_]*)").find(body)
-        return operation?.let { "${it.groupValues[1]} ${it.groupValues[2]}" }.orEmpty()
+        return JSONObject(DebugSwiftCoreBridge.call("graphql.label", JSONObject().put("body", body).toString())).optString("label")
     }
 
     private fun safeValue(value: Any?): String = when (value) {
