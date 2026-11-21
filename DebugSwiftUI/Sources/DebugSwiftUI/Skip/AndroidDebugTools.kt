@@ -1828,7 +1828,15 @@ object AndroidDebugTools {
         if (host.isNotBlank() && host !in webViewHosts) webViewHosts.add(host)
     }
 
+    /** The last event recorded, by its down time, event time and action. */
+    private var lastTouch: Triple<Long, Long, Int>? = null
+
     fun recordTouch(event: MotionEvent) {
+        // When another library wraps the window callback after DebugSwift, a later install wraps it
+        // again, and each event reaches here twice: record it once.
+        val identity = Triple(event.downTime, event.eventTime, event.actionMasked)
+        if (identity == lastTouch) return
+        lastTouch = identity
         val point = localTouchPosition(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
