@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct DebugGesture: Decodable {
     let kind: String
@@ -65,11 +68,20 @@ struct DebugDocRecorderView: View {
                 }
                 if !state.screenshot.isEmpty {
                     Section("Last screenshot") {
+                        #if os(iOS)
+                        // AsyncImage loads through URLSession, which doesn't read local files on iOS.
+                        if let image = UIImage(contentsOfFile: state.screenshot) {
+                            Image(uiImage: image).resizable().scaledToFit()
+                        } else {
+                            Text(verbatim: state.screenshot).font(.caption)
+                        }
+                        #else
                         AsyncImage(url: URL(fileURLWithPath: state.screenshot)) { image in
                             image.resizable().scaledToFit()
                         } placeholder: {
                             Text(verbatim: state.screenshot).font(.caption)
                         }
+                        #endif
                     }
                 }
             }
