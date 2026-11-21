@@ -880,19 +880,22 @@ object AndroidDebugTools {
         val graphOperation = graphqlOperation(requestBody)
         // Mask before storing: the list, the history file, HAR, cURL and the agent log all read
         // this record. Only replay needs the original request, so it stays in memory alone.
-        val sanitizer = DebugSwiftNetworkSanitizer
-        val requestType = headerValue(requestHeaders, "Content-Type")
-        val responseType = headerValue(responseHeaders, "Content-Type")
-        val safeUrl = sanitizer.sanitizeUrl(url)
+        val masked = DebugSwiftNetworkSanitizer.sanitize(
+            url = url,
+            requestHeaders = requestHeaders,
+            responseHeaders = responseHeaders,
+            requestBody = requestBody,
+            responseBody = responseBody,
+            decryptedResponseBody = decryptedResponseBody?.takeIf { it.isNotEmpty() }
+                ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty()
+        )
         val record = NetworkRecord(
-                System.currentTimeMillis(), method, safeUrl, status, durationMs,
+                System.currentTimeMillis(), method, masked.url, status, durationMs,
                 requestBytes, responseBytes,
-                sanitizer.sanitizeHeaders(requestHeaders), sanitizer.sanitizeHeaders(responseHeaders),
-                sanitizer.sanitizeBody(requestBody, requestType).take(32_000),
-                sanitizer.sanitizeBody(responseBody, responseType).take(64_000),
-                sanitizer.sanitizeText(
-                    decryptedResponseBody?.takeIf { it.isNotEmpty() } ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty()
-                ).take(64_000),
+                masked.requestHeaders, masked.responseHeaders,
+                masked.requestBody.take(32_000),
+                masked.responseBody.take(64_000),
+                masked.decryptedResponseBody.take(64_000),
                 error, graphOperation, source
             )
         rememberReplayRequest(record.id, ReplayRequest(url, requestHeaders, requestBody))
@@ -908,10 +911,10 @@ object AndroidDebugTools {
         appendAgentEntry(
             kind = "network",
             location = "OkHttp/$source",
-            message = "$method $safeUrl ($status)",
+            message = "$method ${masked.url} ($status)",
             data = mapOf(
                 "method" to method,
-                "url" to safeUrl,
+                "url" to masked.url,
                 "status" to status,
                 "durationMs" to durationMs,
                 "requestBytes" to requestBytes,
@@ -920,7 +923,7 @@ object AndroidDebugTools {
             )
         )
         recordThresholdRequest(url)
-        publishEvent("network", "$method $safeUrl ($status, ${durationMs}ms)")
+        publishEvent("network", "$method ${masked.url} ($status, ${durationMs}ms)")
     }
 
     /** The unmasked request behind a stored record, kept in memory only so replay can resend it. */
@@ -1963,20 +1966,28 @@ object AndroidDebugTools {
             val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
             for (index in 0 until rows.length()) {
                 val row = rows.getJSONObject(index)
+                // Files written before capture was masked hold raw values; mask them on load.
+                val masked = DebugSwiftNetworkSanitizer.sanitize(
+                    url = row.optString("url"),
+                    requestHeaders = decodeHeaders(row.optJSONObject("requestHeaders")),
+                    responseHeaders = decodeHeaders(row.optJSONObject("responseHeaders")),
+                    requestBody = row.optString("requestBody"),
+                    responseBody = row.optString("responseBody"),
+                    decryptedResponseBody = row.optString("decryptedResponseBody")
+                )
                 val record = NetworkRecord(
                         timestamp = row.optLong("timestamp"),
                         method = row.optString("method"),
-                        url = DebugSwiftNetworkSanitizer.sanitizeUrl(row.optString("url")),
+                        url = masked.url,
                         status = row.optInt("status"),
                         durationMs = row.optLong("durationMs"),
                         requestBytes = row.optLong("requestBytes"),
                         responseBytes = row.optLong("responseBytes"),
-                        // Files written before capture was masked hold raw values; mask them on load.
-                        requestHeaders = DebugSwiftNetworkSanitizer.sanitizeHeaders(decodeHeaders(row.optJSONObject("requestHeaders"))),
-                        responseHeaders = DebugSwiftNetworkSanitizer.sanitizeHeaders(decodeHeaders(row.optJSONObject("responseHeaders"))),
-                        requestBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("requestBody"), headerValue(decodeHeaders(row.optJSONObject("requestHeaders")), "Content-Type")),
-                        responseBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("responseBody"), headerValue(decodeHeaders(row.optJSONObject("responseHeaders")), "Content-Type")),
-                        decryptedResponseBody = DebugSwiftNetworkSanitizer.sanitizeText(row.optString("decryptedResponseBody")).take(64_000),
+                        requestHeaders = masked.requestHeaders,
+                        responseHeaders = masked.responseHeaders,
+                        requestBody = masked.requestBody,
+                        responseBody = masked.responseBody,
+                        decryptedResponseBody = masked.decryptedResponseBody.take(64_000),
                         error = row.optString("error"),
                         graphqlOperation = row.optString("graphqlOperation"),
                         source = row.optString("source", "http"),

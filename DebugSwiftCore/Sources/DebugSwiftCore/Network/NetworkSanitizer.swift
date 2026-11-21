@@ -129,6 +129,38 @@ public struct NetworkSanitizer: Sendable {
         return result
     }
 
+    /// Masks text whose format is unknown, such as a decrypted body: as JSON when it parses, and
+    /// otherwise every `key=value` or `key: value` pair whose key is a masked one. Quoted values may
+    /// hold escaped quotes, so the whole quoted value is masked.
+    public func sanitize(unformattedText text: String) -> String {
+        guard !normalizedBodyKeys.isEmpty, !text.isEmpty else { return text }
+        if let json = sanitizeJSON(Data(text.utf8)), let result = String(data: json, encoding: .utf8) {
+            return result
+        }
+        if (try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed])) != nil {
+            return text
+        }
+        let source = text as NSString
+        var result = ""
+        var cursor = 0
+        for match in Self.keyValuePattern.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            let name = source.substring(with: match.range(at: 2))
+            // Keys can be percent-encoded, as in form bodies (`pass%77ord`): compare them decoded.
+            let decoded = name.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? name
+            guard normalizedBodyKeys.contains(Self.normalize(decoded)) else { continue }
+            let valueRange = match.range(at: 4)
+            result += source.substring(with: NSRange(location: cursor, length: valueRange.location - cursor))
+            result += Self.redactedValue
+            cursor = valueRange.location + valueRange.length
+        }
+        guard cursor > 0 else { return text }
+        return result + source.substring(from: cursor)
+    }
+
+    private static let keyValuePattern = try! NSRegularExpression(
+        pattern: #"(^|[\s&;,{"'])([A-Za-z0-9_.%+-]+)(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,}]+)"#
+    )
+
     // MARK: - Records
 
     public func sanitize(_ record: NetworkRecord) -> NetworkRecord {
@@ -154,10 +186,8 @@ public struct NetworkSanitizer: Sendable {
             requestHeaders: sanitize(headers: record.requestHeaders),
             requestBody: record.requestBody.map { sanitize(body: $0, contentType: requestType) },
             outcome: outcome,
-            // Plaintext a decryptor produced, masked like a JSON body; its real type is unknown.
-            decryptedResponseBody: record.decryptedResponseBody.map {
-                sanitize(text: $0, contentType: "application/json")
-            }
+            // Plaintext a decryptor produced: its format is unknown, so JSON or key/value pairs.
+            decryptedResponseBody: record.decryptedResponseBody.map { sanitize(unformattedText: $0) }
         )
     }
 

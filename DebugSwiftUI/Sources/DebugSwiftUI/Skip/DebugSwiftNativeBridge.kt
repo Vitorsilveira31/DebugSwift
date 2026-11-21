@@ -41,12 +41,6 @@ object DebugSwiftNativeBridge {
         )
     }
 
-    /** Applies the Swift `NetworkSanitizer` rules to the Kotlin capture. */
-    @JvmStatic
-    fun configureNetworkSanitizer(json: String) {
-        DebugSwiftNetworkSanitizer.configureJSON(json)
-    }
-
     /**
      * What the injection rules want done to one request, as JSON for a Swift transport to carry out.
      * Same order as the OkHttp interceptor: delay, block, failure, then response rewrite. A failure

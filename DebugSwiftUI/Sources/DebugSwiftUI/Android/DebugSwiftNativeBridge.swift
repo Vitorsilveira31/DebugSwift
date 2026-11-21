@@ -26,13 +26,6 @@ enum DebugSwiftNativeBridge {
         }
     }
 
-    static func configureNetworkSanitizer(_ json: String) {
-        _ = withMethod("configureNetworkSanitizer", signature: "(\(stringType))V") { javaClass, id in
-            try javaClass.callStatic(method: id, options: [], args: [json.toJavaParameter(options: [])])
-            return true
-        }
-    }
-
     static func injectionDecision(_ url: String, _ method: String) -> String { string("injectionDecision", url, method) }
 
     static func resource(_ operation: String, _ arguments: String) -> String { string("resource", operation, arguments) }

@@ -130,4 +130,28 @@ struct NetworkSanitizerTests {
         ))
         #expect(await recorder.snapshot()[0].url == "https://a.test/?token=1")
     }
+
+    @Test func masksKeyValuePairsInTextOfUnknownFormat() {
+        let text = #"user=ana password=hunter2; token: "a\"b" note=keep pass%77ord=x"#
+        let masked = sanitizer.sanitize(unformattedText: text)
+        #expect(masked == #"user=ana password=<redacted>; token: <redacted> note=keep pass%77ord=<redacted>"#)
+    }
+
+    @Test func masksUnformattedTextAsJSONWhenItParses() {
+        let masked = sanitizer.sanitize(unformattedText: #"{"token":"abc","name":"ana"}"#)
+        #expect(masked.contains(#""token":"<redacted>""#))
+        #expect(masked.contains(#""name":"ana""#))
+        // JSON with nothing to mask is returned as it was, not re-scanned as key/value text.
+        #expect(sanitizer.sanitize(unformattedText: #"{"name":"ana"}"#) == #"{"name":"ana"}"#)
+    }
+
+    @Test func masksADecryptedBodyThatIsNotJSON() {
+        let record = NetworkRecord(
+            id: UUID(), startedAt: Date(), duration: 0.1, method: "GET", url: "https://api.test",
+            requestHeaders: [:], requestBody: nil,
+            outcome: .response(statusCode: 200, headers: [:], body: nil),
+            decryptedResponseBody: "access_token=abc&scope=read"
+        )
+        #expect(sanitizer.sanitize(record).decryptedResponseBody == "access_token=<redacted>&scope=read")
+    }
 }
