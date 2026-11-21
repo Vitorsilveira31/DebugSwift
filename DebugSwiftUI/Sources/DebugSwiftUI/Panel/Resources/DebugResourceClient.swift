@@ -94,7 +94,12 @@ struct DebugKeystoreAlias: Decodable, Identifiable {
     /// iOS only: the keychain service the item belongs to, and its value.
     let service: String?
     let value: String?
-    var id: String { (service ?? "") + "|" + alias }
+    /// The service's length first, so no two service and key pairs give the same ID, whatever
+    /// characters they hold.
+    var id: String {
+        let owner = service ?? ""
+        return "\(owner.count):\(owner)|\(alias)"
+    }
 }
 
 struct DebugKeystoreListing: Decodable {
