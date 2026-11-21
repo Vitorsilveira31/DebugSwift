@@ -71,6 +71,7 @@ final class SharedPanelInterface {
             probeRenders = 0
             history.removeAll()
             lastTotal = 0
+            lastSampleAt = Date()
             return "Render counts cleared."
         case ("doc_recorder", "export"):
             guard !screenshotPath.isEmpty, FileManager.default.fileExists(atPath: screenshotPath) else {
@@ -94,6 +95,7 @@ final class SharedPanelInterface {
     private var probeRenders = 0
     private var history: [Int] = []
     private var lastTotal = 0
+    private var lastSampleAt = Date()
     private var sampler: Timer?
 
     private func renderState() -> [String: Any] {
@@ -127,17 +129,35 @@ final class SharedPanelInterface {
     private func startSampling() {
         guard sampler == nil else { return }
         lastTotal = Self.totalRenders()
-        sampler = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+        lastSampleAt = Date()
+        let timer = Timer(timeInterval: 1, repeats: true) { _ in
             MainActor.assumeIsolated { SharedPanelInterface.shared.sample() }
         }
+        // Common modes keep it firing while a scroll or drag is tracked.
+        RunLoop.main.add(timer, forMode: .common)
+        sampler = timer
     }
 
-    private func sample() {
-        let total = Self.totalRenders()
-        history.append(max(total - lastTotal, 0))
+    private func sample(now: Date = Date()) {
+        record(total: Self.totalRenders(), at: now)
+    }
+
+    /// Adds one entry per second since the last sample: a late or skipped firing spreads its
+    /// renders over the seconds it covers instead of counting them as one second.
+    func record(total: Int, at now: Date) {
+        let seconds = min(max(Int(now.timeIntervalSince(lastSampleAt).rounded()), 1), Self.historyLength)
+        let delta = max(total - lastTotal, 0)
+        for index in 0..<seconds {
+            // Whole renders per second, the remainder going to the first seconds.
+            history.append(delta / seconds + (index < delta % seconds ? 1 : 0))
+        }
         if history.count > Self.historyLength { history.removeFirst(history.count - Self.historyLength) }
         lastTotal = total
+        lastSampleAt = now
     }
+
+    /// The render history, for tests.
+    var renderHistory: [Int] { history }
 
     private static func totalRenders() -> Int {
         (SwiftUIRenderTracker.shared.getRenderStats()["totalRenders"] as? Int) ?? 0
@@ -392,12 +412,17 @@ final class SharedPanelInterface {
         return window.windowLevel < .alert
     }
 
+    /// The app's window in the scene the user is using: the foreground active scene first, so a
+    /// background scene's key window is never captured.
     static func appWindow() -> UIWindow? {
-        let windows = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .filter { !$0.isHidden && isAppWindow($0) }
-        return windows.first { $0.isKeyWindow } ?? windows.first
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for state in [UIScene.ActivationState.foregroundActive, .foregroundInactive] {
+            let windows = scenes.filter { $0.activationState == state }
+                .flatMap(\.windows)
+                .filter { !$0.isHidden && isAppWindow($0) }
+            if let window = windows.first(where: \.isKeyWindow) ?? windows.first { return window }
+        }
+        return nil
     }
 }
 

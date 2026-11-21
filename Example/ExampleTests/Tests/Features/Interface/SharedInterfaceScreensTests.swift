@@ -65,6 +65,21 @@ struct SharedInterfaceScreensTests {
         #expect(state.total == 0)
     }
 
+    @Test("A late render sample spreads its renders over the seconds it covers")
+    func renderSampling() {
+        let interface = SharedPanelInterface.shared
+        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear")
+        defer { _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear") }
+        let start = Date()
+        interface.record(total: 0, at: start)
+        interface.record(total: 10, at: start.addingTimeInterval(1))
+        // Three seconds without a firing, as while a drag held the run loop.
+        interface.record(total: 40, at: start.addingTimeInterval(4))
+        #expect(Array(interface.renderHistory.suffix(4)) == [10, 10, 10, 10])
+        interface.record(total: 45, at: start.addingTimeInterval(6))
+        #expect(Array(interface.renderHistory.suffix(2)) == [3, 2])
+    }
+
     @Test("The documentation recorder keeps taps and scrolls only while on, and saves an annotated screenshot")
     func documentationRecorder() async throws {
         let recorder = SharedPanelInterface.shared
