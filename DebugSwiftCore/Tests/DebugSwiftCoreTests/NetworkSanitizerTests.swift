@@ -189,5 +189,20 @@ struct NetworkSanitizerTests {
         // Text pairs inside XML stay on their line, as in plain text.
         let text = sanitizer.sanitize(body: Data("<root>note:\npassword: hunter2</root>".utf8), contentType: "application/xml")
         #expect(String(data: text, encoding: .utf8) == "<root>note:\npassword: &lt;redacted&gt;</root>")
+        // A quoted text value after `:` stays on its line too; quoted text pairs on one line are masked.
+        let quoted = sanitizer.sanitize(body: Data("<root>note:\n\"demo\" password: \"x\"</root>".utf8), contentType: "application/xml")
+        #expect(String(data: quoted, encoding: .utf8) == "<root>note:\n\"demo\" password: \"&lt;redacted&gt;\"</root>")
+        // An element named after a key has its text masked.
+        let element = sanitizer.sanitize(body: Data("<login><user>ana</user><password>secret</password></login>".utf8), contentType: "text/xml")
+        #expect(String(data: element, encoding: .utf8) == "<login><user>ana</user><password>&lt;redacted&gt;</password></login>")
+    }
+
+    @Test func aBodyWithoutAContentTypeIsMaskedAsJSONOrKeyValueText() {
+        let form = sanitizer.sanitize(body: Data("user=ana&password=secret".utf8), contentType: nil)
+        #expect(String(data: form, encoding: .utf8) == "user=ana&password=<redacted>")
+        let json = sanitizer.sanitize(body: Data(#"{"password":"secret"}"#.utf8), contentType: nil)
+        #expect(String(data: json, encoding: .utf8) == #"{"password":"<redacted>"}"#)
+        let plain = Data(#"{"name":"ana"}"#.utf8)
+        #expect(sanitizer.sanitize(body: plain, contentType: nil) == plain)
     }
 }
