@@ -54,7 +54,10 @@ final class SharedPanelInterface {
         let tracker = SwiftUIRenderTracker.shared
         switch (featureID, actionID) {
         case ("swiftui_render", "tracking"):
+            // Both: the host may have switched the tracker through `DebugSwift.SwiftUIRender`,
+            // which leaves the toolkit's flag as it was.
             UserInterfaceToolkit.shared.swiftUIRenderTrackingEnabled = value == "true"
+            tracker.isEnabled = value == "true"
             return value == "true" ? "Render tracking on." : "Render tracking off."
         case ("swiftui_render", "persistent"):
             tracker.persistentOverlays = value == "true"

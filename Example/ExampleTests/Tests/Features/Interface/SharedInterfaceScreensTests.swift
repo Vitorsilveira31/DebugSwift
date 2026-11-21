@@ -188,6 +188,21 @@ struct SharedInterfaceScreensTests {
         #expect(!SharedPanelInterface.isAppWindow(CustomWindow()))
     }
 
+    @Test("Turning tracking off in the panel stops it when the host turned it on through the API")
+    func trackingSwitchAfterHostAPI() {
+        let tracker = SwiftUIRenderTracker.shared
+        let wasEnabled = tracker.isEnabled
+        let toolkitWasEnabled = UserInterfaceToolkit.shared.swiftUIRenderTrackingEnabled
+        defer {
+            UserInterfaceToolkit.shared.swiftUIRenderTrackingEnabled = toolkitWasEnabled
+            tracker.isEnabled = wasEnabled
+        }
+        UserInterfaceToolkit.shared.swiftUIRenderTrackingEnabled = false
+        DebugSwift.SwiftUIRender.shared.isEnabled = true
+        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "tracking", value: "false")
+        #expect(!tracker.isEnabled)
+    }
+
     @Test("A reset made outside the panel restarts the render count")
     func renderResetFromOutside() {
         let interface = SharedPanelInterface.shared
