@@ -38,6 +38,7 @@ class DebugSwiftWebViewClient(
     }
 
     private fun record(url: String) {
+        if (!AndroidDebugTools.webViewCaptureEnabled) return
         val host = runCatching { android.net.Uri.parse(url).host }.getOrNull().orEmpty()
         AndroidDebugTools.recordWebViewHost(host)
         AndroidDebugTools.recordNetwork(

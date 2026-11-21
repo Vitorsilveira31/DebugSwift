@@ -38,7 +38,7 @@ struct DebugAnimationControlView: View {
                         Text(verbatim: "Run: adb shell pm grant \(state.packageName) android.permission.WRITE_SECURE_SETTINGS")
                             .font(.system(.footnote, design: .monospaced))
                         Button("Open Developer options") {
-                            status = DebugSwiftAndroidRuntime.perform(featureID: "animation_control", actionID: "open_animation_settings")
+                            status = DebugSwiftRuntime.perform(featureID: "animation_control", actionID: "open_animation_settings")
                         }
                     }
                 }

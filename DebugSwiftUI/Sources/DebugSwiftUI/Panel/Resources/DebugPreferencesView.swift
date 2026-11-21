@@ -140,7 +140,7 @@ struct DebugPreferenceEditView: View {
             status = "Enter a key."
             return
         }
-        status = DebugSwiftAndroidRuntime.perform(
+        status = DebugSwiftRuntime.perform(
             featureID: "preferences",
             actionID: "set_preference",
             value: "\(store)|\(name)=\(value)",
@@ -148,7 +148,7 @@ struct DebugPreferenceEditView: View {
     }
 
     func delete() {
-        status = DebugSwiftAndroidRuntime.perform(
+        status = DebugSwiftRuntime.perform(
             featureID: "preferences",
             actionID: "delete_preference",
             value: "\(store)|\(key)",

@@ -19,6 +19,7 @@ enum DebugSwiftNetworkForwarder {
             let error: String
             let requestHeaders: [String: String]
             let responseHeaders: [String: String]
+            let decryptedResponseBody: String
         }
 
         /// The task that watches the recorder; started once for the process.
@@ -65,6 +66,7 @@ enum DebugSwiftNetworkForwarder {
                 error: failureDescription(record),
                 requestHeaders: record.requestHeaders,
                 responseHeaders: responseHeaders(record),
+                decryptedResponseBody: record.decryptedResponseBody ?? "",
             )
             guard let data = try? JSONEncoder().encode(payload),
                   let json = String(data: data, encoding: .utf8) else { return }

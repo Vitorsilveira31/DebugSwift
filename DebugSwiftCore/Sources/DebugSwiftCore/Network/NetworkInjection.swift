@@ -97,6 +97,52 @@ public enum NetworkInjection {
         return try await carryOut(decision, for: request, url: url, perform: perform)
     }
 
+    /// The decision for `request` from the current provider, or `nil` when nothing applies. A
+    /// transport that cannot wrap its call in `apply` asks once per request and acts on the parts.
+    public static func decision(for request: URLRequest) -> NetworkInjectionDecision? {
+        guard let provider = storage.current,
+              let url = request.url,
+              let decision = provider(url.absoluteString, request.httpMethod ?? "GET"),
+              !decision.isNoop
+        else { return nil }
+        return decision
+    }
+
+    /// What answers the request without sending it: a block, an injected failure, or a rewrite that
+    /// short-circuits. `nil` means the request goes out (after `delaySeconds`).
+    public static func immediateOutcome(
+        of decision: NetworkInjectionDecision,
+        for url: URL
+    ) -> Result<(Data, URLResponse), Error>? {
+        if decision.isBlocked {
+            return .success(synthetic(url, status: 403, body: "Blocked by DebugSwift network rules."))
+        }
+        if let failure = decision.failure {
+            if failure.kind == "httpError" {
+                let status = failure.statusCode ?? 500
+                let body = "{\"error\":\"Injected HTTP Error\",\"statusCode\":\(status),"
+                    + "\"message\":\"This is a simulated HTTP \(status) error for testing purposes.\",\"injected\":true}"
+                return .success(synthetic(url, status: status, body: body))
+            }
+            return .failure(error(for: failure))
+        }
+        if let rewrite = decision.rewrite, rewrite.shortCircuit {
+            return .success(synthetic(url, status: rewrite.statusCode ?? 200, body: rewrite.body))
+        }
+        return nil
+    }
+
+    /// The response a non-short-circuit rewrite turns `response` into, or `nil` without a rewrite.
+    public static func rewritten(
+        _ response: URLResponse,
+        by decision: NetworkInjectionDecision,
+        for url: URL
+    ) -> (Data, URLResponse)? {
+        guard let rewrite = decision.rewrite else { return nil }
+        let status = rewrite.statusCode ?? (response as? HTTPURLResponse)?.statusCode ?? 200
+        return synthetic(url, status: status, body: rewrite.body, keeping: response as? HTTPURLResponse)
+    }
+
     static func carryOut(
         _ decision: NetworkInjectionDecision,
         for request: URLRequest,
@@ -106,25 +152,11 @@ public enum NetworkInjection {
         if decision.delaySeconds > 0 {
             try await Task.sleep(nanoseconds: UInt64(min(decision.delaySeconds, 60) * 1_000_000_000))
         }
-        if decision.isBlocked {
-            return synthetic(url, status: 403, body: "Blocked by DebugSwift network rules.")
-        }
-        if let failure = decision.failure {
-            if failure.kind == "httpError" {
-                let status = failure.statusCode ?? 500
-                let body = "{\"error\":\"Injected HTTP Error\",\"statusCode\":\(status),"
-                    + "\"message\":\"This is a simulated HTTP \(status) error for testing purposes.\",\"injected\":true}"
-                return synthetic(url, status: status, body: body)
-            }
-            throw error(for: failure)
-        }
-        if let rewrite = decision.rewrite, rewrite.shortCircuit {
-            return synthetic(url, status: rewrite.statusCode ?? 200, body: rewrite.body)
+        if let outcome = immediateOutcome(of: decision, for: url) {
+            return try outcome.get()
         }
         let (data, response) = try await perform(request)
-        guard let rewrite = decision.rewrite else { return (data, response) }
-        let status = rewrite.statusCode ?? (response as? HTTPURLResponse)?.statusCode ?? 200
-        return synthetic(url, status: status, body: rewrite.body, keeping: response as? HTTPURLResponse)
+        return rewritten(response, by: decision, for: url) ?? (data, response)
     }
 
     static func error(for failure: NetworkInjectionDecision.Failure) -> Error {

@@ -35,7 +35,9 @@ object DebugSwiftNativeBridge {
             error = record.optString("error"),
             requestHeaders = headers("requestHeaders"),
             responseHeaders = headers("responseHeaders"),
-            source = "http"
+            source = "http",
+            // Set when a Swift custom decryptor (DebugSwift.Network.registerCustomDecryptor) read the body.
+            decryptedResponseBody = record.optString("decryptedResponseBody").ifEmpty { null }
         )
     }
 
@@ -53,6 +55,8 @@ object DebugSwiftNativeBridge {
     @JvmStatic
     fun injectionDecision(url: String, method: String): String {
         val decision = org.json.JSONObject()
+        // A URL the host's filters leave out gets no rule, as on iOS.
+        if (!AndroidDebugTools.networkAccepts(url)) return decision.put("delaySeconds", 0.0).put("isBlocked", false).toString()
         decision.put("delaySeconds", AndroidDebugTools.requestDelay(url, method) / 1000.0)
         val blocked = AndroidDebugTools.shouldBlock(url)
         decision.put("isBlocked", blocked)
@@ -80,7 +84,8 @@ object DebugSwiftNativeBridge {
     /** Structured data for the Resources and App screens; see [DebugSwiftResourceAPI] and [DebugSwiftAppAPI]. */
     @JvmStatic
     fun resource(operation: String, arguments: String): String =
-        if (operation.startsWith("app.")) DebugSwiftAppAPI.handle(operation, arguments)
+        if (operation.startsWith("host.")) AndroidDebugTools.hostAPI(operation.removePrefix("host."), arguments)
+        else if (operation.startsWith("app.")) DebugSwiftAppAPI.handle(operation, arguments)
         else DebugSwiftResourceAPI.handle(operation, arguments)
 
     @JvmStatic

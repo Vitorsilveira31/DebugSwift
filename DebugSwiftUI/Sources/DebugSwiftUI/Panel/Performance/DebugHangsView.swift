@@ -55,7 +55,7 @@ struct DebugHangsView: View {
                 }
                 Button("Refresh") { load() }
                 Button("Clear", role: .destructive) {
-                    _ = DebugSwiftAndroidRuntime.perform(featureID: "hangs", actionID: "clear")
+                    _ = DebugSwiftRuntime.perform(featureID: "hangs", actionID: "clear")
                     load()
                 }
                 if !status.isEmpty {

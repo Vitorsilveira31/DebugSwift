@@ -16,14 +16,27 @@ import javax.net.ssl.SSLHandshakeException
 
 /** Add this interceptor to the host app's OkHttpClient.Builder to capture HTTP traffic. */
 class DebugSwiftOkHttpInterceptor : Interceptor {
+    private companion object {
+        /** The largest body kept for inspection; it is masked whole before being trimmed. */
+        const val INSPECTED_BODY_LIMIT = 1_000_000L
+
+        fun tooLargeToKeep(size: Long?): String =
+            "[DebugSwift: body${size?.let { " of $it bytes" } ?: ""} not kept: larger than $INSPECTED_BODY_LIMIT bytes, too large to mask]"
+    }
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val url = request.url.toString()
+        // A URL the host's ignoredURLs/onlyURLs leave out goes through untouched: not counted,
+        // blocked, injected or recorded, as on iOS.
+        if (!AndroidDebugTools.networkAccepts(url)) return chain.proceed(request)
         val start = SystemClock.elapsedRealtime()
+        // Whole bodies only: a cut JSON body no longer parses and so could not be masked. One too
+        // large to read whole is not kept; recordNetwork masks, then trims for display.
         val requestBody = runCatching {
             val buffer = Buffer()
             request.body?.writeTo(buffer)
-            buffer.readUtf8(32_000)
+            if (buffer.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(buffer.size) else buffer.readUtf8()
         }.getOrDefault("")
         val requestBytes = request.body?.contentLength()?.takeIf { it >= 0 } ?: 0L
 
@@ -65,7 +78,23 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
             AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", error.message ?: "network error", request.headers.toMultimap())
             throw error
         }
-        val originalText = runCatching { response.peekBody(1_000_000).string() }.getOrDefault("")
+        // The response's own size, kept apart from the text recorded for it: a body too large to keep
+        // is recorded as a notice, but its size is the response's (Content-Length when known,
+        // otherwise at least the limit, which the notice states).
+        var originalBytes = 0L
+        val originalText = runCatching {
+            val peeked = response.peekBody(INSPECTED_BODY_LIMIT + 1)
+            val size = peeked.contentLength()
+            if (size > INSPECTED_BODY_LIMIT) {
+                originalBytes = response.body?.contentLength()?.takeIf { it >= 0 } ?: (INSPECTED_BODY_LIMIT + 1)
+                tooLargeToKeep(null)
+            } else {
+                originalBytes = size
+                // OkHttp decodes with the response's charset and drops a byte-order mark, so a
+                // BOM-prefixed JSON body still parses, and is masked, downstream.
+                peeked.string()
+            }
+        }.getOrDefault("")
         val rewrittenText = rewriteRule?.responseBody ?: originalText
         val finalResponse = if (rewriteRule != null) {
             val builder = response.newBuilder()
@@ -80,7 +109,7 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
             finalResponse.code,
             SystemClock.elapsedRealtime() - start,
             requestBytes,
-            rewrittenText.toByteArray().size.toLong(),
+            if (rewriteRule != null) rewrittenText.toByteArray().size.toLong() else originalBytes,
             requestBody,
             rewrittenText,
             requestHeaders = request.headers.toMultimap(),

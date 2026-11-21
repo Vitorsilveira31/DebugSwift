@@ -44,7 +44,7 @@ struct DebugFrameDropsView: View {
             Section {
                 Button("Refresh") { load() }
                 Button("Clear", role: .destructive) {
-                    _ = DebugSwiftAndroidRuntime.perform(featureID: "frame_drops", actionID: "clear")
+                    _ = DebugSwiftRuntime.perform(featureID: "frame_drops", actionID: "clear")
                     load()
                 }
             }

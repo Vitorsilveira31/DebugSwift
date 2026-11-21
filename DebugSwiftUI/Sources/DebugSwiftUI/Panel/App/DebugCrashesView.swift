@@ -12,9 +12,9 @@ struct DebugCrashesView: View {
                 Text(verbatim: failure).foregroundColor(Color.red)
             }
             Section {
-                Button("Export") { status = DebugSwiftAndroidRuntime.perform(featureID: "crashes", actionID: "export") }
+                Button("Export") { status = DebugSwiftRuntime.perform(featureID: "crashes", actionID: "export") }
                 Button("Clear saved reports", role: .destructive) {
-                    status = DebugSwiftAndroidRuntime.perform(featureID: "crashes", actionID: "clear")
+                    status = DebugSwiftRuntime.perform(featureID: "crashes", actionID: "clear")
                     load()
                 }
                 if !status.isEmpty {

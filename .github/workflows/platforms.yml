@@ -1,7 +1,7 @@
 name: Core tests and Android build
 
 # The iOS Example suite runs in ios-tests.yml. This workflow covers what that one does not:
-# the Foundation-only Core tests and the Android build of the Skip Fuse modules.
+# the Foundation-only Core tests and the Android build of the shared Example app.
 on:
   pull_request:
     branches: [main]
@@ -36,7 +36,7 @@ jobs:
         run: swift test --build-system native --skip-build
 
   android-build:
-    name: Android sample (Skip Fuse)
+    name: Android Example app (Skip Fuse)
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -61,8 +61,8 @@ jobs:
           skip android sdk install --version "$version"
           skip android sdk list
 
-      - name: Export and build the Android sample
-        run: skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android
+      - name: Export and build the Android Example app
+        run: skip export --project Example --no-ios --android --arch aarch64 --dir build/skip-android
 
       - name: Upload the build log on failure
         if: failure()
@@ -97,20 +97,26 @@ jobs:
           version=$(swift --version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)
           skip android sdk install --version "$version"
 
-      - name: Build the sample and its instrumented tests for x86_64
+      - name: Build the Example app and its instrumented tests for x86_64
         # GitHub's Apple silicon runners cannot run an Android emulator, so the tests run on an
         # x86_64 emulator in the next job, on Linux with KVM.
-        working-directory: Example/Android/Android
+        working-directory: Example/Android
         env:
           SKIP_EXPORT_ARCHS: x86_64
         run: gradle assembleDebug assembleDebugAndroidTest --console=plain
 
+      # upload-artifact keeps the folders below the paths' common parent, so both APKs are staged
+      # side by side first: run-instrumented-tests.sh expects them directly inside its folder.
+      - name: Stage the APKs for the emulator job
+        run: |
+          mkdir -p build/android-test-apks
+          cp Example/.build/Android/app/outputs/apk/debug/app-debug.apk build/android-test-apks/
+          cp Example/.build/Android/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk build/android-test-apks/
+
       - uses: actions/upload-artifact@v5
         with:
           name: android-test-apks
-          path: |
-            Example/Android/.build/Android/app/outputs/apk/debug/app-debug.apk
-            Example/Android/.build/Android/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          path: build/android-test-apks
           if-no-files-found: error
           retention-days: 3
 
@@ -141,4 +147,4 @@ jobs:
           target: google_apis
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
-          script: Example/Android/Android/run-instrumented-tests.sh apks
+          script: Example/Android/run-instrumented-tests.sh apks

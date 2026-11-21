@@ -56,7 +56,7 @@ struct DebugDocRecorderView: View {
                     }
                     if !state.screenshot.isEmpty {
                         Button("Share the last screenshot") {
-                            status = DebugSwiftAndroidRuntime.perform(featureID: "doc_recorder", actionID: "export")
+                            status = DebugSwiftRuntime.perform(featureID: "doc_recorder", actionID: "export")
                         }
                     }
                     if !status.isEmpty {

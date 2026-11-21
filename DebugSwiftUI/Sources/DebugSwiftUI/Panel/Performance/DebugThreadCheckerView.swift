@@ -21,7 +21,7 @@ struct DebugThreadCheckerView: View {
                     load()
                 }
                 Button("Clear", role: .destructive) {
-                    _ = DebugSwiftAndroidRuntime.perform(featureID: "thread_checker", actionID: "clear")
+                    _ = DebugSwiftRuntime.perform(featureID: "thread_checker", actionID: "clear")
                     load()
                 }
                 if !status.isEmpty {
@@ -61,7 +61,7 @@ struct DebugThreadCheckerView: View {
 
     func toggle(_ enabled: Bool) {
         guard enabled != (detail?.enabled ?? false) else { return }
-        status = DebugSwiftAndroidRuntime.perform(featureID: "thread_checker", actionID: "toggle")
+        status = DebugSwiftRuntime.perform(featureID: "thread_checker", actionID: "toggle")
         load()
     }
 

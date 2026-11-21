@@ -119,8 +119,19 @@ public actor NetworkRecorder {
             url: clean.url,
             requestHeaders: clean.requestHeaders,
             requestBody: truncated(clean.requestBody),
-            outcome: outcome
+            outcome: outcome,
+            decryptedResponseBody: clean.decryptedResponseBody.map(truncated(text:))
         )
+    }
+
+    /// At most `bodyLimit` bytes of UTF-8, cut at the end of the last complete character.
+    private func truncated(text: String) -> String {
+        var bytes = Array(text.utf8.prefix(bodyLimit))
+        // A character is at most 4 bytes, so at most 3 trailing bytes can belong to a cut one.
+        while !bytes.isEmpty, String(bytes: bytes, encoding: .utf8) == nil {
+            bytes.removeLast()
+        }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private func truncated(_ body: Data?) -> Data? {

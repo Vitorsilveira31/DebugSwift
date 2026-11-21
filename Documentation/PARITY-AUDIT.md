@@ -22,11 +22,63 @@ loads and renders; it does not say each button does what the iOS one does.
 | --- | --- | --- | --- | --- | --- |
 | Network | 9 | 9 | 9 | 0 | none known |
 | Performance | 11 | 11 | 11 | 0 | none known; the rates on the Disk screen are process wide |
-| Interface | 9 | 10 | 10 | 0 | no 3D view debugger |
+| Interface | 9 | 10 | 10 | 0 | none known; the 3D view debugger opens from View Hierarchy |
 | Resources | 9 | 10 | 10 | 0 | the Realm browser shows only what the host registers, since Realm lives on the JVM |
 | App | 13 | 13 | 13 | 0 | none known |
 
 Android has 53 entries and every one has a dedicated screen.
+
+## Public API
+
+The host-facing API is the same on both platforms: `import DebugSwiftUI` gives `DebugSwift` and
+every namespace under it (`App`, `Console`, `Network`, `Resources`, `Performance`,
+`PushNotification`, `APNSToken`, `WebSocket`, `WKWebView`, `SwiftUIRender`, `Measurement`). On iOS
+it re-exports the DebugSwift module; on Android `DebugSwiftUI/Sources/DebugSwiftUI/AndroidAPI`
+declares the same types, members, signatures and main-actor isolation on top of the Android
+runtime. `DebugSwiftRuntime.install(...)` starts it on both, and `.debugSwiftPanel()` on the root
+view presents the panel when the floating button or `DebugSwift.App.presentDebugger()` asks.
+
+`Example/Sources/DebugSwiftExample/Debugger/APIParityCheck.swift` uses every public member of the
+iOS API and is compiled for iOS and for Android, so a missing or different member fails the build.
+
+Members whose types exist only on iOS have an Android counterpart under the same namespace:
+
+| iOS | Android |
+| --- | --- |
+| `DebugSwift.debugViewController()`, `debugFeatureViewController(for:)` (UIKit) | `DebugSwiftRuntime.panel(onDone:)`, `.debugSwiftPanel()` |
+| `App.shared.customControllers` (`UIViewController`) | `App.shared.customTools` (`DebugTool`, SwiftUI) |
+| `Resources.shared.configureCoreData(...)`, `configureSwiftData(...)` | `Resources.shared.registerDatabase(named:)`, `registerPreferences(named:)` |
+| `APNSToken.didRegister(deviceToken:)` (APNs) | the same call, plus `APNSToken.didRegister(token:)` for the FCM token |
+| `PerformanceLeak.controller` / `.view` (UIKit) | `PerformanceLeak.className` (the leaked Activity) |
+
+Where Android cannot do what iOS does, the member exists and says so in its documentation:
+`ThreadChecker.enableAutoFix()` records violations (Android cannot move a call that already ran),
+`WKWebView.captureRequestBodies` and `captureResponseHeaders` are kept but WebViewClient exposes
+neither, `SwiftUIRender` overlays become the Compose render counts, `APNSToken.environment` is
+`.unknown` for FCM, `Resources.getAccessibleAppGroups()` is empty, and `Debugger.logEnable` and
+`feedbackEnable` are kept for the same code to compile.
+
+Swift `URLSession` traffic on Android is captured and goes through Network Injection as on iOS:
+`URLSession.shared` needs nothing and a session the app creates needs
+`DebugSwift.Network.shared.injectIntoConfiguration(configuration)` (as on iOS) or
+`DebugSwiftRuntime.configure(configuration)`. The request is still sent by Foundation's own HTTP
+protocol, or by the next protocol the session itself lists (a host's mock, for example), created
+for the same task, so the session's cookies, credentials, timeouts and cache,
+the delegate's redirect and challenge decisions, data streamed to a data delegate and download
+files behave as without DebugSwift. Two limits: a rewrite that lets the request through replaces
+the response a completion handler or `async` call gets, but a data delegate still receives the
+real body, which Foundation streams to it directly; and download tasks honor delays and network
+failures, not rules that answer with an HTTP response. For a task read through a session delegate
+(no completion handler, no `async`), the inspector shows status, headers and timing but not the
+body: corelibs hands those chunks from its protocol straight to the session's delegate, which is
+fixed when the session is created. A protocol registered only with
+`URLProtocol.registerClass(_:)` doesn't answer captured requests: corelibs keeps that registry
+internal, so DebugSwift can't consult it, and Foundation's built-in protocols send the request
+instead. List such a protocol in the session's `protocolClasses` to keep it. Swift `URLSessionWebSocketTask` sockets are
+not captured on Android; OkHttp sockets wrapped in `DebugSwiftWebSocketListener` are.
+`Example/Android/CaptureCheck/run.sh` checks this capture against corelibs on a device or emulator:
+host protocols, downloads, timeouts, masking of large bodies, rewrites, and stops during injected
+and forwarded loads.
 
 ## Done so far (verified on an Android 17 emulator)
 
@@ -67,6 +119,8 @@ Android has 53 entries and every one has a dedicated screen.
 4. **A saved rewrite rule with no method never matched after a restart** (org.json read a JSON null as the string "null"). Fixed.
 5. **The hang detector sampled the wrong stack.** It read the main thread after the thread had recovered, so every stall pointed at the detector itself. Fixed: the stack is sampled while the thread is still stuck.
 6. **Frames per second reads 0 on an idle screen**, because the Choreographer only counts frames that draw. Left as is.
+7. **The HTTP Inspector counted 4xx and 5xx responses as successes.** Fixed: like iOS, only a 2xx response without a transport error is a success.
+8. **Swift `URLSession` needed a wrapper.** Fixed: DebugSwift's URL protocol is first in `URLSession.shared`'s configuration, so requests are captured and injected without host code.
 
 Before the fix, injection rules were applied only by the OkHttp interceptor; on iOS a URL protocol
 applies them to every session.
@@ -107,7 +161,7 @@ one and can be retired.
 | Feature | Rating | Notes |
 | --- | --- | --- |
 | touches, view_borders, dark_mode, grid | Dedicated | toggles and settings |
-| view_hierarchy | Dedicated | tree of views and Compose semantics with element detail and a highlight in the app. No 3D view, and Compose layout nodes without semantics are not listed |
+| view_hierarchy | Dedicated | tree of views and Compose semantics with element detail and a highlight in the app, and "Show in 3D": the window taken apart into one layer per view and Compose element, rotated by dragging. Compose layout nodes without semantics are not listed |
 | measurement | Dedicated | pick two elements, read gaps, centers and size difference in dp |
 | color_palette | Dedicated | dominant colors from a pixel copy of the window; tap to copy a hex value |
 | animation_control | Dedicated | sets the three system scales when `WRITE_SECURE_SETTINGS` is granted by adb; otherwise slows View animations in the app and says what is missing |
@@ -135,7 +189,7 @@ one and can be retired.
 | oslog_console (Logcat) | Dedicated | level and text filters |
 | device_info, custom_info, custom_actions | Dedicated | key/value rows and run buttons. Host actions in Swift already have a route through `DebugTool` and `DebugActionGroup` |
 | push_simulator | Dedicated | permission, send, scenarios, templates, behavior options and history; posts real notifications |
-| push_token | Dedicated | shows the token the app reports with `DebugSwiftAndroidRuntime.reportPushToken` and copies it |
+| push_token | Dedicated | shows the token the app reports with `DebugSwiftRuntime.reportPushToken` and copies it |
 | deep_links | Dedicated | opens any URI as a link intent |
 | location | Dedicated | mock position for the GPS, network and fused providers (the app must be the chosen mock location app) |
 | loaded_libraries | Dedicated | process maps plus the native libraries packed in the APK |
@@ -150,6 +204,7 @@ one and can be retired.
 
 ## Order of work
 
-All of it is done: Swift network traffic, Resources, App, Performance, Interface and the floating
-button. What remains is what the table notes call out: no 3D view debugger, and the Realm browser
-depends on the host registering its databases.
+All of it is done: Swift network traffic, Resources, App, Performance, Interface, the floating
+button, the 3D view debugger and the public API. What remains is what the table notes call out: the
+Realm browser depends on the host registering its databases, and Swift WebSocket tasks are not
+captured on Android.

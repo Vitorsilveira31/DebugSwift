@@ -13,7 +13,7 @@ struct DebugMemoryWarningView: View {
             }
             Section {
                 Button("Simulate a memory warning") {
-                    status = DebugSwiftAndroidRuntime.perform(featureID: "memory_warning", actionID: "simulate_memory_warning")
+                    status = DebugSwiftRuntime.perform(featureID: "memory_warning", actionID: "simulate_memory_warning")
                     load()
                     // The callbacks run on the main thread a moment later, so read the count again.
                     Task {

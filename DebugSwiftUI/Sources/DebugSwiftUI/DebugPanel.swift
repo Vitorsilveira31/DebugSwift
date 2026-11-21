@@ -50,7 +50,7 @@ public struct DebugPanel: View {
                     }
                 }
                 Section {
-                    ForEach(DebugSwiftArea.allCases) { area in
+                    ForEach(DebugSwiftArea.visible) { area in
                         NavigationLink {
                             DebugSwiftFeatureList(area: area)
                                 .navigationTitle(area.title)
@@ -80,7 +80,7 @@ public struct DebugPanel: View {
                 }
             }
             .navigationTitle(title)
-            .task { DebugSwiftAndroidRuntime.install() }
+            .task { DebugSwiftRuntime.startRuntime() }
             .toolbar {
                 if let onDone {
                     ToolbarItem(placement: .confirmationAction) {

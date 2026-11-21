@@ -153,7 +153,11 @@ public struct NetworkSanitizer: Sendable {
             url: sanitize(url: record.url),
             requestHeaders: sanitize(headers: record.requestHeaders),
             requestBody: record.requestBody.map { sanitize(body: $0, contentType: requestType) },
-            outcome: outcome
+            outcome: outcome,
+            // Plaintext a decryptor produced, masked like a JSON body; its real type is unknown.
+            decryptedResponseBody: record.decryptedResponseBody.map {
+                sanitize(text: $0, contentType: "application/json")
+            }
         )
     }
 

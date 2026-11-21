@@ -129,6 +129,8 @@ object AndroidDebugTools {
     private val pushHistory = CopyOnWriteArrayList<PushNotificationRecord>()
     private val pushTemplates = CopyOnWriteArrayList<PushNotificationTemplate>()
     private val pendingPushNotifications = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    /** Which scheduled delivery owns each notification id; see `schedulePush`. */
+    private val pushScheduleOwners = ConcurrentHashMap<String, Any>()
     private val notificationExecutor = Executors.newSingleThreadScheduledExecutor { task ->
         Thread(task, "DebugSwiftNotifications").apply { isDaemon = true }
     }
@@ -248,7 +250,13 @@ object AndroidDebugTools {
         val rewrite: RewriteInjectionSettings = RewriteInjectionSettings()
     )
 
+    /** Every change goes through the object's monitor (the writers are @Synchronized) and bumps the version. */
     @Volatile private var networkInjectionSettings = NetworkInjectionSettings()
+        set(value) {
+            field = value
+            networkInjectionVersion.incrementAndGet()
+        }
+    private val networkInjectionVersion = java.util.concurrent.atomic.AtomicLong(0)
 
     data class NetworkRecord(
         val timestamp: Long,
@@ -345,12 +353,15 @@ object AndroidDebugTools {
         loadNetworkInjectionSettings(applicationContext)
         loadPushState(applicationContext)
         restoreAppearanceOverride(applicationContext)
+        // The retention window decides which saved requests load, so it is read first.
+        networkHistoryRetentionMs = applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getLong(HISTORY_RETENTION_KEY, NETWORK_HISTORY_RETENTION_MS)
         loadNetworkHistory(applicationContext)
         loadCrashHistory(applicationContext)
         registerLifecycleCallbacks(applicationContext)
         seedForegroundActivity()
         DebugSwiftRecomposition.start()
-        installCrashHandler()
+        if (crashCaptureEnabled) installCrashHandler()
         startAnrWatchdog()
         startFrameMonitor()
         notificationExecutor.execute { ensureNotificationChannel(applicationContext) }
@@ -455,6 +466,12 @@ object AndroidDebugTools {
         synchronized(customInfo) { customInfo[key] = value }
         publishEvent("app", "Custom info updated: $key")
     }
+
+    /**
+     * Tests only: runs once, right after the next `network.injection.get` has read the rules and
+     * before the caller patches them, to write the rules in between as another writer could.
+     */
+    val afterInjectionRead = java.util.concurrent.atomic.AtomicReference<(() -> Unit)?>(null)
 
     fun registerAction(title: String, action: () -> Unit) {
         synchronized(customActions) { customActions[title] = action }
@@ -754,6 +771,10 @@ object AndroidDebugTools {
     }
 
     fun log(message: String, priority: Int = Log.DEBUG, tag: String = TAG) {
+        if (!consoleCaptureEnabled || !consoleAccepts(message)) {
+            Log.println(priority, tag, message)
+            return
+        }
         val line = "${timestamp()} ${priorityName(priority)} $tag: $message"
         consoleRecords.add(line)
         trim(consoleRecords)
@@ -851,8 +872,11 @@ object AndroidDebugTools {
         error: String = "",
         requestHeaders: Map<String, List<String>> = emptyMap(),
         responseHeaders: Map<String, List<String>> = emptyMap(),
-        source: String = "http"
+        source: String = "http",
+        decryptedResponseBody: String? = null
     ) {
+        if (!networkAccepts(url)) return
+        if (source == "webview" && !webViewCaptureEnabled) return
         val graphOperation = graphqlOperation(requestBody)
         // Mask before storing: the list, the history file, HAR, cURL and the agent log all read
         // this record. Only replay needs the original request, so it stays in memory alone.
@@ -866,11 +890,15 @@ object AndroidDebugTools {
                 sanitizer.sanitizeHeaders(requestHeaders), sanitizer.sanitizeHeaders(responseHeaders),
                 sanitizer.sanitizeBody(requestBody, requestType).take(32_000),
                 sanitizer.sanitizeBody(responseBody, responseType).take(64_000),
-                sanitizer.sanitizeBody(DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty(), "application/json"),
+                sanitizer.sanitizeText(
+                    decryptedResponseBody?.takeIf { it.isNotEmpty() } ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty()
+                ).take(64_000),
                 error, graphOperation, source
             )
         rememberReplayRequest(record.id, ReplayRequest(url, requestHeaders, requestBody))
         networkRecords.add(record)
+        // The WebView limit first, so a new WebView record does not push out an HTTP one.
+        if (source == "webview") trimWebViewRecords()
         trim(networkRecords)
         if (isPersistableNetworkRecord(record)) {
             networkHistoryRecords.add(record)
@@ -912,6 +940,7 @@ object AndroidDebugTools {
 
     private fun replayRequest(record: NetworkRecord): ReplayRequest? = synchronized(replayRequests) { replayRequests[record.id] }
 
+    @Synchronized
     fun setRequestDelay(milliseconds: Long) {
         requestDelayMs = milliseconds.coerceIn(0L, 60_000L)
         val current = networkInjectionSettings
@@ -925,6 +954,7 @@ object AndroidDebugTools {
         failNextRequest.set(true)
     }
 
+    @Synchronized
     fun setHTTPErrorInjection(statusCode: Int) {
         httpErrorCode = if (statusCode in 400..599) statusCode else 0
         val current = networkInjectionSettings
@@ -936,6 +966,7 @@ object AndroidDebugTools {
         ))
     }
 
+    @Synchronized
     fun addResponseRewrite(pattern: String, replacement: String) {
         val current = networkInjectionSettings
         val rule = NetworkRewriteRule(
@@ -956,6 +987,15 @@ object AndroidDebugTools {
 
     fun exportNetworkInjectionRulesCSV(): String {
         val context = appContext ?: return "Android runtime has not been installed."
+        val file = File(context.cacheDir, "response_modifier_rules_${System.currentTimeMillis()}.csv")
+        return runCatching {
+            file.writeText(networkInjectionRulesCSV(), Charsets.UTF_8)
+            shareExport(file, context)
+        }.getOrElse { "Could not export response modifier rules: ${it.message}" }
+    }
+
+    /** The response modifier rules as CSV, the format the iOS settings screen uses. No file, no sharing. */
+    fun networkInjectionRulesCSV(): String {
         val rows = mutableListOf("url_pattern,response_status_code,response_body,http_method")
         networkInjectionSettings.rewrite.rules.forEach { rule ->
             rows.add(listOf(
@@ -965,13 +1005,10 @@ object AndroidDebugTools {
                 csvEscape(rule.httpMethod.orEmpty())
             ).joinToString(","))
         }
-        val file = File(context.cacheDir, "response_modifier_rules_${System.currentTimeMillis()}.csv")
-        return runCatching {
-            file.writeText(rows.joinToString("\n"), Charsets.UTF_8)
-            shareExport(file, context)
-        }.getOrElse { "Could not export response modifier rules: ${it.message}" }
+        return rows.joinToString("\n")
     }
 
+    @Synchronized
     fun importNetworkInjectionRulesCSV(csv: String): String {
         val (rows, parseError) = parseCSVRows(csv)
         if (parseError != null) return parseError
@@ -1080,7 +1117,16 @@ object AndroidDebugTools {
     }
 
     @JvmStatic
-    fun applyNetworkInjectionSettingsJSON(json: String): String {
+    @Synchronized
+    fun applyNetworkInjectionSettingsJSON(json: String): String = applyNetworkInjectionSettings(json, resetTransientState = true)
+
+    /**
+     * Applies the delay, failure and rewrite settings. `resetTransientState` also clears the
+     * one-shot and quick controls (`failNextNetworkRequest()`, the fixed delay and HTTP error, the
+     * quick rewrites): true when the settings are replaced as a whole, false for a patch of a few
+     * fields, which must not disarm a failure armed meanwhile.
+     */
+    private fun applyNetworkInjectionSettings(json: String, resetTransientState: Boolean): String {
         val parsed = runCatching { JSONObject(json) }.getOrElse {
             return "Settings are not valid JSON: ${it.message}"
         }
@@ -1135,10 +1181,12 @@ object AndroidDebugTools {
         )
         val settings = NetworkInjectionSettings(delay, failure, rewrite)
         networkInjectionSettings = settings
-        requestDelayMs = 0L
-        httpErrorCode = 0
-        responseRewrites.clear()
-        failNextRequest.set(false)
+        if (resetTransientState) {
+            requestDelayMs = 0L
+            httpErrorCode = 0
+            responseRewrites.clear()
+            failNextRequest.set(false)
+        }
         appContext?.getSharedPreferences(NETWORK_INJECTION_STATE_PREFS, Context.MODE_PRIVATE)?.edit()
             ?.putString("settings", networkInjectionSettingsJSONObject(settings).toString())
             ?.apply()
@@ -1350,7 +1398,8 @@ object AndroidDebugTools {
                 val emoji = if (endpointLimit == null) thresholdAlertEmoji else "⚠️"
                 val text = if (endpointLimit == null) thresholdAlertMessage else "Request limit exceeded!"
                 val message = "$emoji $text ($effectiveCount/$effectiveLimit)"
-                breach = ThresholdBreachRecord(now, effectiveCount, effectiveLimit, endpoint, message)
+                // Wall-clock time: the breach is shown with its date; `now` stays for the rate windows.
+                breach = ThresholdBreachRecord(System.currentTimeMillis(), effectiveCount, effectiveLimit, endpoint, message)
                 thresholdBreaches.add(breach!!)
                 while (thresholdBreaches.size > 1000) thresholdBreaches.removeAt(0)
             }
@@ -1404,6 +1453,7 @@ object AndroidDebugTools {
     }
 
     fun shouldBlock(url: String): Boolean {
+        if (!networkAccepts(url)) return false
         if (networkInjectionEnabled && blockedURLPatterns.any { it.containsMatchIn(url) }) return true
         return synchronized(this) {
             if (!thresholdTrackingEnabled || !thresholdBlockRequests) return@synchronized false
@@ -1585,6 +1635,7 @@ object AndroidDebugTools {
     }
 
     fun webSocketOpened(webSocket: WebSocket, url: String, responseCode: Int) {
+        if (!webSocketMonitoringEnabled || webSocket in clearedWebSockets) return
         val connection = findOrCreateWebSocketConnection(webSocket, url)
         connection.status = "Connected"
         connection.statusDetail = "HTTP $responseCode"
@@ -1599,42 +1650,56 @@ object AndroidDebugTools {
         type: String,
         payload: ByteArray
     ) {
+        if (!webSocketMonitoringEnabled || webSocket in clearedWebSockets) return
         val connection = findOrCreateWebSocketConnection(webSocket, url)
         if (connection.status == "Connecting") connection.status = "Connected"
         recordWebSocketFrame(connection, direction, type, payload)
     }
 
     fun webSocketClosing(webSocket: WebSocket, url: String, code: Int, reason: String) {
-        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        val connection = webSocketConnectionForUpdate(webSocket, url) ?: return
         connection.status = "Closing"
         connection.statusDetail = listOf(code.toString(), reason).filter { it.isNotBlank() }.joinToString(" · ")
         connection.lastActivityAtMs = System.currentTimeMillis()
-        recordWebSocketEvent(connection, "closing", connection.statusDetail)
+        if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, "closing", connection.statusDetail)
     }
 
     fun webSocketClosed(webSocket: WebSocket, url: String, code: Int, reason: String) {
-        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        // Look the row up first: a socket whose row was cleared must not bring it back. It is over
+        // either way, so it is forgotten after.
+        val connection = webSocketConnectionForUpdate(webSocket, url)
+        clearedWebSockets.remove(webSocket)
+        if (connection == null) return
         connection.status = "Closed"
         connection.statusDetail = listOf(code.toString(), reason).filter { it.isNotBlank() }.joinToString(" · ")
         connection.lastActivityAtMs = System.currentTimeMillis()
         activeWebSockets.remove(connection.id, webSocket)
         webSocketByInstance.remove(webSocket, connection.id)
-        recordWebSocketEvent(connection, "closed", connection.statusDetail)
+        if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, "closed", connection.statusDetail)
     }
 
     fun webSocketFailed(webSocket: WebSocket, url: String, error: String, responseCode: Int?) {
-        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        // Look the row up first: a socket whose row was cleared must not bring it back. It is over
+        // either way, so it is forgotten after.
+        val connection = webSocketConnectionForUpdate(webSocket, url)
+        clearedWebSockets.remove(webSocket)
+        if (connection == null) return
         connection.status = "Error"
         connection.statusDetail = listOfNotNull(responseCode?.let { "HTTP $it" }, error).joinToString(" · ")
         connection.lastActivityAtMs = System.currentTimeMillis()
         activeWebSockets.remove(connection.id, webSocket)
         webSocketByInstance.remove(webSocket, connection.id)
-        recordWebSocketEvent(connection, "failed", connection.statusDetail)
+        if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, "failed", connection.statusDetail)
     }
 
     /** Backward-compatible text hook for hosts that record frames without the listener wrapper. */
     fun recordWebSocket(url: String, direction: String, payload: String) {
         val normalizedDirection = direction.lowercase(Locale.ROOT)
+        if (!webSocketMonitoringEnabled) {
+            // Capture is off: only let a socket tracked before that close, never add a new one.
+            val terminal = normalizedDirection in setOf("closed", "failed", "error")
+            if (!terminal || legacyWebSocketIDs[url] == null) return
+        }
         val connection = findOrCreateLegacyWebSocketConnection(url)
         when (normalizedDirection) {
             "connected" -> {
@@ -1650,12 +1715,13 @@ object AndroidDebugTools {
             "closed" -> {
                 connection.status = "Closed"
                 connection.statusDetail = payload
-                recordWebSocketEvent(connection, direction, payload)
+                // With capture off a tracked socket still closes, but no event is recorded.
+                if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, direction, payload)
             }
             "failed", "error" -> {
                 connection.status = "Error"
                 connection.statusDetail = payload
-                recordWebSocketEvent(connection, direction, payload)
+                if (webSocketMonitoringEnabled) recordWebSocketEvent(connection, direction, payload)
             }
             else -> {
                 if (!connection.isActive()) {
@@ -1819,7 +1885,7 @@ object AndroidDebugTools {
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "har_export" -> networkRecords.filter { it.source == "http" }
             "webview_network" -> networkRecords.filter { it.source == "webview" }
-            "network_history" -> networkHistoryRecords.toList()
+            "network_history" -> liveHistoryRecords()
             else -> networkRecords.toList()
         }
         records.forEach { record ->
@@ -1886,7 +1952,7 @@ object AndroidDebugTools {
         if (!file.isFile) return
         runCatching {
             val rows = org.json.JSONObject(file.readText()).optJSONArray("requests") ?: return
-            val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+            val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
             for (index in 0 until rows.length()) {
                 val row = rows.getJSONObject(index)
                 val record = NetworkRecord(
@@ -1902,7 +1968,7 @@ object AndroidDebugTools {
                         responseHeaders = DebugSwiftNetworkSanitizer.sanitizeHeaders(decodeHeaders(row.optJSONObject("responseHeaders"))),
                         requestBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("requestBody"), headerValue(decodeHeaders(row.optJSONObject("requestHeaders")), "Content-Type")),
                         responseBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("responseBody"), headerValue(decodeHeaders(row.optJSONObject("responseHeaders")), "Content-Type")),
-                        decryptedResponseBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("decryptedResponseBody"), "application/json"),
+                        decryptedResponseBody = DebugSwiftNetworkSanitizer.sanitizeText(row.optString("decryptedResponseBody")).take(64_000),
                         error = row.optString("error"),
                         graphqlOperation = row.optString("graphqlOperation"),
                         source = row.optString("source", "http"),
@@ -1923,7 +1989,7 @@ object AndroidDebugTools {
 
     private fun persistNetworkHistory() {
         val context = appContext ?: return
-        val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+        val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
         val snapshot = networkHistoryRecords.filter { it.timestamp >= cutoff }
             .takeLast(MAX_NETWORK_HISTORY_RECORDS)
         persistenceExecutor.execute {
@@ -1974,7 +2040,7 @@ object AndroidDebugTools {
     }
 
     private fun trimNetworkHistory() {
-        val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+        val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
         networkHistoryRecords.removeAll { it.timestamp < cutoff || !isPersistableNetworkRecord(it) }
         while (networkHistoryRecords.size > MAX_NETWORK_HISTORY_RECORDS) networkHistoryRecords.removeAt(0)
     }
@@ -2038,7 +2104,7 @@ object AndroidDebugTools {
         val recordsForFeature = when (featureID) {
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "http" -> networkRecords.filter { it.source == "http" }
-            "network_history" -> networkHistoryRecords.toList()
+            "network_history" -> liveHistoryRecords()
             else -> networkRecords.toList()
         }
         val matchingRecords = recordsForFeature.filter { record ->
@@ -2070,7 +2136,7 @@ object AndroidDebugTools {
             "webview_network" -> networkRecords.filter { it.source == "webview" }
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "har_export" -> networkRecords.filter { it.source == "http" }
-            "network_history" -> networkHistoryRecords.toList()
+            "network_history" -> liveHistoryRecords()
             else -> networkRecords.filter { it.source == "http" }
         }
         val rows = JSONArray()
@@ -2097,13 +2163,20 @@ object AndroidDebugTools {
                 .put("error", record.error)
                 .put("graphqlOperation", record.graphqlOperation)
                 .put("source", record.source)
-                .put("isSuccess", record.error.isBlank()))
+                .put("isSuccess", isSuccessfulExchange(record)))
         }
         return JSONObject().put("requests", rows).toString()
     }
 
+    /**
+     * Matches iOS, where a 1xx, 3xx, 4xx or 5xx status marks the request as failed: only a 2xx
+     * response without a transport error counts as a success.
+     */
+    private fun isSuccessfulExchange(record: NetworkRecord): Boolean =
+        record.error.isBlank() && record.status in 200..299
+
     fun networkSessionHistorySnapshotJSON(): String {
-        val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+        val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
         val sessions = JSONArray()
         networkHistoryRecords.asSequence()
             .filter { it.timestamp >= cutoff }
@@ -2123,13 +2196,13 @@ object AndroidDebugTools {
             }
         return JSONObject()
             .put("sessions", sessions)
-            .put("retentionDays", NETWORK_HISTORY_RETENTION_MS / (24L * 60 * 60 * 1_000))
+            .put("retentionDays", networkHistoryRetentionMs / (24L * 60 * 60 * 1_000))
             .toString()
     }
 
     fun networkSessionRequestsSnapshotJSON(sessionID: String): String {
         val requests = JSONArray()
-        networkHistoryRecords
+        liveHistoryRecords()
             .filter { it.sessionID == sessionID }
             .sortedBy { it.timestamp }
             .forEach { requests.put(networkSessionRequestJSONObject(it)) }
@@ -2167,13 +2240,14 @@ object AndroidDebugTools {
     }
 
     fun replayNetworkSessionRequest(requestID: String): String {
-        val record = networkHistoryRecords.firstOrNull { it.id == requestID }
+        val record = liveHistoryRecords().firstOrNull { it.id == requestID }
             ?: return "This request is no longer available."
         return replayNetworkRecord(record)
     }
 
+    @Synchronized
     private fun importNetworkSessionAsRewriteRules(sessionID: String): String {
-        val records = networkHistoryRecords.filter { it.sessionID == sessionID }.sortedBy { it.timestamp }
+        val records = liveHistoryRecords().filter { it.sessionID == sessionID }.sortedBy { it.timestamp }
         if (records.isEmpty()) return "This session has no requests to import."
 
         val rules = JSONArray()
@@ -2232,7 +2306,7 @@ object AndroidDebugTools {
             .put("error", record.error)
             .put("graphqlOperation", record.graphqlOperation)
             .put("source", record.source)
-            .put("isSuccess", record.error.isBlank())
+            .put("isSuccess", isSuccessfulExchange(record))
     }
 
     /** Structured connection and frame data for the shared SwiftUI WebSocket inspector. */
@@ -2326,7 +2400,7 @@ object AndroidDebugTools {
             "webview_network" -> networkRecords.filter { it.source == "webview" }
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "har_export" -> networkRecords.filter { it.source == "http" }
-            "network_history" -> networkHistoryRecords.toList()
+            "network_history" -> liveHistoryRecords()
             else -> networkRecords.filter { it.source == "http" }
         }
         val record = records.firstOrNull { it.id == requestID }
@@ -2436,6 +2510,9 @@ object AndroidDebugTools {
             }
         })
         val note = if (original == null) " Masked credentials from the saved history are not resent." else ""
+        if (!networkAccepts(replayUrl)) {
+            return "Request replay started. The app's ignoredURLs or onlyURLs filters leave this URL out, so its response will not appear in the request list.$note"
+        }
         return "Request replay started. Its response will appear in the request list.$note"
     }
 
@@ -2648,7 +2725,26 @@ object AndroidDebugTools {
         return "Frame sent.\n\n${webSocketSnapshot()}"
     }
 
+    /** Sockets whose rows the history clear removed: their later callbacks do not bring the rows back. */
+    private val clearedWebSockets: MutableSet<WebSocket> =
+        java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(java.util.WeakHashMap<WebSocket, Boolean>()))
+
+    /**
+     * The row a closing, closed or failed callback updates. With capture on it is found or made; with
+     * capture off, or for a socket whose row was cleared, only a row that still exists is updated.
+     */
+    private fun webSocketConnectionForUpdate(webSocket: WebSocket, url: String): WebSocketConnectionRecord? {
+        if (webSocketMonitoringEnabled && webSocket !in clearedWebSockets) return findOrCreateWebSocketConnection(webSocket, url)
+        val id = webSocketByInstance[webSocket] ?: return null
+        return synchronized(webSocketConnections) { webSocketConnections.firstOrNull { it.id == id } }
+    }
+
     private fun clearWebSocketHistory(): String {
+        synchronized(webSocketConnections) {
+            clearedWebSockets.addAll(webSocketByInstance.keys)
+            webSocketByInstance.clear()
+            activeWebSockets.clear()
+        }
         webSocketConnections.clear()
         webSocketRecords.clear()
         legacyWebSocketIDs.clear()
@@ -2855,8 +2951,10 @@ object AndroidDebugTools {
         val templates = JSONArray()
         pushTemplates.forEach {
             templates.put(
-                JSONObject().put("name", it.name).put("title", it.title).put("body", it.body)
-                    .put("subtitle", it.subtitle ?: JSONObject.NULL).put("isDefault", it.isDefault)
+                JSONObject().put("id", it.id).put("name", it.name).put("title", it.title).put("body", it.body)
+                    .put("subtitle", it.subtitle ?: JSONObject.NULL).put("badge", it.badge ?: JSONObject.NULL)
+                    .put("sound", it.sound ?: JSONObject.NULL).put("category", it.category ?: JSONObject.NULL)
+                    .put("userInfo", userInfo(it.userInfo)).put("isDefault", it.isDefault)
             )
         }
         val history = JSONArray()
@@ -2864,7 +2962,8 @@ object AndroidDebugTools {
             history.put(
                 JSONObject().put("id", it.id).put("title", it.title).put("body", it.body)
                     .put("subtitle", it.subtitle ?: JSONObject.NULL).put("badge", it.badge ?: JSONObject.NULL)
-                    .put("sound", it.sound ?: JSONObject.NULL).put("status", it.status).put("trigger", it.trigger)
+                    .put("sound", it.sound ?: JSONObject.NULL).put("category", it.category ?: JSONObject.NULL)
+                    .put("status", it.status).put("trigger", it.trigger)
                     .put("scheduledMs", it.scheduledAtMs).put("deliveredMs", it.deliveryAtMs ?: JSONObject.NULL)
                     .put("interaction", it.interactionType ?: JSONObject.NULL).put("userInfo", userInfo(it.userInfo))
             )
@@ -2874,6 +2973,7 @@ object AndroidDebugTools {
             .put("showInForeground", pushShowInForeground).put("playSound", pushPlaySound).put("showBadge", pushShowBadge)
             .put("autoInteraction", pushAutoInteraction).put("interactionDelay", pushInteractionDelaySeconds)
             .put("simulateRealPush", pushSimulateRealPush).put("maxHistory", pushMaxHistoryCount)
+            .put("defaultSound", pushDefaultSound)
             .put("templates", templates).put("history", history).toString()
     }
 
@@ -2931,7 +3031,7 @@ object AndroidDebugTools {
                 val now = SystemClock.elapsedRealtime()
                 val candidates = JSONArray()
                 destroyedActivities.filter { now - it.destroyedAtMs >= 5_000L && it.reference.get() != null }.forEach {
-                    candidates.put(JSONObject().put("className", it.className).put("ageSeconds", (now - it.destroyedAtMs) / 1000))
+                    candidates.put(JSONObject().put("id", System.identityHashCode(it).toString(16)).put("className", it.className).put("ageSeconds", (now - it.destroyedAtMs) / 1000))
                 }
                 result.put("destroyed", destroyedActivities.size).put("candidates", candidates)
             }
@@ -2959,16 +3059,24 @@ object AndroidDebugTools {
     }
 
     /** Saves the call stacks of the main thread, or of every thread, for the Backtraces screen. */
-    fun captureBacktrace(allThreads: Boolean): String {
+    fun captureBacktrace(allThreads: Boolean, label: String? = null): String {
+        val (record, count) = captureBacktraceRecord(allThreads, label)
+        return if (record.isEmpty()) "No thread to capture." else "Captured $count thread${if (count == 1) "" else "s"}."
+    }
+
+    /** Captures and stores one backtrace, and returns the stored text with the number of threads. */
+    private fun captureBacktraceRecord(allThreads: Boolean, label: String?): Pair<String, Int> {
         val stacks = Thread.getAllStackTraces()
         val selected = if (allThreads) stacks.entries.sortedBy { it.key.name } else stacks.entries.filter { it.key === Looper.getMainLooper().thread }
         val body = selected.joinToString("\n\n") { (thread, frames) ->
             "Thread ${thread.name} (${thread.state})\n" + frames.joinToString("\n") { "    at $it" }
         }
-        backtraces.add("${timestamp()} · ${if (allThreads) "All ${selected.size} threads" else "Main thread"}\n$body")
+        val scope = if (allThreads) "All ${selected.size} threads" else "Main thread"
+        val record = "${timestamp()} · ${label?.let { "$it · $scope" } ?: scope}\n$body"
+        backtraces.add(record)
         trim(backtraces)
         publishEvent("performance", "Backtrace captured")
-        return "Captured ${selected.size} thread${if (selected.size == 1) "" else "s"}."
+        return record to selected.size
     }
 
     fun clearBacktraces() {
@@ -3307,7 +3415,7 @@ object AndroidDebugTools {
             "agent_debug_log" -> if (enabled) {
                 agentLogEnabled = true
             }
-            "thread_checker" -> if (enabled) enableStrictMode() else disableStrictMode()
+            "thread_checker" -> reconcileStrictMode()
             "network_thresholds" -> setThresholdBlocking(enabled)
             "network_injection" -> {
                 networkInjectionEnabled = enabled
@@ -3331,6 +3439,7 @@ object AndroidDebugTools {
             "console" -> File(context.cacheDir, "debugswift-console-${System.currentTimeMillis()}.txt").apply { writeText(consoleRecords.joinToString("\n")) }
             "oslog_console" -> File(context.cacheDir, "debugswift-logcat-${System.currentTimeMillis()}.txt").apply { writeText(logcatSnapshot()) }
             "network_thresholds" -> File(context.cacheDir, "debugswift-network-thresholds-${System.currentTimeMillis()}.txt").apply { writeText(getThresholdLogs()) }
+            "network_injection" -> File(context.cacheDir, "debugswift-rewrite-rules-${System.currentTimeMillis()}.csv").apply { writeText(networkInjectionRulesCSV()) }
             "agent_debug_log" -> File(context.filesDir, AGENT_LOG_FILENAME).takeIf { it.exists() }
             "crashes" -> File(context.cacheDir, "debugswift-crashes-${System.currentTimeMillis()}.txt").apply { writeText(crashRecords.joinToString("\n\n")) }
             "files" -> exportCurrentFile(context)
@@ -3420,9 +3529,42 @@ object AndroidDebugTools {
         })
     }
 
+    /** Off when the host passed `.crashManager` to `DebugSwift().setup(disable:)`. */
+    @Volatile var crashCaptureEnabled = true
+    private var crashHandler: Thread.UncaughtExceptionHandler? = null
+    /** Whether the installed handler still records; it outlives being replaced if a newer handler calls it. */
+    private var crashHandlerActive: java.util.concurrent.atomic.AtomicBoolean? = null
+    private var handlerBeforeCrashCapture: Thread.UncaughtExceptionHandler? = null
+
+    /** Installs or removes DebugSwift's crash handler to match `crashCaptureEnabled`. */
+    @Synchronized
+    private fun applyCrashCapture() {
+        if (crashCaptureEnabled) {
+            if (crashHandler == null && appContext != null) installCrashHandler()
+        } else {
+            val installed = crashHandler ?: return
+            // A handler the app installed after ours may still call ours: from now on it only forwards.
+            crashHandlerActive?.set(false)
+            crashHandlerActive = null
+            // Put the app's own handler back, unless someone installed another one after ours.
+            if (Thread.getDefaultUncaughtExceptionHandler() === installed) {
+                Thread.setDefaultUncaughtExceptionHandler(handlerBeforeCrashCapture)
+            }
+            crashHandler = null
+            handlerBeforeCrashCapture = null
+        }
+    }
+
     private fun installCrashHandler() {
         val original = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+        handlerBeforeCrashCapture = original
+        val active = java.util.concurrent.atomic.AtomicBoolean(true)
+        crashHandlerActive = active
+        val handler = Thread.UncaughtExceptionHandler { thread, error ->
+            if (!active.get()) {
+                original?.uncaughtException(thread, error)
+                return@UncaughtExceptionHandler
+            }
             val writer = StringWriter()
             error.printStackTrace(PrintWriter(writer))
             val record = "${timestamp()} · ${thread.name}\n${writer}"
@@ -3441,6 +3583,8 @@ object AndroidDebugTools {
             publishEvent("app", "Uncaught ${error.javaClass.simpleName}")
             original?.uncaughtException(thread, error)
         }
+        crashHandler = handler
+        Thread.setDefaultUncaughtExceptionHandler(handler)
     }
 
     private fun loadCrashHistory(context: Context) {
@@ -3784,14 +3928,7 @@ object AndroidDebugTools {
             if (pushStateLoaded) return
             val preferences = context.getSharedPreferences(PUSH_STATE_PREFS, Context.MODE_PRIVATE)
             pushEnabled = false
-            pushShowInForeground = preferences.getBoolean("showInForeground", true)
-            pushPlaySound = preferences.getBoolean("playSound", true)
-            pushShowBadge = preferences.getBoolean("showBadge", true)
-            pushAutoInteraction = preferences.getBoolean("autoInteraction", false)
-            pushInteractionDelaySeconds = preferences.getFloat("interactionDelay", 3f).toDouble()
-            pushSimulateRealPush = preferences.getBoolean("simulateRealPush", false)
-            pushDefaultSound = preferences.getString("defaultSound", "default") ?: "default"
-            pushMaxHistoryCount = preferences.getInt("maxHistoryCount", 100).coerceIn(1, 1_000)
+            readPushConfiguration(preferences)
             runCatching {
                 val historyJSON = JSONArray(preferences.getString("history", "[]") ?: "[]")
                 for (index in 0 until historyJSON.length()) {
@@ -3828,13 +3965,29 @@ object AndroidDebugTools {
     private fun pushPreferences(context: Context) =
         context.getSharedPreferences(PUSH_STATE_PREFS, Context.MODE_PRIVATE)
 
+    /** The push options as saved, read when the push state loads (at launch, and by `push.reloadState` in tests). */
+    private fun readPushConfiguration(preferences: android.content.SharedPreferences) {
+        pushShowInForeground = preferences.getBoolean("showInForeground", true)
+        pushPlaySound = preferences.getBoolean("playSound", true)
+        pushShowBadge = preferences.getBoolean("showBadge", true)
+        pushAutoInteraction = preferences.getBoolean("autoInteraction", false)
+        // Saved as text so any accepted delay comes back exactly; older versions saved a Float.
+        pushInteractionDelaySeconds = preferences.getString("interactionDelaySeconds", null)
+            ?.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 }
+            ?: preferences.getFloat("interactionDelay", 3f).toDouble()
+        pushSimulateRealPush = preferences.getBoolean("simulateRealPush", false)
+        pushDefaultSound = preferences.getString("defaultSound", "default") ?: "default"
+        // Any positive limit the configuration accepts comes back as it was.
+        pushMaxHistoryCount = preferences.getInt("maxHistoryCount", 100).coerceAtLeast(1)
+    }
+
     private fun persistPushConfiguration(context: Context) {
         pushPreferences(context).edit()
             .putBoolean("showInForeground", pushShowInForeground)
             .putBoolean("playSound", pushPlaySound)
             .putBoolean("showBadge", pushShowBadge)
             .putBoolean("autoInteraction", pushAutoInteraction)
-            .putFloat("interactionDelay", pushInteractionDelaySeconds.toFloat())
+            .putString("interactionDelaySeconds", pushInteractionDelaySeconds.toString())
             .putBoolean("simulateRealPush", pushSimulateRealPush)
             .putString("defaultSound", pushDefaultSound)
             .putInt("maxHistoryCount", pushMaxHistoryCount)
@@ -3946,9 +4099,10 @@ object AndroidDebugTools {
         return ""
     }
 
-    private fun togglePushSimulation(context: Context): String {
+    /** `persist = false` leaves writing configuration and history to the caller, once for a whole update. */
+    private fun togglePushSimulation(context: Context, persist: Boolean = true): String {
         pushEnabled = !pushEnabled
-        persistPushConfiguration(context)
+        if (persist) persistPushConfiguration(context)
         if (pushEnabled) {
             refreshNotificationSettings(context)
             publishEvent("app", "Push notification simulation enabled")
@@ -3958,9 +4112,10 @@ object AndroidDebugTools {
         }
         pendingPushNotifications.values.forEach { it.cancel(true) }
         pendingPushNotifications.clear()
+        pushScheduleOwners.clear()
         pushHistory.filter { it.status == "Scheduled" }.forEach { record ->
             notificationExecutor.execute { NotificationManagerCompat.from(context).cancel(record.id.hashCode()) }
-            updatePushNotification(context, record.id, "Dismissed")
+            updatePushNotification(context, record.id, "Dismissed", persist = persist)
         }
         publishEvent("app", "Push notification simulation disabled")
         return "Push notification simulation disabled. Pending local notifications were cancelled."
@@ -4002,7 +4157,7 @@ object AndroidDebugTools {
         }
     }
 
-    private fun updatePushNotification(context: Context, id: String, status: String, interactionType: String? = null) {
+    private fun updatePushNotification(context: Context, id: String, status: String, interactionType: String? = null, persist: Boolean = true) {
         synchronized(pushHistory) {
             val index = pushHistory.indexOfFirst { it.id == id }
             if (index < 0) return
@@ -4012,10 +4167,13 @@ object AndroidDebugTools {
                 deliveryAtMs = if (status == "Delivered" || status == "Interacted") old.deliveryAtMs ?: System.currentTimeMillis() else old.deliveryAtMs,
                 interactionType = interactionType ?: old.interactionType
             )
-            savePushHistory(context)
+            if (persist) savePushHistory(context)
         }
         publishEvent("app", "Notification $id status: $status")
     }
+
+    /** What scheduling a simulated notification did: `accepted` only when it was queued. */
+    private class PushScheduleResult(val accepted: Boolean, val message: String)
 
     private fun schedulePushNotification(
         context: Context,
@@ -4026,14 +4184,40 @@ object AndroidDebugTools {
         badge: Int? = null,
         sound: String? = null,
         category: String? = null,
-        userInfo: Map<String, String> = emptyMap()
-    ): String {
-        if (!pushEnabled) return "Enable push notification simulation before creating a notification."
-        if (delaySeconds < 0) return "Delay must be zero or more seconds."
+        userInfo: Map<String, String> = emptyMap(),
+        requestedID: String? = null
+    ): String = schedulePush(context, title, body, delaySeconds, subtitle, badge, sound, category, userInfo, requestedID).message
+
+    private fun schedulePush(
+        context: Context,
+        title: String,
+        body: String,
+        delaySeconds: Long = 0,
+        subtitle: String? = null,
+        badge: Int? = null,
+        sound: String? = null,
+        category: String? = null,
+        userInfo: Map<String, String> = emptyMap(),
+        requestedID: String? = null
+    ): PushScheduleResult {
+        fun rejected(message: String) = PushScheduleResult(false, message)
+        if (!pushEnabled) return rejected("Enable push notification simulation before creating a notification.")
+        // The caller's id is kept, as on iOS, so removing or interacting by that id finds it. It is
+        // trimmed here as removal and interaction trim it, so all three agree.
+        val callerID = requestedID?.trim()?.takeIf { it.isNotEmpty() }
+        if (callerID != null && (pushHistory.any { it.id == callerID } || pushScheduleOwners.containsKey(callerID))) {
+            return rejected("A simulated notification with id '$callerID' already exists.")
+        }
+        if (delaySeconds < 0) return rejected("Delay must be zero or more seconds.")
         val permissionMessage = requestNotificationPermission(context)
-        if (permissionMessage.isNotEmpty()) return permissionMessage
+        if (permissionMessage.isNotEmpty()) return rejected(permissionMessage)
         val boundedDelay = delaySeconds.coerceAtMost(86_400L)
-        val id = UUID.randomUUID().toString()
+        val id = callerID ?: UUID.randomUUID().toString()
+        // Owns `id` until this delivery runs or is cancelled. A delivery that no longer owns it (its
+        // history was cleared and the id scheduled again) does nothing, so it never removes, posts
+        // or marks the newer notification.
+        val owner = Any()
+        pushScheduleOwners[id] = owner
         val record = PushNotificationRecord(
             id = id,
             title = title,
@@ -4051,6 +4235,7 @@ object AndroidDebugTools {
         )
         addPushRecord(context, record)
         val deliver = Runnable {
+            if (!pushScheduleOwners.remove(id, owner)) return@Runnable
             pendingPushNotifications.remove(id)
             if (!pushEnabled) {
                 updatePushNotification(context, id, "Dismissed")
@@ -4111,10 +4296,10 @@ object AndroidDebugTools {
         }
         if (boundedDelay == 0L) {
             notificationExecutor.execute(deliver)
-            return "Local notification queued for immediate delivery: $title."
+            return PushScheduleResult(true, "Local notification queued for immediate delivery: $title.")
         }
         pendingPushNotifications[id] = notificationExecutor.schedule(deliver, boundedDelay, TimeUnit.SECONDS)
-        return "Local notification scheduled in $boundedDelay seconds (ID: $id)."
+        return PushScheduleResult(true, "Local notification scheduled in $boundedDelay seconds (ID: $id).")
     }
 
     private fun resolveNotificationSound(context: Context, soundName: String): Uri? {
@@ -4205,7 +4390,24 @@ object AndroidDebugTools {
         return "Scenario '${parts[0]}' started.\n" + results.joinToString("\n")
     }
 
-    private fun setPushConfiguration(context: Context, value: String): String {
+    /** Why `setPushConfiguration` would reject this option, or null when it accepts it. Changes nothing. */
+    private fun pushConfigurationError(name: String, raw: String): String? {
+        val key = name.lowercase(Locale.ROOT).replace("_", "").replace("-", "")
+        val bool = raw.trim().toBooleanStrictOrNull()
+        return when (key) {
+            "showinforeground", "playsound", "showbadge", "autointeraction", "simulaterealpush" ->
+                if (bool == null) "$name must be true or false." else null
+            // The same range NotificationConfiguration allows on iOS; the panel offers a few presets of it.
+            "interactiondelay" ->
+                if (raw.trim().toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true) null else "interactionDelay must be a number of seconds, 0 or more."
+            "defaultsound" -> if (raw.isBlank()) "defaultSound cannot be empty. Use default, silent, or a raw resource name." else null
+            "maxhistorycount" ->
+                if ((raw.trim().toIntOrNull() ?: 0) > 0) null else "maxHistoryCount must be a whole number above 0."
+            else -> "Unknown notification option '$name'."
+        }
+    }
+
+    private fun setPushConfiguration(context: Context, value: String, persist: Boolean = true): String {
         val parts = value.split("=", limit = 2).map { it.trim() }
         if (parts.size != 2 || parts[0].isBlank()) {
             return "Set one option at a time: showInForeground=true, playSound=true, showBadge=true, autoInteraction=false, interactionDelay=3, simulateRealPush=false, defaultSound=default, maxHistoryCount=100."
@@ -4218,17 +4420,19 @@ object AndroidDebugTools {
             "playsound" -> pushPlaySound = bool ?: return "playSound must be true or false."
             "showbadge" -> pushShowBadge = bool ?: return "showBadge must be true or false."
             "autointeraction" -> pushAutoInteraction = bool ?: return "autoInteraction must be true or false."
-            "interactiondelay" -> pushInteractionDelaySeconds = raw.toDoubleOrNull()?.takeIf { it in listOf(1.0, 2.0, 3.0, 5.0, 10.0) } ?: return "interactionDelay must be one of 1, 2, 3, 5, or 10 seconds."
+            "interactiondelay" -> pushInteractionDelaySeconds = raw.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 } ?: return "interactionDelay must be a number of seconds, 0 or more."
             "simulaterealpush" -> pushSimulateRealPush = bool ?: return "simulateRealPush must be true or false."
             "defaultsound" -> {
                 if (raw.isBlank()) return "defaultSound cannot be empty. Use default, silent, or a raw resource name."
                 pushDefaultSound = raw
             }
-            "maxhistorycount" -> pushMaxHistoryCount = raw.toIntOrNull()?.takeIf { it in listOf(50, 100, 200, 500, 1_000) } ?: return "maxHistoryCount must be 50, 100, 200, 500, or 1000."
+            "maxhistorycount" -> pushMaxHistoryCount = raw.toIntOrNull()?.takeIf { it > 0 } ?: return "maxHistoryCount must be a whole number above 0."
             else -> return "Unknown notification option '${parts[0]}'."
         }
-        persistPushConfiguration(context)
-        savePushHistory(context)
+        if (persist) {
+            persistPushConfiguration(context)
+            savePushHistory(context)
+        }
         return "Notification configuration updated: ${parts[0]}=$raw."
     }
 
@@ -4258,6 +4462,8 @@ object AndroidDebugTools {
 
     private fun storePushTemplate(context: Context, template: PushNotificationTemplate): String {
         if (pushTemplates.any { it.name.equals(template.name, ignoreCase = true) }) return "A template named '${template.name}' already exists."
+        // Ids are unique too, so removeTemplate(id:) always finds the template it was given.
+        if (pushTemplates.any { it.id == template.id }) return "A template with id '${template.id}' already exists."
         pushTemplates.add(template)
         savePushTemplates(context)
         publishEvent("app", "Push notification template added: ${template.name}")
@@ -4289,6 +4495,7 @@ object AndroidDebugTools {
         if (id.isBlank()) return "Enter the notification ID shown in its history entry."
         val record = pushHistory.firstOrNull { it.id == id } ?: return "No simulated notification with ID '$id'."
         pendingPushNotifications.remove(id)?.cancel(true)
+        pushScheduleOwners.remove(id)
         notificationExecutor.execute { NotificationManagerCompat.from(context).cancel(id.hashCode()) }
         pushHistory.remove(record)
         savePushHistory(context)
@@ -4675,19 +4882,45 @@ object AndroidDebugTools {
 
     private var previousThreadPolicy: android.os.StrictMode.ThreadPolicy? = null
     private var previousVmPolicy: android.os.StrictMode.VmPolicy? = null
+    /** True while the installed StrictMode policies are DebugSwift's. Main thread only. */
+    private var strictModeOwned = false
+
+    /**
+     * Makes StrictMode match the thread checker's switch, on the main thread and with the state as
+     * it is when that runs, so a change made in between is not undone. `reinstall` applies new options
+     * to a policy DebugSwift already installed.
+     */
+    private fun reconcileStrictMode(reinstall: Boolean = false) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { reconcileStrictMode(reinstall) }
+            return
+        }
+        val wanted = synchronized(enabledTools) { "thread_checker" in enabledTools }
+        when {
+            wanted && (!strictModeOwned || reinstall) -> enableStrictMode()
+            !wanted && strictModeOwned -> disableStrictMode()
+        }
+    }
 
     private fun enableStrictMode() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             mainHandler.post { enableStrictMode() }
             return
         }
-        if (previousThreadPolicy == null) previousThreadPolicy = android.os.StrictMode.getThreadPolicy()
-        if (previousVmPolicy == null) previousVmPolicy = android.os.StrictMode.getVmPolicy()
+        // Keep the app's own policies once, to put them back when the checker is turned off.
+        if (!strictModeOwned) {
+            previousThreadPolicy = android.os.StrictMode.getThreadPolicy()
+            previousVmPolicy = android.os.StrictMode.getVmPolicy()
+        }
         val threadPolicy = android.os.StrictMode.ThreadPolicy.Builder()
                 .detectAll()
+        if (strictModeFlashScreen) threadPolicy.penaltyFlashScreen()
+        if (strictModeLog) threadPolicy.penaltyLog()
         if (Build.VERSION.SDK_INT >= 28) {
             threadPolicy.penaltyListener(java.util.concurrent.Executor { command -> mainHandler.post(command) }) { violation ->
-                val detail = "${timestamp()} ${violation.javaClass.simpleName}\n${violation.stackTraceToString()}"
+                val stack = violation.stackTraceToString()
+                if (strictModeIgnoredClasses.any { stack.contains(it) }) return@penaltyListener
+                val detail = "${timestamp()} ${violation.javaClass.simpleName}\n$stack"
                 threadViolations.add(detail)
                 trim(threadViolations)
                 publishEvent("performance", "StrictMode ${violation.javaClass.simpleName}")
@@ -4708,6 +4941,7 @@ object AndroidDebugTools {
             vmPolicy.penaltyLog()
         }
         android.os.StrictMode.setVmPolicy(vmPolicy.build())
+        strictModeOwned = true
     }
 
     private fun disableStrictMode() {
@@ -4715,12 +4949,16 @@ object AndroidDebugTools {
             mainHandler.post { disableStrictMode() }
             return
         }
+        // Only put back what DebugSwift replaced; an app policy DebugSwift never touched stays.
+        if (!strictModeOwned) return
         android.os.StrictMode.setThreadPolicy(previousThreadPolicy ?: android.os.StrictMode.ThreadPolicy.LAX)
         android.os.StrictMode.setVmPolicy(previousVmPolicy ?: android.os.StrictMode.VmPolicy.LAX)
         previousThreadPolicy = null
         previousVmPolicy = null
+        strictModeOwned = false
     }
 
+    @Synchronized
     private fun clearInjectionRules() {
         requestDelayMs = 0L
         httpErrorCode = 0
@@ -4833,6 +5071,378 @@ object AndroidDebugTools {
 
     private fun <T> trim(records: CopyOnWriteArrayList<T>) {
         while (records.size > MAX_RECORDS) records.removeAt(0)
+    }
+
+    // MARK: - Host API
+
+    // Options the Swift `DebugSwift` API sets on Android, named after their iOS counterparts.
+    @Volatile var consoleIgnoredLogs: List<String> = emptyList()
+    @Volatile var consoleOnlyLogs: List<String> = emptyList()
+    @Volatile var networkIgnoredURLs: List<String> = emptyList()
+    @Volatile var networkOnlyURLs: List<String> = emptyList()
+    @Volatile var webSocketMonitoringEnabled = true
+    @Volatile var webViewCaptureEnabled = true
+    @Volatile var webViewMaxStoredRequests = 1000
+    /** Off when the host passed `.console` to `DebugSwift().setup(disable:)`; Logcat still gets the line. */
+    @Volatile var consoleCaptureEnabled = true
+    private const val HISTORY_RETENTION_KEY = "network_history_retention_ms"
+
+    /** Saved history inside the retention window: what every history read and action sees. */
+    private fun liveHistoryRecords(): List<NetworkRecord> {
+        val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
+        return networkHistoryRecords.filter { it.timestamp >= cutoff }
+    }
+
+    /** Keeps the newest `webViewMaxStoredRequests` WebView records; HTTP records are not affected. */
+    private fun trimWebViewRecords() {
+        val webView = networkRecords.filter { it.source == "webview" }
+        val excess = webView.size - webViewMaxStoredRequests
+        if (excess > 0) {
+            val dropped = webView.take(excess).map { it.id }.toSet()
+            networkRecords.removeAll { it.id in dropped }
+        }
+    }
+    @Volatile private var strictModeFlashScreen = false
+    @Volatile private var strictModeLog = false
+    @Volatile private var strictModeIgnoredClasses: Set<String> = emptySet()
+    @Volatile private var superCallIgnoredClasses: Set<String> = emptySet()
+    @Volatile private var networkHistoryRetentionMs = NETWORK_HISTORY_RETENTION_MS
+
+    /** Whether a console line passes the host's `ignoredLogs` and `onlyLogs` filters. */
+    private fun consoleAccepts(message: String): Boolean {
+        if (consoleIgnoredLogs.any { it.isNotEmpty() && message.contains(it) }) return false
+        val only = consoleOnlyLogs.filter { it.isNotEmpty() }
+        return only.isEmpty() || only.any { message.contains(it) }
+    }
+
+    /**
+     * Whether a request passes the host's `ignoredURLs` and `onlyURLs` filters. As on iOS, where such
+     * a request never reaches DebugSwift, one left out is not captured, counted, blocked or injected.
+     */
+    fun networkAccepts(url: String): Boolean {
+        if (networkIgnoredURLs.any { it.isNotEmpty() && url.contains(it) }) return false
+        val only = networkOnlyURLs.filter { it.isNotEmpty() }
+        return only.isEmpty() || only.any { url.contains(it) }
+    }
+
+    private fun backtraceJSON(capture: String): JSONObject {
+        val title = capture.substringBefore('\n')
+        return JSONObject()
+            .put("id", capture.hashCode().toUInt().toString(16) + "-" + title.hashCode().toUInt().toString(16))
+            .put("title", title)
+            .put("stack", capture.substringAfter('\n', ""))
+    }
+
+    private fun stringList(array: JSONArray?): List<String> =
+        if (array == null) emptyList() else (0 until array.length()).map { array.optString(it) }
+
+    /**
+     * The Swift `DebugSwift` API on Android: one JSON operation per iOS call, reached through
+     * `DebugSwiftNativeBridge.resource("host.<operation>", arguments)`.
+     */
+    fun hostAPI(operation: String, arguments: String): String {
+        val args = runCatching { JSONObject(arguments.ifBlank { "{}" }) }.getOrElse { JSONObject() }
+        val context = appContext
+        fun ok(message: String = "") = JSONObject().put("ok", true).put("message", message).toString()
+        fun fail(message: String) = JSONObject().put("ok", false).put("message", message).toString()
+        return when (operation) {
+            // Console
+            "console.messages" -> JSONArray(consoleRecords.toList()).toString()
+            "console.remove" -> {
+                val index = args.optInt("index", -1)
+                if (index in consoleRecords.indices) consoleRecords.removeAt(index)
+                ok()
+            }
+            "console.clear" -> { consoleRecords.clear(); ok() }
+            "console.filters" -> {
+                consoleIgnoredLogs = stringList(args.optJSONArray("ignored"))
+                consoleOnlyLogs = stringList(args.optJSONArray("only"))
+                ok()
+            }
+            "console.enabled" -> { consoleCaptureEnabled = args.optBoolean("enabled", true); ok() }
+            "crash.enabled" -> {
+                crashCaptureEnabled = args.optBoolean("enabled", true)
+                applyCrashCapture()
+                ok()
+            }
+            "console.share" -> ok(context?.let { export("console", it) } ?: "Android runtime has not been installed.")
+
+            // Network
+            "network.filters" -> {
+                networkIgnoredURLs = stringList(args.optJSONArray("ignored"))
+                networkOnlyURLs = stringList(args.optJSONArray("only"))
+                ok()
+            }
+            "network.clearHistory" -> ok(clear("http"))
+            "network.clearWebSockets" -> ok(clearWebSocketHistory())
+            "network.clearAll" -> {
+                clear("http")
+                clear("webview_network")
+                clearWebSocketHistory()
+                networkHistoryRecords.clear()
+                persistNetworkHistory()
+                ok("All network data cleared.")
+            }
+            "network.sessionHistory" -> {
+                val days = args.optInt("retentionDays", 7).coerceIn(1, 365)
+                networkHistoryRetentionMs = days * 24L * 60 * 60 * 1_000
+                context?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()
+                    ?.putLong(HISTORY_RETENTION_KEY, networkHistoryRetentionMs)?.apply()
+                trimNetworkHistory()
+                // Rewrite the file now, so requests outside the new window cannot come back after a restart.
+                persistNetworkHistory()
+                ok()
+            }
+            "network.threshold.get" -> {
+                val now = SystemClock.elapsedRealtime()
+                val endpoints = JSONArray()
+                endpointThresholdLimits.entries.sortedBy { it.key }.forEach { (endpoint, config) ->
+                    endpoints.put(JSONObject().put("endpoint", endpoint).put("limit", config.limit).put("timeWindow", config.windowMs / 1000.0))
+                }
+                val breaches = JSONArray()
+                thresholdBreaches.toList().forEach { breach ->
+                    breaches.put(JSONObject()
+                        .put("timestamp", breach.timestampMs)
+                        .put("requestCount", breach.requestCount)
+                        .put("threshold", breach.limit)
+                        .put("endpoint", breach.endpoint.ifBlank { null } ?: JSONObject.NULL)
+                        .put("message", breach.message))
+                }
+                val count = synchronized(this) { thresholdRequestTimes.count { now - it <= thresholdWindowMs } }
+                JSONObject()
+                    .put("isEnabled", thresholdTrackingEnabled)
+                    .put("limit", thresholdLimit)
+                    .put("timeWindow", thresholdWindowMs / 1000.0)
+                    .put("shouldBlockRequests", thresholdBlockRequests)
+                    .put("currentRequestCount", count)
+                    .put("endpointLimits", endpoints)
+                    .put("breaches", breaches)
+                    .toString()
+            }
+            "network.threshold.set" -> {
+                setRequestThreshold(args.optInt("limit", thresholdLimit), args.optDouble("timeWindow", thresholdWindowMs / 1000.0).toInt().coerceAtLeast(1))
+                ok()
+            }
+            "network.threshold.tracking" -> { setRequestTracking(args.optBoolean("enabled")); ok() }
+            "network.threshold.blocking" -> { setThresholdBlocking(args.optBoolean("enabled")); ok() }
+            "network.threshold.alert" -> { setThresholdAlert(args.optString("emoji", "⚠️"), args.optString("message")); ok() }
+            "network.threshold.endpoint" -> {
+                setEndpointRequestThreshold(args.optString("endpoint"), args.optInt("limit"), args.optDouble("timeWindow", 60.0).toInt().coerceAtLeast(1))
+                ok()
+            }
+            "network.threshold.count" ->
+                JSONObject().put("count", getCurrentRequestCount(args.optString("endpoint").ifBlank { null })).toString()
+            "network.threshold.clear" -> ok(clearThresholdHistory())
+            "network.threshold.logs" -> JSONObject().put("logs", getThresholdLogs()).toString()
+            "network.threshold.export" -> ok(context?.let { export("network_thresholds", it) } ?: "Android runtime has not been installed.")
+
+            // Network injection: the current rules. Swift's injection calls read them, then send
+            // `network.injection.patch` with the fields the call sets.
+            "network.injection.get" -> {
+                val reply = JSONObject()
+                    .put("version", networkInjectionVersion.get())
+                    .put("settings", JSONObject(networkInjectionSettingsJSON()))
+                    .toString()
+                afterInjectionRead.getAndSet(null)?.invoke()
+                reply
+            }
+            // Writes the given fields of each section (delay, failure, rewrite) into the current rules,
+            // under the same monitor as every other writer: fields the caller did not change, such as
+            // rules an import just wrote, are kept.
+            "network.injection.patch" -> synchronized(this) {
+                val current = JSONObject(networkInjectionSettingsJSON())
+                val sections = args.optJSONObject("sections") ?: JSONObject()
+                sections.keys().forEach { name ->
+                    val fields = sections.optJSONObject(name) ?: return@forEach
+                    val section = current.optJSONObject(name) ?: JSONObject().also { current.put(name, it) }
+                    fields.keys().forEach { field -> section.put(field, fields.get(field)) }
+                }
+                val message = applyNetworkInjectionSettings(current.toString(), resetTransientState = false)
+                if (message == "Network injection settings applied.") ok(message) else fail(message)
+            }
+            "network.history.reload" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
+                networkHistoryRecords.clear()
+                loadNetworkHistory(ctx)
+                ok()
+            }
+            "network.injection.csv" -> JSONObject().put("csv", networkInjectionRulesCSV()).toString()
+
+            // WebSocket
+            "websocket.state" -> JSONObject()
+                .put("enabled", webSocketMonitoringEnabled)
+                .put("active", activeWebSockets.size)
+                .put("unread", webSocketConnections.sumOf { it.unreadFrameCount.get() })
+                .toString()
+            "websocket.enabled" -> { webSocketMonitoringEnabled = args.optBoolean("enabled", true); ok() }
+            "websocket.clearFrames" -> {
+                val url = args.optString("url")
+                webSocketConnections.filter { it.url == url }.forEach { connection ->
+                    connection.frames.clear()
+                    connection.unreadFrameCount.set(0)
+                }
+                ok()
+            }
+
+            // WebView
+            "webview.config" -> {
+                if (args.has("enabled")) webViewCaptureEnabled = args.optBoolean("enabled")
+                if (args.has("maxStoredRequests")) {
+                    webViewMaxStoredRequests = args.optInt("maxStoredRequests").coerceAtLeast(1)
+                    trimWebViewRecords()
+                }
+                JSONObject().put("enabled", webViewCaptureEnabled).put("maxStoredRequests", webViewMaxStoredRequests).toString()
+            }
+
+            // Performance
+            "performance.backtrace.capture" -> {
+                val (record, _) = captureBacktraceRecord(args.optBoolean("allThreads", false), args.optString("label").ifBlank { null })
+                backtraceJSON(record).toString()
+            }
+            "performance.backtraces" -> JSONArray().also { array -> backtraces.toList().forEach { array.put(backtraceJSON(it)) } }.toString()
+            "performance.backtraces.clear" -> { clearBacktraces(); ok() }
+            "performance.threads" -> {
+                val violations = JSONArray()
+                threadViolations.toList().forEach { violation ->
+                    violations.put(JSONObject().put("title", violation.substringBefore('\n')).put("stack", violation.substringAfter('\n', "")))
+                }
+                JSONObject().put("enabled", synchronized(enabledTools) { "thread_checker" in enabledTools }).put("violations", violations).toString()
+            }
+            "performance.threads.enabled" -> {
+                val enabled = args.optBoolean("enabled")
+                synchronized(enabledTools) { if (enabled) enabledTools.add("thread_checker") else enabledTools.remove("thread_checker") }
+                reconcileStrictMode()
+                ok()
+            }
+            "performance.threads.options" -> {
+                if (args.has("flashScreen")) strictModeFlashScreen = args.optBoolean("flashScreen")
+                if (args.has("log")) strictModeLog = args.optBoolean("log")
+                if (args.has("ignored")) strictModeIgnoredClasses = stringList(args.optJSONArray("ignored")).toSet()
+                // Reinstalls the policy with the new options if the checker is on when this runs.
+                reconcileStrictMode(reinstall = true)
+                ok()
+            }
+            "performance.threads.clear" -> { threadViolations.clear(); ok() }
+            "performance.supercalls" -> {
+                val array = JSONArray()
+                crashRecords.filter { it.contains("SuperNotCalledException") }
+                    .filter { record -> superCallIgnoredClasses.none { record.contains(it) } }
+                    .forEach { array.put(it.take(4_000)) }
+                array.toString()
+            }
+            "performance.supercalls.ignored" -> { superCallIgnoredClasses = stringList(args.optJSONArray("classes")).toSet(); ok() }
+            "performance.supercalls.clear" -> { crashRecords.removeAll { it.contains("SuperNotCalledException") }; ok() }
+            "performance.leaks" -> performanceDetailJSON("leaks")
+
+            // Resources
+            "resources.registerDatabase" -> { DebugSwiftDatabaseBrowser.registerRoomDatabase(args.optString("name")); ok() }
+            "resources.registerPreferences" -> { registerPreferences(args.optString("name")); ok() }
+
+            // Interface
+            "interface.compose" -> JSONObject()
+                .put("renders", composeRenderCount)
+                .put("frames", frameCount)
+                .put("slowFrames", slowFrameCount)
+                .toString()
+            "interface.compose.clear" -> { composeRenderCount = 0L; ok() }
+            "interface.viewDebugger3D" -> ok(DebugSwiftViewDebugger3D.show())
+
+            // App
+            "app.snapshot" -> writeAgentSnapshot().toString()
+            "app.agentLog" -> {
+                val enabled = args.optBoolean("enabled")
+                synchronized(enabledTools) { if (enabled) enabledTools.add("agent_debug_log") else enabledTools.remove("agent_debug_log") }
+                agentLogEnabled = enabled
+                ok()
+            }
+            "push.state" -> pushStateJSON()
+            "push.enabled" -> ok(setPushSimulationEnabled(args.optBoolean("enabled")))
+            "push.simulate" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
+                val info = args.optJSONObject("userInfo")
+                val userInfo = info?.keys()?.asSequence()?.associateWith { info.optString(it) } ?: emptyMap()
+                val result = schedulePush(
+                    ctx,
+                    args.optString("title"),
+                    args.optString("body"),
+                    args.optDouble("delay", 0.0).toLong(),
+                    args.optString("subtitle").ifEmpty { null },
+                    if (args.isNull("badge") || !args.has("badge")) null else args.optInt("badge"),
+                    args.optString("sound").ifEmpty { null },
+                    args.optString("category").ifEmpty { null },
+                    userInfo,
+                    requestedID = args.optString("id").ifBlank { null }
+                )
+                if (result.accepted) ok(result.message) else fail(result.message)
+            }
+            "push.template" -> ok(simulatePushNotificationFromTemplate(args.optString("name"), args.optDouble("delay", 0.0).toLong()))
+            "push.interact" -> ok(simulatePushNotificationInteraction(args.optString("id")))
+            "push.foreground" -> ok(simulateForegroundPushNotification(args.optString("id")))
+            "push.background" -> ok(simulateBackgroundPushNotification(args.optString("id")))
+            "push.addTemplate" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
+                val info = args.optJSONObject("userInfo")
+                val userInfo = info?.keys()?.asSequence()?.associateWith { info.optString(it) } ?: emptyMap()
+                val name = args.optString("name")
+                if (name.isBlank() || args.optString("title").isBlank() || args.optString("body").isBlank()) {
+                    return fail("Template name, title, and body cannot be empty.")
+                }
+                // The id the caller chose is the one stored, so removeTemplate(id:) finds the template.
+                val template = PushNotificationTemplate(
+                    args.optString("id").ifBlank { UUID.randomUUID().toString() },
+                    name,
+                    args.optString("title"),
+                    args.optString("body"),
+                    args.optString("subtitle").ifEmpty { null },
+                    if (args.isNull("badge") || !args.has("badge")) null else args.optInt("badge"),
+                    args.optString("sound").ifEmpty { null },
+                    args.optString("category").ifEmpty { null },
+                    userInfo,
+                    false
+                )
+                storePushTemplate(ctx, template).let { if (it.endsWith("added.")) ok(it) else fail(it) }
+            }
+            "push.removeTemplate" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
+                val id = args.optString("id")
+                val template = pushTemplates.firstOrNull { it.id == id } ?: return fail("No notification template with id '$id'.")
+                // Names are unique, so removing by this template's name removes exactly this one.
+                removePushTemplate(ctx, template.name).let { if (it.endsWith("removed.")) ok(it) else fail(it) }
+            }
+            "push.clearHistory" -> ok(clearPushNotificationHistory())
+            "push.remove" -> removeSimulatedPushNotification(args.optString("id")).let { if (it.startsWith("Removed")) ok(it) else fail(it) }
+            "push.config" -> {
+                val ctx = context ?: return fail("Android runtime has not been installed.")
+                // Check every option first, with no side effect; apply them (and the switch) only if all pass.
+                val options = args.keys().asSequence().filter { it != "isEnabled" }.associateWith { args.get(it).toString() }
+                val rejected = options.mapNotNull { (key, value) -> pushConfigurationError(key, value) }
+                if (rejected.isNotEmpty()) return fail(rejected.joinToString(" "))
+                // Apply in memory, the switch included, then write configuration and history once.
+                options.forEach { (key, value) -> setPushConfiguration(ctx, "$key=$value", persist = false) }
+                val toggles = args.has("isEnabled") && args.optBoolean("isEnabled") != pushEnabled
+                if (toggles) togglePushSimulation(ctx, persist = false)
+                if (options.isNotEmpty() || toggles) {
+                    persistPushConfiguration(ctx)
+                    savePushHistory(ctx)
+                }
+                ok("Notification configuration updated.")
+            }
+            "push.reloadState" -> {
+                // Tests: forget the push state and load it again from what was saved, as a restart does.
+                val ctx = context ?: return fail("Android runtime has not been installed.")
+                synchronized(this) {
+                    pushStateLoaded = false
+                    pushHistory.clear()
+                    pushTemplates.clear()
+                    loadPushState(ctx)
+                }
+                ok()
+            }
+            "push.scenario" -> ok(runPushNotificationScenario(args.optString("name")))
+            "push.token" -> { reportPushToken(args.optString("token")); ok() }
+
+            else -> JSONObject().put("error", "Unknown host operation: $operation").toString()
+        }
     }
 
     @Volatile private var lastIntentDescription = ""

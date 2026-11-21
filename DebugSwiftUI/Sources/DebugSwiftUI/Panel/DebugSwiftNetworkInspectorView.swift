@@ -213,7 +213,7 @@ struct DebugSwiftNetworkSessionHistoryView: View {
     private func refresh(statusOverride: String? = nil) {
         isLoading = true
         Task {
-            let json = await DebugSwiftAndroidRuntime.networkSessionHistorySnapshotJSON()
+            let json = await DebugSwiftRuntime.networkSessionHistorySnapshotJSON()
             if let data = json.data(using: .utf8),
                let snapshot = try? JSONDecoder().decode(DebugSwiftNetworkSessionHistorySnapshot.self, from: data) {
                 sessions = snapshot.sessions
@@ -229,7 +229,7 @@ struct DebugSwiftNetworkSessionHistoryView: View {
 
     private func perform(_ actionID: String, sessionID: String = "") {
         Task {
-            let result = await DebugSwiftAndroidRuntime.performNetworkSessionHistoryAction(
+            let result = await DebugSwiftRuntime.performNetworkSessionHistoryAction(
                 actionID: actionID,
                 sessionID: sessionID
             )
@@ -314,7 +314,7 @@ struct DebugSwiftNetworkSessionRequestsView: View {
     private func refresh() {
         isLoading = true
         Task {
-            let json = await DebugSwiftAndroidRuntime.networkSessionRequestsSnapshotJSON(sessionID: session.id)
+            let json = await DebugSwiftRuntime.networkSessionRequestsSnapshotJSON(sessionID: session.id)
             if let data = json.data(using: .utf8),
                let snapshot = try? JSONDecoder().decode(DebugSwiftNetworkSessionRequestsSnapshot.self, from: data) {
                 requests = snapshot.requests
@@ -329,7 +329,7 @@ struct DebugSwiftNetworkSessionRequestsView: View {
 
     private func importSession() {
         Task {
-            statusMessage = await DebugSwiftAndroidRuntime.performNetworkSessionHistoryAction(
+            statusMessage = await DebugSwiftRuntime.performNetworkSessionHistoryAction(
                 actionID: "import_session",
                 sessionID: session.id
             )
@@ -567,7 +567,7 @@ struct DebugSwiftNetworkInspectorView: View {
     }
 
     private func refresh() {
-        let json = DebugSwiftAndroidRuntime.networkInspectorSnapshot(featureID: featureID)
+        let json = DebugSwiftRuntime.networkInspectorSnapshot(featureID: featureID)
         guard let data = json.data(using: .utf8),
               let snapshot = try? JSONDecoder().decode(DebugSwiftNetworkInspectorSnapshot.self, from: data) else {
             requests = []
@@ -579,7 +579,7 @@ struct DebugSwiftNetworkInspectorView: View {
     }
 
     private func perform(_ actionID: String, requestID: String = "") {
-        statusMessage = DebugSwiftAndroidRuntime.performNetworkInspectorAction(
+        statusMessage = DebugSwiftRuntime.performNetworkInspectorAction(
             featureID: featureID,
             actionID: actionID,
             requestID: requestID
@@ -588,7 +588,7 @@ struct DebugSwiftNetworkInspectorView: View {
     }
 
     private func refreshDecryptionSettings() {
-        let json = DebugSwiftAndroidRuntime.networkDecryptionSettings()
+        let json = DebugSwiftRuntime.networkDecryptionSettings()
         guard let data = json.data(using: .utf8),
               let settings = try? JSONDecoder().decode(DebugSwiftNetworkDecryptionSettings.self, from: data) else {
             decryptionSettings = DebugSwiftNetworkDecryptionSettings()
@@ -604,7 +604,7 @@ struct DebugSwiftNetworkInspectorView: View {
     private func registerDecryptionKey() {
         let pattern = decryptionURLPattern.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = decryptionBase64Key.trimmingCharacters(in: .whitespacesAndNewlines)
-        let message = DebugSwiftAndroidRuntime.performNetworkDecryptionAction(
+        let message = DebugSwiftRuntime.performNetworkDecryptionAction(
             actionID: "register_key",
             value: "\(pattern):\(key)"
         )
@@ -619,7 +619,7 @@ struct DebugSwiftNetworkInspectorView: View {
     }
 
     private func performDecryptionAction(_ actionID: String, value: String = "") {
-        statusMessage = DebugSwiftAndroidRuntime.performNetworkDecryptionAction(actionID: actionID, value: value)
+        statusMessage = DebugSwiftRuntime.performNetworkDecryptionAction(actionID: actionID, value: value)
         refreshDecryptionSettings()
     }
 
@@ -886,19 +886,19 @@ struct DebugSwiftNetworkRequestDetail: View {
             case "copy_log":
                 copy(requestLogText)
             case "share_log":
-                statusMessage = DebugSwiftAndroidRuntime.shareNetworkSessionRequestLog(requestLogText)
+                statusMessage = DebugSwiftRuntime.shareNetworkSessionRequestLog(requestLogText)
             case "copy_curl":
                 copy(cURLCommand)
             case "replay":
                 Task {
-                    statusMessage = await DebugSwiftAndroidRuntime.replayNetworkSessionRequest(requestID: request.id)
+                    statusMessage = await DebugSwiftRuntime.replayNetworkSessionRequest(requestID: request.id)
                 }
             default:
                 statusMessage = "Unknown session request action: \(actionID)."
             }
             return
         }
-        statusMessage = DebugSwiftAndroidRuntime.performNetworkInspectorAction(
+        statusMessage = DebugSwiftRuntime.performNetworkInspectorAction(
             featureID: featureID,
             actionID: actionID,
             requestID: request.id
@@ -906,7 +906,7 @@ struct DebugSwiftNetworkRequestDetail: View {
     }
 
     private func copy(_ value: String) {
-        statusMessage = DebugSwiftAndroidRuntime.performNetworkInspectorAction(
+        statusMessage = DebugSwiftRuntime.performNetworkInspectorAction(
             featureID: featureID,
             actionID: "copy_text",
             requestID: request.id,
@@ -984,7 +984,7 @@ private extension String {
     func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
 }
 
-extension DebugSwiftAndroidRuntime {
+extension DebugSwiftRuntime {
     @MainActor
     static func networkSessionHistorySnapshotJSON() async -> String {
         #if os(Android)

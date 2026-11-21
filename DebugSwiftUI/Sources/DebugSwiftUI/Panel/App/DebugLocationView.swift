@@ -33,7 +33,7 @@ struct DebugLocationView: View {
     }
 
     func refresh() {
-        current = DebugSwiftAndroidRuntime.snapshot(featureID: "location")
+        current = DebugSwiftRuntime.snapshot(featureID: "location")
         if case let .success(reply) = DebugResourceClient.fetch("app.location.state", as: DebugActionReply.self) {
             isMocking = reply.mocking ?? false
         }

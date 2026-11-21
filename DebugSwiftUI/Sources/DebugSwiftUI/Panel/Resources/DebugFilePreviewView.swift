@@ -55,8 +55,8 @@ struct DebugFilePreviewView: View {
     }
 
     func share() {
-        _ = DebugSwiftAndroidRuntime.perform(featureID: "files", actionID: "browse_files", value: path)
-        status = DebugSwiftAndroidRuntime.perform(featureID: "files", actionID: "export")
+        _ = DebugSwiftRuntime.perform(featureID: "files", actionID: "browse_files", value: path)
+        status = DebugSwiftRuntime.perform(featureID: "files", actionID: "export")
     }
 
     func delete() {
