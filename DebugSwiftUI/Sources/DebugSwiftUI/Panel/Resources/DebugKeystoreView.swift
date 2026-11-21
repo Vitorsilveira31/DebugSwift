@@ -20,7 +20,7 @@ struct DebugKeystoreView: View {
             ForEach(aliases) { alias in
                 if editable {
                     NavigationLink {
-                        DebugKeychainEditView(service: alias.service ?? "", key: alias.alias, value: alias.value ?? "", isNew: false)
+                        DebugKeychainEditView(service: alias.service ?? "", key: alias.alias, value: alias.value, isNew: false)
                     } label: {
                         DebugKeystoreRow(alias: alias)
                     }
@@ -88,6 +88,8 @@ struct DebugKeychainEditView: View {
     @State var key: String
     @State var value: String
     let isNew: Bool
+    /// False for a stored value that isn't text: it is shown read-only, so saving can't replace it.
+    let readable: Bool
     @State var status = ""
     @Environment(\.dismiss) var dismiss
 
@@ -101,11 +103,12 @@ struct DebugKeychainEditView: View {
         return String(decoding: data, as: UTF8.self)
     }
 
-    init(service: String, key: String, value: String, isNew: Bool) {
+    init(service: String, key: String, value: String?, isNew: Bool) {
         self.service = service
         _key = State(initialValue: key)
-        _value = State(initialValue: value)
+        _value = State(initialValue: value ?? "")
         self.isNew = isNew
+        readable = isNew || value != nil
     }
 
     var body: some View {
@@ -121,16 +124,24 @@ struct DebugKeychainEditView: View {
                 }
             }
             Section("Value") {
-                TextField("value", text: $value)
+                if readable {
+                    TextField("value", text: $value)
+                } else {
+                    Text(verbatim: "This value isn't text, so it can't be shown or edited here.")
+                        .foregroundColor(Color.secondary)
+                }
             }
             Section {
-                Button("Save") {
-                    status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: Self.payload(service: isNew ? nil : service, key: key, value: value))
+                if readable {
+                    Button("Save") {
+                        status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: Self.payload(service: isNew ? nil : service, key: key, value: value))
+                    }
                 }
                 if !isNew {
                     Button("Delete", role: .destructive) {
-                        status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: Self.payload(service: isNew ? nil : service, key: key, value: nil))
-                        dismiss()
+                        status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: Self.payload(service: service, key: key, value: nil))
+                        // Stay open on failure, so the message shows and Delete can be tried again.
+                        if status.hasPrefix("Deleted") { dismiss() }
                     }
                 }
                 if !status.isEmpty {

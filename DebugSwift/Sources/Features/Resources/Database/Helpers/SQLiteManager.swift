@@ -234,11 +234,16 @@ final class SQLiteManager: @unchecked Sendable {
             
             // Get rows
             var hasMore = false
+            // A read stops after the page; a write that returns rows (RETURNING) must run to the end,
+            // or it would be left unfinished, keeping only the page.
+            let readOnly = sqlite3_stmt_readonly(statement) != 0
             var status = sqlite3_step(statement)
             while status == SQLITE_ROW {
                 guard rows.count < maxRows else {
                     hasMore = true
-                    break
+                    if readOnly { break }
+                    status = sqlite3_step(statement)
+                    continue
                 }
                 var row: [Any?] = []
                 
@@ -276,7 +281,7 @@ final class SQLiteManager: @unchecked Sendable {
             }
 
             // A failed step (a constraint on INSERT ... RETURNING, say) is an error, not an empty result.
-            guard hasMore || status == SQLITE_DONE else {
+            guard (hasMore && readOnly) || status == SQLITE_DONE else {
                 return .error(String(cString: sqlite3_errmsg(db)))
             }
             return .select(columns: columns, rows: rows, hasMore: hasMore)

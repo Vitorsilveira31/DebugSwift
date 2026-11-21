@@ -188,6 +188,27 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun aPreferenceKeyWithEqualsAndBarSignsIsSavedAndDeletedWhole() {
+        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val storeName = "debugswift_test_prefs"
+        val store = context.getSharedPreferences(storeName, android.content.Context.MODE_PRIVATE)
+        val key = "feature=enabled|beta"
+        store.edit().putString(key, "on").putString("feature", "untouched").commit()
+        fun payload(value: String?) = org.json.JSONObject().put("store", storeName).put("key", key)
+            .apply { if (value != null) put("value", value) }.toString()
+        try {
+            val saved = AndroidDebugTools.perform("preferences", "set_preference", payload("off"))
+            assertTrue("Saving answered: $saved", saved == "Preference updated.")
+            assertTrue("The key was saved whole", store.getString(key, null) == "off")
+            assertTrue("A key named like its prefix is left alone", store.getString("feature", null) == "untouched")
+            AndroidDebugTools.perform("preferences", "delete_preference", payload(null))
+            assertTrue("The key was deleted", !store.contains(key))
+        } finally {
+            store.edit().clear().commit()
+        }
+    }
+
+    @Test
     fun clearingTheLogHidesWhatWasLoggedBefore() {
         fun log() = debug.swift.android.DebugSwiftAppAPI.handle("app.logcat", org.json.JSONObject().put("filter", "logclear-").put("level", "V").toString())
         val marker = java.util.UUID.randomUUID().toString().take(8)
