@@ -129,6 +129,12 @@ struct SharedInterfaceScreensTests {
         defer { container.removeFromSuperview() }
 
         #expect(SharedPanelInterface.panelContainers(in: window) == [container])
+        // Touches on the panel are not the app's.
+        let button = UIView()
+        container.addSubview(button)
+        let panels = SharedPanelInterface.panelContainers(in: window)
+        #expect(!SharedPanelInterface.isAppTouch(on: button, panels: panels))
+        #expect(SharedPanelInterface.isAppTouch(on: window.rootViewController?.view, panels: panels))
         let result = try DebugResourceClient.fetch("app.ui.palette", as: DebugPaletteResult.self).get()
         let red = result.colors.first { $0.hex == "#FF0000" }?.percent ?? 0
         #expect(red < 50)

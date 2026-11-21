@@ -174,11 +174,14 @@ final class SharedPanelInterface {
     /// Keeps the app's taps and scrolls; touches on DebugSwift's own windows are left out.
     func record(_ event: UIEvent, in window: UIWindow) {
         guard isRecording, event.type == .touches, Self.isAppWindow(window), let touches = event.allTouches else { return }
+        // Looked up only when a touch starts, so moves and ends cost nothing extra.
+        let panels = touches.contains { $0.phase == .began } ? Self.panelContainers(in: window) : []
         for touch in touches {
             let key = ObjectIdentifier(touch)
             let point = touch.location(in: window)
             switch touch.phase {
             case .began:
+                guard Self.isAppTouch(on: touch.view, panels: panels) else { continue }
                 touchStarts[key] = point
             case .ended:
                 guard let start = touchStarts.removeValue(forKey: key) else { continue }
@@ -189,6 +192,13 @@ final class SharedPanelInterface {
                 break
             }
         }
+    }
+
+    /// Whether a touch on this view belongs to the app: not to the shared panel, which a `.sheet`
+    /// shows in the app's own window.
+    static func isAppTouch(on view: UIView?, panels: [UIView]) -> Bool {
+        guard let view else { return true }
+        return !panels.contains { view.isDescendant(of: $0) }
     }
 
     /// Keeps one finished touch: a tap when it barely moved, a scroll otherwise.
