@@ -180,5 +180,8 @@ struct NetworkSanitizerTests {
         #expect(sanitizer.sanitize(unformattedText: "(password=hunter2)") == "(password=<redacted>)")
         let xml = sanitizer.sanitize(body: Data(#"<user name="ana" password="hunter2"/>"#.utf8), contentType: "application/xml")
         #expect(String(data: xml, encoding: .utf8) == #"<user name="ana" password="&lt;redacted&gt;"/>"#)
+        // A backslash before a quote ends an XML value; it doesn't escape the quote.
+        let path = sanitizer.sanitize(body: Data(#"<user note="C:\" password="hunter2"/>"#.utf8), contentType: "text/xml")
+        #expect(String(data: path, encoding: .utf8) == #"<user note="C:\" password="&lt;redacted&gt;"/>"#)
     }
 }

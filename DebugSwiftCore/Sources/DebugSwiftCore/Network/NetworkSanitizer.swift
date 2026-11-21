@@ -154,7 +154,8 @@ public struct NetworkSanitizer: Sendable {
         let source = text as NSString
         var result = ""
         var cursor = 0
-        for match in Self.keyValuePattern.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+        let pattern = xml ? Self.xmlKeyValuePattern : Self.keyValuePattern
+        for match in pattern.matches(in: text, range: NSRange(location: 0, length: source.length)) {
             let name = source.substring(with: match.range(at: 2))
             // Keys can be percent-encoded, as in form bodies (`pass%77ord`): compare them decoded.
             let decoded = name.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? name
@@ -185,6 +186,11 @@ public struct NetworkSanitizer: Sendable {
         // next line's key as its value and leave that key's value unmasked.
         // A key starts after anything that can't be part of one: a space, `&`, `(`, `<`, a quote…
         pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(["']?[ \t]*[:=][ \t]*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s&;,})\]<>]+)"#
+    )
+
+    /// XML quoting: a backslash doesn't escape a quote, so `note="C:\"` ends at its second quote.
+    private static let xmlKeyValuePattern = try! NSRegularExpression(
+        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(["']?[ \t]*[:=][ \t]*)("[^"]*"|'[^']*'|[^\s&;,})\]<>]+)"#
     )
 
     // MARK: - Records
