@@ -207,5 +207,29 @@ struct SharedResourcesScreensTests {
         let listing = try DebugResourceClient.fetch("cookies.list", as: DebugCookieListing.self).get()
         let host = try #require(listing.hosts.first { $0.host == domain })
         #expect(host.cookies.map(\.name) == ["session"])
+
+        // One cookie can be deleted, then all of them.
+        let other = try #require(HTTPCookie(properties: [.domain: domain, .path: "/", .name: "theme", .value: "dark"]))
+        HTTPCookieStorage.shared.setCookie(other)
+        defer { HTTPCookieStorage.shared.deleteCookie(other) }
+        let deleted = try DebugResourceClient.fetch("cookies.delete", ["host": domain, "name": "session"], as: DebugActionReply.self).get()
+        #expect(deleted.message == "Deleted session.")
+        #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.name == "session" } == false)
+        #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.name == "theme" } == true)
+        _ = try DebugResourceClient.fetch("cookies.clear", as: DebugActionReply.self).get()
+        #expect(HTTPCookieStorage.shared.cookies?.isEmpty == true)
+    }
+
+    @Test("A folder inside a root can be deleted with what it holds")
+    func folderDeletion() throws {
+        let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("tmp/shared-folder-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("inner"), withIntermediateDirectories: true)
+        try "x".write(to: folder.appendingPathComponent("inner/file.txt"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(DebugFilesView(path: "tmp/\(folder.lastPathComponent)").isDeletable)
+        #expect(!DebugFilesView(path: "tmp").isDeletable)
+        let deletion = try DebugResourceClient.fetch("files.delete", ["path": "tmp/\(folder.lastPathComponent)"], as: DebugFileDeletion.self).get()
+        #expect(deletion.ok)
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
     }
 }

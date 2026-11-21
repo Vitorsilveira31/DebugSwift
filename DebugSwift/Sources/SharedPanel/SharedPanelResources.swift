@@ -36,6 +36,11 @@ final class SharedPanelResources {
         case "prefs.list": return preferences()
         case "prefs.diff": return preferenceChanges()
         case "cookies.list": return cookies()
+        case "cookies.delete": return deleteCookie(host: arguments["host"] ?? "", name: arguments["name"] ?? "")
+        case "cookies.clear":
+            let all = HTTPCookieStorage.shared.cookies ?? []
+            all.forEach(HTTPCookieStorage.shared.deleteCookie)
+            return ["message": all.count == 1 ? "Deleted 1 cookie." : "Deleted \(all.count) cookies."]
         default: return nil
         }
     }
@@ -273,6 +278,14 @@ final class SharedPanelResources {
     }
 
     // MARK: - Cookies
+
+    /// Every cookie with this name on this domain, whatever its path.
+    private func deleteCookie(host: String, name: String) -> [String: Any] {
+        let matches = (HTTPCookieStorage.shared.cookies ?? []).filter { $0.domain == host && $0.name == name }
+        guard !matches.isEmpty else { return ["error": "No cookie \(name) for \(host)."] }
+        matches.forEach(HTTPCookieStorage.shared.deleteCookie)
+        return ["message": "Deleted \(name)."]
+    }
 
     private func cookies() -> [String: Any] {
         let all = HTTPCookieStorage.shared.cookies ?? []
