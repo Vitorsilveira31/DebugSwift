@@ -151,6 +151,43 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun graphQLLabelsHARAndCURLComeFromDebugSwiftCore() {
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        AndroidDebugTools.recordNetwork(
+            method = "POST",
+            url = "https://api.example.test/graphql-$marker",
+            status = 200,
+            durationMs = 7,
+            requestBytes = 40,
+            responseBytes = 12,
+            requestBody = """{"query":"query GetUser { user { id } }"}""",
+            responseBody = """{"data":{}}""",
+            requestHeaders = mapOf("Content-Type" to listOf("application/json"), "Authorization" to listOf("Bearer t")),
+            responseHeaders = mapOf("Content-Type" to listOf("application/json"))
+        )
+        // The label iOS lists for the same request.
+        val list = org.json.JSONObject(AndroidDebugTools.networkInspectorSnapshotJSON("graphql")).toString()
+        assertTrue(list, list.contains("Query: GetUser"))
+
+        val har = org.json.JSONObject(requireNotNull(AndroidDebugTools.exportHar("http")).readText())
+        val entries = har.getJSONObject("log").getJSONArray("entries")
+        val entry = (0 until entries.length()).map(entries::getJSONObject)
+            .first { it.getJSONObject("request").getString("url").endsWith("graphql-$marker") }
+        assertTrue("$entry", entry.getJSONObject("request").getJSONObject("postData").getString("text").contains("GetUser"))
+        assertTrue("$entry", entry.getJSONObject("response").getJSONObject("content").getString("text") == """{"data":{}}""")
+
+        val curl = org.json.JSONObject(
+            debug.swift.android.DebugSwiftCoreBridge.call(
+                "curl.command",
+                org.json.JSONObject().put("method", "POST").put("url", "https://api.example.test/a'b")
+                    .put("headers", org.json.JSONObject().put("Authorization", org.json.JSONArray(listOf("Bearer secret"))))
+                    .put("body", "x=1").toString()
+            )
+        ).getString("command")
+        assertTrue(curl, curl == "curl -X POST 'https://api.example.test/a'\\''b' -H 'Authorization: <redacted>' -d 'x=1'")
+    }
+
+    @Test
     fun decryptedBodiesAreMaskedLiveAndInSavedHistory() {
         // A decrypted form body whose key is percent-encoded: `pass%77ord` is `password`.
         val marker = java.util.UUID.randomUUID().toString().take(8)

@@ -66,32 +66,39 @@ public enum HAREncoder {
     /// Charles and Proxyman without conversion.
     public static func encode(_ captures: [HARCapture]) -> [String: Any] {
         let entries = captures.map { capture -> [String: Any] in
-            [
+            var request: [String: Any] = [
+                "method": capture.request.method,
+                "url": capture.request.url,
+                "headers": capture.request.headers.map { ["name": $0.key, "value": $0.value] },
+                "httpVersion": "HTTP/1.1",
+                "cookies": [],
+                "queryString": [],
+                "headersSize": -1,
+                "bodySize": capture.request.body?.utf8.count ?? 0
+            ]
+            // The bodies go in, as HAR 1.2 expects: `postData` for the request, `content.text` for the response.
+            if let body = capture.request.body, !body.isEmpty {
+                request["postData"] = ["mimeType": mimeType(in: capture.request.headers), "text": body]
+            }
+            var content: [String: Any] = [
+                "size": capture.response.body?.utf8.count ?? 0,
+                "mimeType": mimeType(in: capture.response.headers)
+            ]
+            if let body = capture.response.body, !body.isEmpty { content["text"] = body }
+            return [
                 "startedDateTime": ISO8601DateFormatter().string(from: capture.startedDateTime),
                 "time": capture.time,
-                "request": [
-                    "method": capture.request.method,
-                    "url": capture.request.url,
-                    "headers": capture.request.headers.map { ["name": $0.key, "value": $0.value] },
-                    "httpVersion": "HTTP/1.1",
-                    "cookies": [],
-                    "queryString": [],
-                    "headersSize": -1,
-                    "bodySize": capture.request.body?.count ?? 0
-                ] as [String: Any],
+                "request": request,
                 "response": [
                     "status": capture.response.status,
                     "statusText": "",
                     "httpVersion": "HTTP/1.1",
                     "headers": capture.response.headers.map { ["name": $0.key, "value": $0.value] },
                     "cookies": [],
-                    "content": [
-                        "size": capture.response.body?.count ?? 0,
-                        "mimeType": capture.response.headers["Content-Type"] ?? "application/octet-stream"
-                    ],
+                    "content": content,
                     "redirectURL": "",
                     "headersSize": -1,
-                    "bodySize": capture.response.body?.count ?? 0
+                    "bodySize": capture.response.body?.utf8.count ?? 0
                 ] as [String: Any],
                 "cache": [:],
                 "timings": ["send": 0, "wait": capture.time, "receive": 0] as [String: Any]
@@ -104,6 +111,10 @@ public enum HAREncoder {
                 "entries": entries
             ] as [String: Any]
         ]
+    }
+
+    private static func mimeType(in headers: [String: String]) -> String {
+        headers.first { $0.key.lowercased() == "content-type" }?.value ?? "application/octet-stream"
     }
 
     /// Serialize the HAR dictionary to a JSON string; pretty-printing by default

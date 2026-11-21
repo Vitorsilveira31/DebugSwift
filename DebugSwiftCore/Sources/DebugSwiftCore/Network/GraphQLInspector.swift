@@ -16,6 +16,15 @@ public enum GraphQLOperation: Equatable {
     case query(name: String?)
     case mutation(name: String?)
     case subscription(name: String?)
+
+    /// How the inspector lists it: "Query: GetUser", or "Query" without a name.
+    public var label: String {
+        switch self {
+        case let .query(name): name.map { "Query: \($0)" } ?? "Query"
+        case let .mutation(name): name.map { "Mutation: \($0)" } ?? "Mutation"
+        case let .subscription(name): name.map { "Subscription: \($0)" } ?? "Subscription"
+        }
+    }
 }
 
 /// Pure, Foundation-only GraphQL parser. Staying off UIKit keeps it testable
@@ -31,6 +40,17 @@ public enum GraphQLInspector {
               let query = json["query"] as? String
         else { return nil }
         return parseOperationName(query)
+    }
+
+    /// The label for a request body, or "" when it isn't GraphQL. The query names the operation; a
+    /// body without one (a persisted query, say) is labeled by its `operationName`.
+    public static func operationLabel(from body: String) -> String {
+        if let operation = extractOperation(from: body) { return operation.label }
+        guard let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = json["operationName"] as? String, !name.isEmpty
+        else { return "" }
+        return "Operation: \(name)"
     }
 
     /// Pull `variables` out of the body so the actual arguments can be inspected
