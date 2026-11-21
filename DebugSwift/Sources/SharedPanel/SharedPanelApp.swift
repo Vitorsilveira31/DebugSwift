@@ -17,6 +17,8 @@ final class SharedPanelApp {
     static let shared = SharedPanelApp()
 
     private static let logLimit = 500
+    /// The longest delay a simulated notification accepts: a day, as on Android.
+    private static let maxDelay: TimeInterval = 86_400
     private let deepLinks = DeepLinkViewModel()
     /// Links still opening; their outcome lands in the history when open answers.
     private var deepLinksOpening = 0
@@ -464,7 +466,8 @@ final class SharedPanelApp {
             "playSound": config.playSound,
             "showBadge": config.showBadge,
             "autoInteraction": config.autoInteraction,
-            "interactionDelay": Int(config.interactionDelay.rounded()),
+            // Safe for any stored value: an older or out-of-range delay must not trap here.
+            "interactionDelay": config.interactionDelay.isFinite ? Int(min(max(config.interactionDelay, 0), Self.maxDelay).rounded()) : 0,
             "simulateRealPush": config.simulateRealPush,
             "maxHistory": config.maxHistoryCount,
             "templates": push.templates.map { template -> [String: Any] in
@@ -509,8 +512,8 @@ final class SharedPanelApp {
             // title|message|delay|subtitle|badge|sound|category|key=value,key=value, as on Android.
             guard parts.count >= 2, !parts[0].isEmpty else { return "Enter a title and a message." }
             let delayText = parts[safe: 2] ?? ""
-            guard let delay = delayText.isEmpty ? 0 : TimeInterval(delayText), delay >= 0 else {
-                return "Delay must be zero or more seconds."
+            guard let delay = delayText.isEmpty ? 0 : TimeInterval(delayText), delay.isFinite, (0...Self.maxDelay).contains(delay) else {
+                return "Delay must be from 0 to \(Int(Self.maxDelay)) seconds."
             }
             let badgeText = parts[safe: 4] ?? ""
             let badge = Int(badgeText)
@@ -558,7 +561,9 @@ final class SharedPanelApp {
             case "autoInteraction": config.autoInteraction = pair[1] == "true"
             case "simulateRealPush": config.simulateRealPush = pair[1] == "true"
             case "interactionDelay":
-                guard let delay = Double(pair[1]), delay >= 0 else { return "interactionDelay must be zero or more seconds." }
+                guard let delay = Double(pair[1]), delay.isFinite, (0...Self.maxDelay).contains(delay) else {
+                    return "interactionDelay must be from 0 to \(Int(Self.maxDelay)) seconds."
+                }
                 config.interactionDelay = delay
             case "maxHistoryCount":
                 guard let count = Int(pair[1]), count > 0 else { return "maxHistoryCount must be a whole number above 0." }

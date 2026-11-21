@@ -271,21 +271,27 @@ struct SharedAppScreensTests {
         if !push.isEnabled { _ = DebugPush.act("toggle") }
 
         // The composer's optional fields and payload reach the notification.
-        _ = DebugPush.act("notify", "Composed|With payload|0|Sub|5|default|orders|order=42, kind=test")
+        let composedTitle = "Composed-\(UUID().uuidString.prefix(8))"
+        _ = DebugPush.act("notify", "\(composedTitle)|With payload|0|Sub|5|default|orders|order=42, kind=test")
         var composed: SimulatedNotification?
         for _ in 0..<50 where composed == nil {
             try await Task.sleep(nanoseconds: 20_000_000)
-            composed = push.history.first { $0.title == "Composed" }
+            composed = push.history.first { $0.title == composedTitle }
         }
         #expect(composed?.userInfo == ["order": "42", "kind": "test"])
         #expect(composed?.subtitle == "Sub")
         #expect(composed?.badge == 5)
         #expect(composed?.category == "orders")
         #expect(DebugPush.act("notify", "Bad|Payload|0||||| novalue").contains("key=value"))
+        #expect(DebugPush.act("notify", "Bad|Delay|inf").contains("Delay must be"))
+        #expect(DebugPush.setOption("interactionDelay", "1e400").contains("from 0 to"))
+        #expect(DebugPush.setOption("interactionDelay", "1e20").contains("from 0 to"))
+        _ = try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get()
 
         // Sending a notification again keeps its subtitle, badge and payload.
+        let resendTitle = "Resend-\(UUID().uuidString.prefix(8))"
         let original = SimulatedNotification(
-            title: "Resend", body: "Payload", subtitle: "Sub", badge: 3, sound: "default",
+            title: resendTitle, body: "Payload", subtitle: "Sub", badge: 3, sound: "default",
             category: "contract", userInfo: ["order": "42"]
         )
         await PushNotificationSimulator.shared.simulateNotification(original)
@@ -293,7 +299,7 @@ struct SharedAppScreensTests {
         var copy: SimulatedNotification?
         for _ in 0..<50 where copy == nil {
             try await Task.sleep(nanoseconds: 20_000_000)
-            copy = push.history.first { $0.id != original.id && $0.title == "Resend" }
+            copy = push.history.first { $0.id != original.id && $0.title == resendTitle }
         }
         #expect(copy?.userInfo["order"] == "42")
         #expect(copy?.subtitle == "Sub")
