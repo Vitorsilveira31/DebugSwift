@@ -113,7 +113,6 @@ public class DebugSwift {
     public static func debugViewController() -> UIViewController {
         var controllers: [UIViewController & MainFeatureType] = [
             NetworkViewController(),
-            PerformanceViewController(),
             InterfaceViewController(),
             ResourcesViewController(),
             AppViewController()
@@ -153,7 +152,10 @@ public class DebugSwift {
         case .network:
             rootController = NetworkViewController()
         case .performance:
-            rootController = PerformanceViewController()
+            rootController = SharedPanelOnlyViewController(
+                title: "Performance",
+                message: "The Performance tools are in the shared SwiftUI panel. Add DebugSwiftUI and call DebugSwiftSharedPanel.useForFloatingBall()."
+            )
         case .interface:
             rootController = InterfaceViewController()
         case .resources:
@@ -314,45 +316,6 @@ public extension DebugSwift {
         return featureIDs
     }
 
-    /// Builds the existing UIKit implementation for one performance tool.
-    @MainActor
-    static func debugPerformanceViewController(for featureID: String) -> UIViewController? {
-        let rootController: UIViewController
-        switch featureID {
-        case "performance_overview":
-            rootController = PerformanceViewController(scope: .overview)
-        case "performance_widget":
-            rootController = PerformanceViewController(scope: .widget)
-        case "battery":
-            rootController = BatteryDebugController()
-        case "disk":
-            rootController = DiskDebugController()
-        case "memory_warning":
-            rootController = PerformanceViewController(scope: .memoryWarning)
-        case "frame_drops":
-            rootController = PerformanceViewController(scope: .frameDrops)
-        case "hangs":
-            rootController = PerformanceViewController(scope: .hangs)
-        case "backtraces":
-            rootController = PerformanceViewController(scope: .backtraces)
-        case "leaks":
-            rootController = PerformanceViewController(scope: .leaks)
-        case "thread_checker":
-            rootController = PerformanceThreadCheckerViewController()
-        case "super_calls":
-            rootController = ResourcesGenericController(viewModel: SuperCallViolationsViewModel())
-        default:
-            return nil
-        }
-
-        rootController.navigationItem.largeTitleDisplayMode = .never
-        let navigationController = UINavigationController(rootViewController: rootController)
-        navigationController.navigationBar.prefersLargeTitles = false
-        navigationController.navigationBar.tintColor = .white
-        navigationController.view.backgroundColor = .black
-        navigationController.overrideUserInterfaceStyle = .dark
-        return navigationController
-    }
 }
 
 /// A thread-safe counter of floating-ball visibility requests; the newest one wins.
