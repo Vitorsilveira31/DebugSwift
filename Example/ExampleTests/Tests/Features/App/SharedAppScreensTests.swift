@@ -235,6 +235,19 @@ struct SharedAppScreensTests {
         #expect(try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().enabled != wasEnabled)
         if !push.isEnabled { _ = DebugPush.act("toggle") }
 
+        // The composer's optional fields and payload reach the notification.
+        _ = DebugPush.act("notify", "Composed|With payload|0|Sub|5|default|orders|order=42, kind=test")
+        var composed: SimulatedNotification?
+        for _ in 0..<50 where composed == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+            composed = push.history.first { $0.title == "Composed" }
+        }
+        #expect(composed?.userInfo == ["order": "42", "kind": "test"])
+        #expect(composed?.subtitle == "Sub")
+        #expect(composed?.badge == 5)
+        #expect(composed?.category == "orders")
+        #expect(DebugPush.act("notify", "Bad|Payload|0||||| novalue").contains("key=value"))
+
         // Sending a notification again keeps its subtitle, badge and payload.
         let original = SimulatedNotification(
             title: "Resend", body: "Payload", subtitle: "Sub", badge: 3, sound: "default",

@@ -485,8 +485,29 @@ final class SharedPanelApp {
             if simulator.isEnabled { simulator.disable() } else { simulator.enable() }
             return push.isEnabled ? "Push simulation on." : "Push simulation off."
         case "notify":
+            // title|message|delay|subtitle|badge|sound|category|key=value,key=value, as on Android.
             guard parts.count >= 2, !parts[0].isEmpty else { return "Enter a title and a message." }
-            push.simulate(title: parts[0], body: parts[1], delay: TimeInterval(parts[safe: 2] ?? "") ?? 0)
+            let delayText = parts[safe: 2] ?? ""
+            guard let delay = delayText.isEmpty ? 0 : TimeInterval(delayText), delay >= 0 else {
+                return "Delay must be zero or more seconds."
+            }
+            let badgeText = parts[safe: 4] ?? ""
+            let badge = Int(badgeText)
+            guard badgeText.isEmpty || badge != nil else { return "Badge must be a whole number." }
+            guard let userInfo = Self.payload(parts[safe: 7] ?? "") else {
+                return "User info must use key=value pairs separated by commas."
+            }
+            let notification = SimulatedNotification(
+                title: parts[0],
+                body: parts[1],
+                subtitle: (parts[safe: 3] ?? "").nilIfEmpty,
+                badge: badge,
+                sound: (parts[safe: 5] ?? "").nilIfEmpty,
+                category: (parts[safe: 6] ?? "").nilIfEmpty,
+                userInfo: userInfo,
+                trigger: delay > 0 ? .timeInterval(delay) : .immediate
+            )
+            Task { await simulator.simulateNotification(notification) }
             return "Notification sent: \(parts[0])."
         case "simulate_template":
             // Named by its ID (names can repeat), or by its name from older callers.
@@ -590,6 +611,17 @@ final class SharedPanelApp {
         return text.split(separator: "\n", omittingEmptySubsequences: true)
     }
 
+    /// "key=value, key=value" as a dictionary; nil when a pair has no "=" or an empty key.
+    private static func payload(_ text: String) -> [String: String]? {
+        var values: [String: String] = [:]
+        for pair in text.split(separator: ",") {
+            let parts = pair.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, !parts[0].isEmpty else { return nil }
+            values[parts[0]] = parts[1]
+        }
+        return values
+    }
+
     // MARK: - Sharing
 
     private func share(_ text: String, named name: String) -> Bool {
@@ -605,4 +637,8 @@ private extension Array {
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
