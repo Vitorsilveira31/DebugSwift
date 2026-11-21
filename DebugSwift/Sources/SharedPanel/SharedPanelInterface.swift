@@ -45,6 +45,13 @@ final class SharedPanelInterface {
             return [:]
         case "app.ui.palette":
             return palette()
+        case "app.ui.tree":
+            return viewTree()
+        case "app.ui.highlight":
+            return ["count": highlight(arguments["rects"] ?? "")]
+        case "app.ui.clearHighlight":
+            clearHighlight()
+            return [:]
         default:
             return nil
         }
@@ -404,6 +411,103 @@ final class SharedPanelInterface {
                 "percent": Double(color.count) * 100 / Double(total)
             ]
         }
+    }
+
+    // MARK: - View hierarchy
+
+    /// Android stops at the same size, so a huge screen stays quick to read on both.
+    private static let treeLimit = 2500
+
+    /// The app window's views as a tree, in window points, without the debugger's own views.
+    private func viewTree() -> [String: Any] {
+        guard let window = Self.appWindow() else { return ["error": "No app window is available."] }
+        var budget = 0
+        let root = Self.node(for: window, in: window, budget: &budget)
+        return [
+            "windowWidth": Int(window.bounds.width),
+            "windowHeight": Int(window.bounds.height),
+            // Points: the screen reports them as they are.
+            "density": 1.0,
+            "root": root,
+            "truncated": budget >= Self.treeLimit
+        ]
+    }
+
+    private static func node(for view: UIView, in window: UIWindow, budget: inout Int) -> [String: Any] {
+        budget += 1
+        let frame = view.convert(view.bounds, to: window)
+        let className = NSStringFromClass(type(of: view))
+        let name = className.split(separator: ".").last.map(String.init) ?? className
+        var node: [String: Any] = [
+            // Hosting views and SwiftUI's own platform views, told apart from plain UIKit ones.
+            "kind": className.contains("SwiftUI") ? "swiftui" : "uikit",
+            "name": name,
+            "className": className,
+            "resourceId": view.accessibilityIdentifier ?? "",
+            "left": Int(frame.minX.rounded()),
+            "top": Int(frame.minY.rounded()),
+            "width": Int(frame.width.rounded()),
+            "height": Int(frame.height.rounded()),
+            "visible": !view.isHidden && view.alpha > 0.01,
+            "alpha": Double(view.alpha),
+            "clickable": view.isUserInteractionEnabled && (view is UIControl || !(view.gestureRecognizers ?? []).isEmpty),
+            "enabled": (view as? UIControl)?.isEnabled ?? true
+        ]
+        if let text = Self.text(of: view), !text.isEmpty { node["text"] = text }
+        if let label = view.accessibilityLabel, !label.isEmpty { node["description"] = label }
+        var children: [[String: Any]] = []
+        for child in view.subviews where budget < treeLimit && !isDebuggerView(child)
+            && child.accessibilityIdentifier != "DebugSwiftHighlight" {
+            children.append(Self.node(for: child, in: window, budget: &budget))
+        }
+        node["children"] = children
+        return node
+    }
+
+    private static func text(of view: UIView) -> String? {
+        switch view {
+        case let label as UILabel: label.text
+        case let button as UIButton: button.currentTitle
+        case let field as UITextField: field.text
+        case let textView as UITextView: textView.text
+        default: nil
+        }
+    }
+
+    private weak var highlightView: UIView?
+    private var highlightRemoval: DispatchWorkItem?
+
+    /// Boxes over the given elements of the app's window for five seconds, as on Android.
+    /// `rects` is "left,top,right,bottom;…" in window points.
+    private func highlight(_ rects: String) -> Int {
+        clearHighlight()
+        let frames: [CGRect] = rects.split(separator: ";").compactMap { entry in
+            let values = entry.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            guard values.count == 4 else { return nil }
+            return CGRect(x: values[0], y: values[1], width: values[2] - values[0], height: values[3] - values[1])
+        }
+        guard let window = Self.appWindow(), !frames.isEmpty else { return 0 }
+        let overlay = UIView(frame: window.bounds)
+        overlay.isUserInteractionEnabled = false
+        overlay.accessibilityIdentifier = "DebugSwiftHighlight"
+        for frame in frames {
+            let box = UIView(frame: frame)
+            box.backgroundColor = UIColor.systemRed.withAlphaComponent(0.2)
+            box.layer.borderColor = UIColor.systemRed.cgColor
+            box.layer.borderWidth = 3
+            overlay.addSubview(box)
+        }
+        window.addSubview(overlay)
+        highlightView = overlay
+        let removal = DispatchWorkItem { [weak overlay] in overlay?.removeFromSuperview() }
+        highlightRemoval = removal
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: removal)
+        return frames.count
+    }
+
+    private func clearHighlight() {
+        highlightRemoval?.cancel()
+        highlightView?.removeFromSuperview()
     }
 
     // MARK: - Windows
