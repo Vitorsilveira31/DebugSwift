@@ -326,16 +326,20 @@ final class SharedPanelResources {
     /// The editor's JSON, `{"service", "key", "value"}`, so any text fits in each field. A new item
     /// has no service and goes to the app's default one; an existing item keeps its service, even
     /// an empty one.
-    private static func keychainPayload(_ value: String) -> (keychain: Keychain, key: String, value: String?)? {
+    private static func keychainPayload(_ value: String) -> (keychain: Keychain, key: String, value: String?, isNew: Bool)? {
         // A new item needs a key; an existing one (sent with its service) may have an empty account.
         guard let object = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any],
               let key = object["key"] as? String, !key.isEmpty || object["service"] != nil else { return nil }
         let keychain = (object["service"] as? String).map { Keychain(service: $0) } ?? Keychain()
-        return (keychain, key, object["value"] as? String)
+        return (keychain, key, object["value"] as? String, object["service"] == nil)
     }
 
     private func setKeychainItem(_ value: String) -> String {
         guard let item = Self.keychainPayload(value), let text = item.value else { return "Enter a key and a value." }
+        // Adding (no service sent) never replaces an item that is already there, text or not.
+        if item.isNew, (try? item.keychain.contains(item.key)) == true {
+            return "\(item.key) already exists. Open it from the list to edit it."
+        }
         do {
             try item.keychain.set(text, key: item.key)
             return "Saved \(item.key)."
@@ -376,10 +380,10 @@ final class SharedPanelResources {
         return files.compactMap { path, size in
             guard seen.insert(path).inserted else { return nil }
             let name: String
-            if path.hasPrefix(home) {
-                name = String(path.dropFirst(home.count))
-            } else if let group = groups.first(where: { path.hasPrefix($0.prefix) }) {
+            if let group = groups.first(where: { path.hasPrefix($0.prefix) }) {
                 name = group.identifier + "/" + path.dropFirst(group.prefix.count)
+            } else if path.hasPrefix(home) {
+                name = String(path.dropFirst(home.count))
             } else {
                 name = path
             }
@@ -399,6 +403,9 @@ final class SharedPanelResources {
         } catch {
             return .failure(ExportFailure(text: "Could not prepare the export: \(error.localizedDescription)"))
         }
+        // Until the copy is made, a failure removes the folder; on success the share callback does.
+        var succeeded = false
+        defer { if !succeeded { try? FileManager.default.removeItem(at: folder) } }
         var db: OpaquePointer?
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
             sqlite3_close(db)
@@ -415,7 +422,15 @@ final class SharedPanelResources {
         guard sqlite3_step(statement) == SQLITE_DONE else {
             return .failure(ExportFailure(text: "Could not export: \(String(cString: sqlite3_errmsg(db)))"))
         }
+        succeeded = true
         return .success(target)
+    }
+
+    /// Under the app's home folder or an App Group still configured: a removed group's files are
+    /// no longer reachable through a name kept from an earlier listing.
+    private static func isInAllowedLocation(_ path: String) -> Bool {
+        if path.hasPrefix(NSHomeDirectory() + "/") { return true }
+        return DebugSwift.Resources.shared.getAccessibleAppGroups().contains { path.hasPrefix($0.url.standardizedFileURL.path + "/") }
     }
 
     private static func isSQLite(_ url: URL) -> Bool {
@@ -431,7 +446,7 @@ final class SharedPanelResources {
     /// The file a database name stands for: from the last listing while that file is still there,
     /// otherwise found again.
     private func databasePath(_ name: String) -> String? {
-        if let path = databasePaths[name], FileManager.default.fileExists(atPath: path) { return path }
+        if let path = databasePaths[name], FileManager.default.fileExists(atPath: path), Self.isInAllowedLocation(path) { return path }
         let files = databaseFiles()
         databasePaths = Dictionary(files.map { ($0.name, $0.path) }, uniquingKeysWith: { first, _ in first })
         return databasePaths[name]
@@ -471,15 +486,11 @@ final class SharedPanelResources {
             let data = RealmManager.shared.getTableData(from: path, table: table)
             return ["columns": data.columns, "rows": data.rows.map(Self.texts), "offset": 0, "total": data.rows.count]
         }
-        // Counts only this table: listing every table would count each of them on every page.
-        let quoted = "\"" + table.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-        var total: Int?
-        if case let .select(_, rows, _) = SQLiteManager.shared.executeQuery(path: path, query: "SELECT COUNT(*) FROM \(quoted)", maxRows: 1) {
-            total = (rows.first?.first as? Int64).map(Int.init)
-        }
-        let data = SQLiteManager.shared.getTableData(from: path, table: table, limit: Self.pageSize, offset: max(0, offset))
+        // This table's count and page, read together: listing every table would count each of
+        // them, and two separate reads could see two states of the file.
+        let data = SQLiteManager.shared.getTablePage(from: path, table: table, limit: Self.pageSize, offset: max(0, offset))
         var result: [String: Any] = ["columns": data.columns, "rows": data.rows.map(Self.texts), "offset": max(0, offset)]
-        if let total { result["total"] = total }
+        if let total = data.total { result["total"] = total }
         return result
     }
 
@@ -490,6 +501,9 @@ final class SharedPanelResources {
         guard let path = databasePath(name) else { return ["error": "No database named \(name)."] }
         guard !Self.isRealm(path) else { return ["error": "SQL runs on SQLite databases, not Realm files."] }
         guard !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return ["error": "Enter a SQL statement."] }
+        if SharedPanelRegisteredStores.isReadOnlyStoreFile(path), !SQLiteManager.shared.isReadOnly(path: path, query: sql) {
+            return ["error": "This file backs a Core Data or SwiftData store set read-only in DebugSwift.Resources, so only reading SQL runs."]
+        }
         switch SQLiteManager.shared.executeQuery(path: path, query: sql, maxRows: Self.pageSize) {
         case let .select(columns, rows, hasMore):
             // Reading stops after one page, so a long result doesn't hold up the screen.

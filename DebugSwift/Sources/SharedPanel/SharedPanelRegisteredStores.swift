@@ -35,9 +35,20 @@ enum SharedPanelRegisteredStores {
     /// Entities with their object counts, or an error for a store that is no longer registered.
     static func tables(_ name: String) -> [String: Any] {
         if let context = coreDataContext(name) {
-            // As the UIKit browser did: the manager reads the registered context from the main actor.
-            let tables = CoreDataManager.shared.getEntities(for: context).map { ["name": $0.name, "rows": $0.objectCount] as [String: Any] }
-            return ["db": name, "tables": tables]
+            // On the context's own queue, so a private-queue context is read safely too.
+            var result: [String: Any] = [:]
+            context.performAndWait {
+                do {
+                    let entities = (context.persistentStoreCoordinator?.managedObjectModel.entities ?? []).compactMap(\.name).sorted()
+                    let tables = try entities.map { entity -> [String: Any] in
+                        ["name": entity, "rows": try context.count(for: NSFetchRequest<NSFetchRequestResult>(entityName: entity))]
+                    }
+                    result = ["db": name, "tables": tables]
+                } catch {
+                    result = ["error": "The store could not be read: \(error.localizedDescription)"]
+                }
+            }
+            return result
         }
         #if canImport(SwiftData)
         if #available(iOS 17.0, *), let registration = swiftDataRegistration(name) {
@@ -59,10 +70,17 @@ enum SharedPanelRegisteredStores {
                 guard let description = context.persistentStoreCoordinator?.managedObjectModel.entitiesByName[entity] else { return }
                 let columns = description.attributesByName.keys.sorted()
                 let request = NSFetchRequest<NSManagedObject>(entityName: entity)
-                let total = (try? context.count(for: request)) ?? 0
-                request.fetchOffset = offset
-                request.fetchLimit = pageSize
-                let objects = (try? context.fetch(request)) ?? []
+                let total: Int
+                let objects: [NSManagedObject]
+                do {
+                    total = try context.count(for: request)
+                    request.fetchOffset = offset
+                    request.fetchLimit = pageSize
+                    objects = try context.fetch(request)
+                } catch {
+                    result = ["error": "\(entity) could not be read: \(error.localizedDescription)"]
+                    return
+                }
                 result = [
                     "columns": columns,
                     "rows": objects.map { object in columns.map { text(object.value(forKey: $0)) } },
@@ -75,7 +93,12 @@ enum SharedPanelRegisteredStores {
         #if canImport(SwiftData)
         if #available(iOS 17.0, *), let registration = swiftDataRegistration(name) {
             let manager = SwiftDataManager.shared
-            let models = (try? manager.fetchModels(entityName: entity, in: registration)) ?? []
+            let models: [any PersistentModel]
+            do {
+                models = try manager.fetchModels(entityName: entity, in: registration)
+            } catch {
+                return ["error": "\(entity) could not be read: \(error.localizedDescription)"]
+            }
             let page = Array(models.dropFirst(offset).prefix(pageSize))
             let columns = page.first.map { manager.getProperties(for: $0, entityName: entity, in: registration).map(\.name) } ?? []
             let rows: [[Any]] = page.map { model in
@@ -89,6 +112,28 @@ enum SharedPanelRegisteredStores {
         }
         #endif
         return ["error": "No database named \(name)."]
+    }
+
+    /// Whether a SQLite file backs a registered store whose read-only option is on:
+    /// `coreDataReadOnly` for Core Data, `swiftDataReadOnly` for SwiftData.
+    static func isReadOnlyStoreFile(_ path: String) -> Bool {
+        let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        func same(_ url: URL?) -> Bool { url.map { $0.resolvingSymlinksInPath().path == target } ?? false }
+        if DebugSwift.Resources.shared.coreDataReadOnly,
+           CoreDataManager.shared.getAvailableContexts().contains(where: { entry in
+               (entry.context.persistentStoreCoordinator?.persistentStores ?? []).contains { same($0.url) }
+           }) {
+            return true
+        }
+        #if canImport(SwiftData)
+        if #available(iOS 17.0, *), DebugSwift.Resources.shared.swiftDataReadOnly,
+           SwiftDataManager.shared.getAvailableContexts().contains(where: { registration in
+               registration.container.configurations.contains { same($0.url) }
+           }) {
+            return true
+        }
+        #endif
+        return false
     }
 
     private static func coreDataContext(_ name: String) -> NSManagedObjectContext? {
