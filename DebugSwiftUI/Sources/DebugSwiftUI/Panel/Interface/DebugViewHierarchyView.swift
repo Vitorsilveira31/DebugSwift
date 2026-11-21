@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The foreground window as an expandable tree. Compose content shows its semantics nodes, so
-/// elements can be told apart by text, description and test tag.
+/// elements can be told apart by text, description and test tag; on iOS, UIKit and SwiftUI views
+/// with their text, accessibility label and identifier.
 struct DebugViewHierarchyView: View {
     @State var tree: DebugViewTree? = nil
     @State var collapsed: Set<String> = []
@@ -20,7 +21,9 @@ struct DebugViewHierarchyView: View {
                 Toggle("Hide invisible", isOn: $hidingInvisible)
                 Button("Refresh") { load() }
                 if let tree {
-                    Text(verbatim: "\(tree.windowWidth) × \(tree.windowHeight) px, density \(tree.density)")
+                    Text(verbatim: DebugPlatform.isAndroid
+                        ? "\(tree.windowWidth) × \(tree.windowHeight) px, density \(tree.density)"
+                        : "\(tree.windowWidth) × \(tree.windowHeight) pt")
                         .font(.caption)
                         .foregroundColor(Color.secondary)
                     if tree.truncated {
@@ -110,16 +113,25 @@ struct DebugViewNodeDetailView: View {
     let node: DebugViewNode
     let tree: DebugViewTree
 
+    static func kindName(_ kind: String) -> String {
+        switch kind {
+        case "compose": "Compose semantics"
+        case "swiftui": "SwiftUI view"
+        case "uikit": "UIKit view"
+        default: "Android view"
+        }
+    }
+
     var body: some View {
         List {
             Section {
                 Button("Highlight in the app") { debugHighlight([node]) }
             }
             Section("Element") {
-                LabeledContent("Kind") { Text(verbatim: node.kind == "compose" ? "Compose semantics" : "Android view") }
+                LabeledContent("Kind") { Text(verbatim: Self.kindName(node.kind)) }
                 LabeledContent("Type") { Text(verbatim: node.name) }
                 if !node.resourceId.isEmpty {
-                    LabeledContent(node.kind == "compose" ? "Test tag" : "Id") { Text(verbatim: node.resourceId) }
+                    LabeledContent(node.kind == "compose" ? "Test tag" : DebugPlatform.isAndroid ? "Id" : "Accessibility id") { Text(verbatim: node.resourceId) }
                 }
                 if let text = node.text {
                     LabeledContent("Text") { Text(verbatim: text).multilineTextAlignment(.trailing) }
@@ -131,7 +143,8 @@ struct DebugViewNodeDetailView: View {
             Section("Layout") {
                 LabeledContent("Position") { Text(verbatim: "\(tree.dp(node.left)), \(tree.dp(node.top))") }
                 LabeledContent("Size") { Text(verbatim: "\(tree.dp(node.width)) × \(tree.dp(node.height))") }
-                LabeledContent("In pixels") {
+                // The raw values: pixels on Android, window points on iOS.
+                LabeledContent(DebugPlatform.isAndroid ? "In pixels" : "In points") {
                     Text(verbatim: "\(node.left),\(node.top) to \(node.right),\(node.bottom)")
                 }
                 LabeledContent("Children") { Text(verbatim: "\(node.children.count)") }

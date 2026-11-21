@@ -90,6 +90,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
             #if os(iOS)
             let availableIDs = Set(DebugSwift.availableInterfaceFeatureIDs())
             return [
+                .init("view_hierarchy", "View Hierarchy", "Inspect the app window's UIKit and SwiftUI views, their frames and text."),
                 .init("touches", "Showing touches", "Show touch feedback in the active app window."),
                 .init("grid", "Grid overlay", "Draw a configurable alignment grid over the active app window."),
                 .init("colorize", "Colorized view borders", "Colorize native view borders to help identify layout boundaries."),

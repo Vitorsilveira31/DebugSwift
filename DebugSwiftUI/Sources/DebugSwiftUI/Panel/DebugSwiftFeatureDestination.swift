@@ -39,6 +39,8 @@ struct DebugSwiftFeatureDestination: View {
             DebugPerformanceDestination(featureID: feature.id)
         } else if ["touches", "colorize", "animations", "dark_mode", "measurement"].contains(feature.id) {
             DebugSwiftInterfaceSettingView(featureID: feature.id)
+        } else if feature.id == "view_hierarchy" {
+            DebugViewHierarchyView()
         } else if feature.id == "swiftui_render" {
             DebugComposeRendersView()
         } else if feature.id == "doc_recorder" {

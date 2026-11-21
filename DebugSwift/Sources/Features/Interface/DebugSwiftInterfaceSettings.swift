@@ -122,6 +122,7 @@ public extension DebugSwift {
             }
         }
         // Tools with only a shared SwiftUI screen.
+        featureIDs.insert("view_hierarchy", at: 0)
         if !App.shared.disableMethods.contains(.swiftUIRender),
            FeatureHandling.enabledBetaFeatures.contains(.swiftUIRenderTracking) {
             featureIDs.append("swiftui_render")
