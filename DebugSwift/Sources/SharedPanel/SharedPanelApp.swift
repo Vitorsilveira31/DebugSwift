@@ -444,7 +444,10 @@ final class SharedPanelApp {
             "simulateRealPush": config.simulateRealPush,
             "maxHistory": config.maxHistoryCount,
             "templates": push.templates.map { template -> [String: Any] in
-                var json: [String: Any] = ["name": template.name, "title": template.title, "body": template.body, "isDefault": template.isDefault]
+                var json: [String: Any] = [
+                    "name": template.name, "title": template.title, "body": template.body,
+                    "isDefault": template.isDefault, "templateID": template.id
+                ]
                 if let subtitle = template.subtitle { json["subtitle"] = subtitle }
                 return json
             },
@@ -483,9 +486,14 @@ final class SharedPanelApp {
             push.simulate(title: parts[0], body: parts[1], delay: TimeInterval(parts[safe: 2] ?? "") ?? 0)
             return "Notification sent: \(parts[0])."
         case "simulate_template":
-            guard let name = parts.first, push.templates.contains(where: { $0.name == name }) else { return "No template named \(parts.first ?? "")." }
-            push.simulateFromTemplate(name, delay: TimeInterval(parts[safe: 1] ?? "") ?? 0)
-            return "Sent the \(name) template."
+            // Named by its ID (names can repeat), or by its name from older callers.
+            let reference = parts.first ?? ""
+            guard let template = push.templates.first(where: { $0.id == reference }) ?? push.templates.first(where: { $0.name == reference }) else {
+                return "No template named \(reference)."
+            }
+            let delay = TimeInterval(parts[safe: 1] ?? "") ?? 0
+            Task { await simulator.simulateFromTemplate(template, trigger: delay > 0 ? .timeInterval(delay) : .immediate) }
+            return "Sent the \(template.name) template."
         case "run_scenario":
             let scenarios: [String: DebugSwift.PushNotification.TestScenario] = [
                 "messageflow": .messageFlow, "newsupdates": .newsUpdates,
@@ -520,9 +528,11 @@ final class SharedPanelApp {
             simulator.addTemplate(NotificationTemplate(name: parts[0], title: parts[1], body: parts[2]))
             return "Template \(parts[0]) added."
         case "remove_template":
-            guard let template = push.templates.first(where: { $0.name == value }) else { return "No template named \(value)." }
+            guard let template = push.templates.first(where: { $0.id == value }) ?? push.templates.first(where: { $0.name == value }) else {
+                return "No template named \(value)."
+            }
             simulator.removeTemplate(id: template.id)
-            return "Template \(value) removed."
+            return "Template \(template.name) removed."
         case "interact_notification":
             guard push.history.contains(where: { $0.id == value }) else { return "No simulated notification with ID '\(value)'." }
             simulator.simulateInteraction(identifier: value)

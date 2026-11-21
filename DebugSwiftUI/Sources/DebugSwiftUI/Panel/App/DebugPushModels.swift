@@ -6,9 +6,13 @@ struct DebugPushTemplate: Decodable, Identifiable {
     let body: String
     let subtitle: String?
     let isDefault: Bool
+    /// iOS only: template names can repeat there, so actions name a template by this.
+    let templateID: String?
 
     /// Prefixed so it cannot match a history entry in the same list.
-    var id: String { "template-" + name }
+    var id: String { "template-" + (templateID ?? name) }
+    /// What the send and remove actions name the template by.
+    var reference: String { templateID ?? name }
 }
 
 struct DebugPushScenario: Identifiable {

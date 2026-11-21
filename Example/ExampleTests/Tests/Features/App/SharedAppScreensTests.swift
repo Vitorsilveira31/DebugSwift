@@ -199,6 +199,15 @@ struct SharedAppScreensTests {
         _ = DebugPush.act("remove_template", "contract-template")
         #expect(try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().templates.contains { $0.name == "contract-template" } == false)
 
+        // A custom template named like a built-in one removes only itself.
+        let builtIn = try #require(push.templates.first { $0.isDefault })
+        _ = DebugPush.act("add_template", "\(builtIn.name)|Same|Name")
+        let custom = try #require(try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().templates.first { $0.name == builtIn.name && !$0.isDefault })
+        _ = DebugPush.act("remove_template", custom.reference)
+        let remaining = try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().templates
+        #expect(remaining.contains { $0.templateID == builtIn.id })
+        #expect(!remaining.contains { $0.templateID == custom.templateID })
+
         _ = DebugPush.act("toggle")
         #expect(try DebugResourceClient.fetch("app.push.state", as: DebugPushState.self).get().enabled != wasEnabled)
         if !push.isEnabled { _ = DebugPush.act("toggle") }
