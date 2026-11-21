@@ -49,7 +49,8 @@ object DebugSwiftNetworkSanitizer {
             headers = list("headers"),
             queryParameters = list("queryParameters"),
             bodyKeys = list("bodyKeys"),
-            redactsURLPassword = if (config.has("redactsURLPassword")) config.optBoolean("redactsURLPassword") else null
+            // Only an explicit true or false changes it: null, a missing key or another type keeps it.
+            redactsURLPassword = config.opt("redactsURLPassword") as? Boolean
         )
     }
 
