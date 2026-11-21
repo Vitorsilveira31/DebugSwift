@@ -156,10 +156,12 @@ final class SharedPanelResources {
     // MARK: - UserDefaults
 
     private static func typeName(_ value: Any) -> String {
-        switch value {
+        // A stored 0 or 1 bridges to Bool too: only a CFBoolean is a Boolean.
+        if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            return CFNumberIsFloatType(number) ? "Double" : "Int"
+        }
+        return switch value {
         case is Bool: "Boolean"
-        case let number as NSNumber:
-            CFNumberIsFloatType(number) ? "Double" : "Int"
         case is Date: "Date"
         case is Data: "Data"
         case is [Any]: "Array"

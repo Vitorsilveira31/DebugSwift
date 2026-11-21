@@ -63,6 +63,22 @@ struct SharedResourcesScreensTests {
         #expect(UserDefaults.standard.object(forKey: key) == nil)
     }
 
+    @Test("A number stored as 0 or 1 stays a number, and a Boolean stays a Boolean")
+    func preferenceNumberTypes() throws {
+        let number = "shared-prefs-number-\(UUID().uuidString.prefix(8))"
+        let flag = "shared-prefs-flag-\(UUID().uuidString.prefix(8))"
+        UserDefaults.standard.set(1, forKey: number)
+        UserDefaults.standard.set(1.0, forKey: number + "-double")
+        UserDefaults.standard.set(true, forKey: flag)
+        defer { [number, number + "-double", flag].forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+        let values = try #require(try DebugResourceClient.fetch("prefs.list", as: DebugPreferenceListing.self).get().stores.first?.values)
+        #expect(values.first { $0.key == number }?.type == "Int")
+        #expect(values.first { $0.key == number + "-double" }?.type == "Double")
+        #expect(values.first { $0.key == flag }?.type == "Boolean")
+        _ = DebugSwiftRuntime.perform(featureID: "preferences", actionID: "set_preference", value: "Standard|\(number)=2")
+        #expect(UserDefaults.standard.integer(forKey: number) == 2)
+    }
+
     @Test("Cookies are grouped by host")
     func cookies() throws {
         let domain = "shared-cookies-\(UUID().uuidString.prefix(6).lowercased()).test"
