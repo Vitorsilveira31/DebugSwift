@@ -114,6 +114,51 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun viewDebuggerGivesTheButtonBackToTheActivityItHid() {
+        val main = compose.activity
+        compose.runOnUiThread { debug.swift.android.DebugSwiftFloatingButton.setEnabled(main, true) }
+        fun mainButton(): android.view.View? =
+            (main.window.decorView as android.view.ViewGroup).findViewWithTag("debugswift.floating.button")
+        waitUntil("the floating button is on the main Activity") { mainButton() != null }
+
+        // Hold the capture long enough to switch Activities while it is still pending.
+        val viewer = debug.swift.android.DebugSwiftViewDebugger3D
+        val previousDelay = viewer.captureDelayMs
+        viewer.captureDelayMs = 3_000
+        try {
+            viewer.show()
+            waitUntil("the capture hides the main Activity's button") { mainButton()?.visibility == android.view.View.INVISIBLE }
+
+            main.startActivity(android.content.Intent(main, SecondTestActivity::class.java))
+            waitUntil("the second Activity is in front") { AndroidDebugTools.foregroundActivityOrNull() is SecondTestActivity }
+
+            // Cancelled while another Activity is in front and before anything was attached.
+            viewer.hide()
+            (AndroidDebugTools.foregroundActivityOrNull() as? SecondTestActivity)?.finish()
+            waitUntil("the main Activity is back in front") { AndroidDebugTools.foregroundActivityOrNull() === main }
+
+            waitUntil("the main Activity's button is visible again") { mainButton()?.visibility == android.view.View.VISIBLE }
+            Thread.sleep(3_500)
+            assertTrue("The cancelled capture still opened the viewer", !viewer.isShowing)
+        } finally {
+            viewer.captureDelayMs = previousDelay
+            viewer.hide()
+            compose.runOnUiThread { debug.swift.android.DebugSwiftFloatingButton.setEnabled(main, false) }
+        }
+    }
+
+    private fun waitUntil(what: String, timeoutMs: Long = 10_000, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            var met = false
+            compose.runOnUiThread { met = condition() }
+            if (met) return
+            Thread.sleep(100)
+        }
+        throw AssertionError("Timed out waiting until $what")
+    }
+
+    @Test
     fun crashReportsShowAnUncaughtException() {
         // Reports from earlier runs are restored at launch, so this run's probe carries its own marker.
         val marker = java.util.UUID.randomUUID().toString().take(8)

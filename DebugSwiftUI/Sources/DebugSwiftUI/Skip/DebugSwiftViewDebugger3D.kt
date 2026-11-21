@@ -36,6 +36,13 @@ object DebugSwiftViewDebugger3D {
     private const val MAX_LAYERS = 800
     private val main = Handler(Looper.getMainLooper())
     private var viewer: Viewer? = null
+    /**
+     * How long the capture waits for a frame without the floating button. Tests raise it to switch
+     * Activities while a capture is still pending.
+     */
+    @Volatile
+    var captureDelayMs = 150L
+
     /** Bumped by every presentation and dismissal; a capture from an older one is dropped. Main thread only. */
     private var generation = 0
     /** The Activity whose floating button a capture or the viewer hid; it gets the button back. */
@@ -93,7 +100,7 @@ object DebugSwiftViewDebugger3D {
                 decor.draw(Canvas(screenshot))
                 attach()
             }
-        }, 150)
+        }, captureDelayMs)
     }
 
     private fun dismiss() {
