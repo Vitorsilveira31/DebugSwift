@@ -39,6 +39,19 @@ struct SharedPerformanceScreensTests {
         #expect(superCalls.violations != nil)
     }
 
+    @Test("Slow frames are listed newest first")
+    func slowFramesOrder() async throws {
+        _ = DebugSwiftRuntime.perform(featureID: "frame_drops", actionID: "clear")
+        for _ in 0..<2 {
+            try await Task.sleep(nanoseconds: 150_000_000)
+            _ = DebugPerformanceDetail.act("app.perf.stall", ["ms": "80"])
+        }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let events = try DebugPerformanceDetail.fetch("frames", as: DebugFrameDetail.self).get().events
+        #expect(events.count >= 2)
+        if events.count >= 2 { #expect(events[0].time >= events[1].time) }
+    }
+
     @Test("A captured backtrace is listed first, and clearing empties the list")
     func backtraces() throws {
         _ = DebugPerformanceDetail.act("app.perf.captureBacktrace", ["all": "false"])
