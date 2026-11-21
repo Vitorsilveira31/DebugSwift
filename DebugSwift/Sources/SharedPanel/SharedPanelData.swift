@@ -19,6 +19,11 @@ public enum SharedPanelData {
         SharedPanelPerformance.shared.prepare()
     }
 
+    /// Whether DebugSwift's setup already ran (`DebugSwift().setup(...)` by the host), so the
+    /// shared panel doesn't run it again and replace the host's hidden features.
+    @MainActor
+    public static var isDebugSwiftSetUp: Bool { FeatureHandling.isSetUp }
+
     /// Answers a data operation (`app.perf.sample`, `app.perf.detail`, …) with its JSON, or
     /// `{"error": …}` when the operation is unknown or fails.
     @MainActor

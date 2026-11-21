@@ -1232,13 +1232,17 @@ public enum DebugSwiftRuntime {
     @MainActor static var panelInfo: [DebugInfoGroup] = []
 
     #if os(iOS)
-    @MainActor private static var isIOSDebuggerPrepared = false
+    @MainActor private(set) static var isIOSDebuggerPrepared = false
     @MainActor private static var isIOSFloatingBallVisible = false
 
     @MainActor
     static func prepareIOSDebugger(betaFeatures: [DebugSwiftBetaFeature] = []) {
         guard !isIOSDebuggerPrepared else { return }
-        DebugSwift().setup(enableBetaFeatures: betaFeatures)
+        // The host's own setup keeps its hidden features and disabled methods; only set up when
+        // nothing did.
+        if !SharedPanelData.isDebugSwiftSetUp {
+            DebugSwift().setup(enableBetaFeatures: betaFeatures)
+        }
         SharedPanelData.prepare()
         isIOSDebuggerPrepared = true
     }
@@ -1307,7 +1311,8 @@ public enum DebugSwiftRuntime {
     #endif
 
     /// Starts the platform services without touching the panel's content. The panel calls it when it
-    /// opens, so a host that never called `install` still gets the Android runtime.
+    /// opens, so a host that never called `install` still gets the Android runtime, or on iOS
+    /// DebugSwift's setup (the monitors and swizzles the Performance and App tools read).
     @discardableResult
     @MainActor
     static func startRuntime(capturesURLSession: Bool = true) -> Bool {
@@ -1320,6 +1325,7 @@ public enum DebugSwiftRuntime {
         DebugFloatingButton.startListening()
         return installed
         #else
+        prepareIOSDebugger()
         return false
         #endif
     }
