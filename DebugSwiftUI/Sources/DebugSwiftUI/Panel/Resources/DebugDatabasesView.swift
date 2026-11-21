@@ -22,9 +22,11 @@ struct DebugDatabasesView: View {
                     HStack {
                         Text(verbatim: database.name)
                         Spacer()
-                        Text(verbatim: debugByteCount(database.size))
-                            .font(.caption)
-                            .foregroundColor(Color.secondary)
+                        if let size = database.size {
+                            Text(verbatim: debugByteCount(size))
+                                .font(.caption)
+                                .foregroundColor(Color.secondary)
+                        }
                     }
                 }
             }
