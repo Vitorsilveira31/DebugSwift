@@ -100,6 +100,41 @@ struct SharedInterfaceScreensTests {
         #expect(DebugSwiftRuntime.perform(featureID: "doc_recorder", actionID: "export") == "Capture a screenshot first.")
     }
 
+    @Test("A capture numbers the last 24 gestures as the recorder's list does")
+    func gestureNumbers() {
+        let recorder = SharedPanelInterface.shared
+        _ = DebugPerformanceDetail.act("app.doc.clear")
+        _ = DebugPerformanceDetail.act("app.doc.record", ["on": "true"])
+        defer {
+            _ = DebugPerformanceDetail.act("app.doc.record", ["on": "false"])
+            _ = DebugPerformanceDetail.act("app.doc.clear")
+        }
+        for index in 0..<30 {
+            recorder.recordTouch(from: CGPoint(x: index, y: 0), to: CGPoint(x: index, y: 0))
+        }
+        let (marks, firstNumber) = recorder.annotatedGestures()
+        #expect(marks.count == 24)
+        #expect(firstNumber == 7)
+        #expect(marks.first?.end.x == 6)
+    }
+
+    @Test("Captures leave out the shared panel when it is presented in the app's window")
+    func capturesSkipThePanel() throws {
+        let window = try #require(SharedPanelInterface.appWindow())
+        // A sheet puts the panel in a container of its own, a direct subview of the app's window.
+        let container = UIView(frame: window.bounds)
+        container.backgroundColor = UIColor(red: 1, green: 0, blue: 0, alpha: 1)
+        container.addSubview(SharedPanelData.makePanelMarker())
+        window.addSubview(container)
+        defer { container.removeFromSuperview() }
+
+        #expect(SharedPanelInterface.panelContainers(in: window) == [container])
+        let result = try DebugResourceClient.fetch("app.ui.palette", as: DebugPaletteResult.self).get()
+        let red = result.colors.first { $0.hex == "#FF0000" }?.percent ?? 0
+        #expect(red < 50)
+        #expect(!container.isHidden)
+    }
+
     @Test("The palette ranks colors by share, merges close shades, and skips see-through pixels")
     func paletteRanking() {
         func pixels(_ color: (UInt8, UInt8, UInt8, UInt8), _ count: Int) -> [UInt8] {

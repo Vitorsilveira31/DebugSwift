@@ -289,19 +289,20 @@ final class SharedPanelResources {
         ]
     }
 
-    /// The editor's JSON, `{"service", "key", "value"}`, so any text fits in each field. An empty
-    /// service uses the app's default one.
-    private static func keychainPayload(_ value: String) -> (service: String, key: String, value: String?)? {
+    /// The editor's JSON, `{"service", "key", "value"}`, so any text fits in each field. A new item
+    /// has no service and goes to the app's default one; an existing item keeps its service, even
+    /// an empty one.
+    private static func keychainPayload(_ value: String) -> (keychain: Keychain, key: String, value: String?)? {
         guard let object = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any],
               let key = object["key"] as? String, !key.isEmpty else { return nil }
-        return (object["service"] as? String ?? "", key, object["value"] as? String)
+        let keychain = (object["service"] as? String).map { Keychain(service: $0) } ?? Keychain()
+        return (keychain, key, object["value"] as? String)
     }
 
     private func setKeychainItem(_ value: String) -> String {
         guard let item = Self.keychainPayload(value), let text = item.value else { return "Enter a key and a value." }
-        let keychain = item.service.isEmpty ? Keychain() : Keychain(service: item.service)
         do {
-            try keychain.set(text, key: item.key)
+            try item.keychain.set(text, key: item.key)
             return "Saved \(item.key)."
         } catch {
             return "Could not save \(item.key): \(error.localizedDescription)"
@@ -310,9 +311,8 @@ final class SharedPanelResources {
 
     private func deleteKeychainItem(_ value: String) -> String {
         guard let item = Self.keychainPayload(value) else { return "Enter a key." }
-        let keychain = item.service.isEmpty ? Keychain() : Keychain(service: item.service)
         do {
-            try keychain.remove(item.key)
+            try item.keychain.remove(item.key)
             return "Deleted \(item.key)."
         } catch {
             return "Could not delete \(item.key): \(error.localizedDescription)"

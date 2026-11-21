@@ -234,7 +234,8 @@ final class SQLiteManager: @unchecked Sendable {
             
             // Get rows
             var hasMore = false
-            while sqlite3_step(statement) == SQLITE_ROW {
+            var status = sqlite3_step(statement)
+            while status == SQLITE_ROW {
                 guard rows.count < maxRows else {
                     hasMore = true
                     break
@@ -271,8 +272,13 @@ final class SQLiteManager: @unchecked Sendable {
                 }
                 
                 rows.append(row)
+                status = sqlite3_step(statement)
             }
-            
+
+            // A failed step (a constraint on INSERT ... RETURNING, say) is an error, not an empty result.
+            guard hasMore || status == SQLITE_DONE else {
+                return .error(String(cString: sqlite3_errmsg(db)))
+            }
             return .select(columns: columns, rows: rows, hasMore: hasMore)
         } else {
             // Execute non-SELECT query
