@@ -84,7 +84,7 @@ final class SharedPanelResources {
     }
 
     private func listFiles(_ path: String) -> [String: Any] {
-        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         if trimmed.isEmpty {
             return [
                 "path": "",
@@ -141,9 +141,11 @@ final class SharedPanelResources {
     }
 
     private func deleteFile(_ path: String) -> [String: Any] {
-        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        let trimmed = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let url = resolve(trimmed) else { return ["error": "Path is outside the app's private storage."] }
-        guard trimmed.contains("/") else { return ["error": "Cannot delete a storage root."] }
+        // Compare the resolved URL: "tmp/." or "Documents/child/.." name a root too.
+        let rootPaths = Self.roots.map { URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent($0).standardizedFileURL.path }
+        guard !rootPaths.contains(url.path) else { return ["error": "Cannot delete a storage root."] }
         guard FileManager.default.fileExists(atPath: url.path) else { return ["error": "Path not found: \(path)"] }
         do {
             try FileManager.default.removeItem(at: url)
@@ -174,7 +176,10 @@ final class SharedPanelResources {
         let defaults = UserDefaults.standard.dictionaryRepresentation()
         let values: [[String: Any]] = defaults.keys.sorted().filter { !Self.hiddenDefaults.contains($0) }.map { key in
             let value = defaults[key] ?? ""
-            return ["key": key, "type": Self.typeName(value), "value": "\(value)"]
+            let type = Self.typeName(value)
+            // A Boolean prints as 1 or 0; show true or false, which is what saving accepts.
+            let text = type == "Boolean" ? String((value as? Bool) ?? false) : "\(value)"
+            return ["key": key, "type": type, "value": text]
         }
         return ["stores": [["name": Self.standardStore, "values": values]]]
     }

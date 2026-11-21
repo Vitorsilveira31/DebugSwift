@@ -31,6 +31,20 @@ struct SharedResourcesScreensTests {
 
         #expect((try? DebugResourceClient.fetch("files.list", ["path": "Documents/../../"], as: DebugFileListing.self).get()) == nil)
         #expect((try? DebugResourceClient.fetch("files.delete", ["path": "tmp"], as: DebugFileDeletion.self).get()) == nil)
+        for root in ["tmp/.", "Documents/child/..", "tmp/"] {
+            #expect((try? DebugResourceClient.fetch("files.delete", ["path": root], as: DebugFileDeletion.self).get()) == nil)
+        }
+        #expect(FileManager.default.fileExists(atPath: url.path))
+
+        // A name ending in a space is its own file: deleting it leaves the one without the space.
+        let spaced = url.appendingPathExtension("bak")
+        try "plain".write(to: spaced, atomically: true, encoding: .utf8)
+        try "spaced".write(to: URL(fileURLWithPath: spaced.path + " "), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: spaced) }
+        let spacedDeletion = try DebugResourceClient.fetch("files.delete", ["path": "tmp/\(name).bak "], as: DebugFileDeletion.self).get()
+        #expect(spacedDeletion.ok)
+        #expect(FileManager.default.fileExists(atPath: spaced.path))
+        #expect(!FileManager.default.fileExists(atPath: spaced.path + " "))
 
         let deletion = try DebugResourceClient.fetch("files.delete", ["path": "tmp/\(name)"], as: DebugFileDeletion.self).get()
         #expect(deletion.ok)
@@ -75,6 +89,10 @@ struct SharedResourcesScreensTests {
         #expect(values.first { $0.key == number }?.type == "Int")
         #expect(values.first { $0.key == number + "-double" }?.type == "Double")
         #expect(values.first { $0.key == flag }?.type == "Boolean")
+        #expect(values.first { $0.key == flag }?.value == "true")
+        // The value shown saves back unchanged.
+        #expect(DebugSwiftRuntime.perform(featureID: "preferences", actionID: "set_preference", value: "Standard|\(flag)=false") == "Saved \(flag).")
+        #expect(UserDefaults.standard.object(forKey: flag) as? Bool == false)
         _ = DebugSwiftRuntime.perform(featureID: "preferences", actionID: "set_preference", value: "Standard|\(number)=2")
         #expect(UserDefaults.standard.integer(forKey: number) == 2)
     }
