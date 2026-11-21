@@ -91,9 +91,11 @@ struct DebugKeychainEditView: View {
     @State var status = ""
     @Environment(\.dismiss) var dismiss
 
-    /// The keychain actions take JSON, so a key with "=" or a service with "|" stays whole.
-    static func payload(service: String, key: String, value: String?) -> String {
-        var object = ["service": service, "key": key]
+    /// The keychain actions take JSON, so a key with "=" or a service with "|" stays whole. A nil
+    /// service, for a new item, means the app's default one.
+    static func payload(service: String?, key: String, value: String?) -> String {
+        var object = ["key": key]
+        if let service { object["service"] = service }
         if let value { object["value"] = value }
         guard let data = try? JSONSerialization.data(withJSONObject: object) else { return "" }
         return String(decoding: data, as: UTF8.self)
@@ -123,11 +125,11 @@ struct DebugKeychainEditView: View {
             }
             Section {
                 Button("Save") {
-                    status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: Self.payload(service: service, key: key, value: value))
+                    status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: Self.payload(service: isNew ? nil : service, key: key, value: value))
                 }
                 if !isNew {
                     Button("Delete", role: .destructive) {
-                        status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: Self.payload(service: service, key: key, value: nil))
+                        status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: Self.payload(service: isNew ? nil : service, key: key, value: nil))
                         dismiss()
                     }
                 }
