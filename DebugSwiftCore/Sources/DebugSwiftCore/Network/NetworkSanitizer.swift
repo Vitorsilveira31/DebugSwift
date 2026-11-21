@@ -120,8 +120,17 @@ public struct NetworkSanitizer: Sendable {
                     let sanitized = sanitizeFormEncoded(text, keys: normalizedBodyKeys)
                     if sanitized != text { result = Data(sanitized.utf8) }
                 }
-            } else if type.isEmpty || type.contains("json") {
+            } else if type.contains("json") {
                 result = sanitizeJSON(body) ?? body
+            } else if type.isEmpty {
+                // No type: JSON when it parses, otherwise key/value text such as `password=secret`.
+                if let json = sanitizeJSON(body) {
+                    result = json
+                } else if (try? JSONSerialization.jsonObject(with: body, options: [.fragmentsAllowed])) == nil,
+                          let text = String(data: body, encoding: .utf8) {
+                    let masked = maskingKeys(inUnformattedText: text)
+                    if masked != text { result = Data(masked.utf8) }
+                }
             } else if type.hasPrefix("text/") || type.contains("xml"), let text = String(data: body, encoding: .utf8) {
                 // Other text (plain, XML…) may still carry `password=…` pairs: mask them as key/value text.
                 let masked = maskingKeys(inUnformattedText: text, xml: type.contains("xml"))
@@ -160,10 +169,9 @@ public struct NetworkSanitizer: Sendable {
             // Keys can be percent-encoded, as in form bodies (`pass%77ord`): compare them decoded.
             let decoded = name.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? name
             guard normalizedBodyKeys.contains(Self.normalize(decoded)) else { continue }
-            // The XML pattern has a second branch for unquoted values, in group 6.
-            var valueRange = match.range(at: 4)
-            if valueRange.location == NSNotFound, match.numberOfRanges > 6 { valueRange = match.range(at: 6) }
-            guard valueRange.location != NSNotFound else { continue }
+            // The XML pattern's value is in whichever branch matched: group 4, 6 or 8.
+            guard var valueRange = [4, 6, 8].lazy.filter({ $0 < match.numberOfRanges })
+                .map({ match.range(at: $0) }).first(where: { $0.location != NSNotFound }) else { continue }
             // A quoted value keeps its quotes; only what is between them is replaced.
             let first = source.substring(with: NSRange(location: valueRange.location, length: 1))
             if first == "\"" || first == "'", valueRange.length >= 2 {
@@ -172,6 +180,24 @@ public struct NetworkSanitizer: Sendable {
             result += source.substring(with: NSRange(location: cursor, length: valueRange.location - cursor))
             result += xml ? "&lt;redacted&gt;" : Self.redactedValue
             cursor = valueRange.location + valueRange.length
+        }
+        let masked = cursor > 0 ? result + source.substring(from: cursor) : text
+        return xml ? maskingElements(in: masked) : masked
+    }
+
+    /// Masks the text of XML elements named after a key; the placeholder is escaped for XML.
+    private func maskingElements(in text: String) -> String {
+        let source = text as NSString
+        var result = ""
+        var cursor = 0
+        for match in Self.xmlElementPattern.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            let name = source.substring(with: match.range(at: 1))
+            let local = name.split(separator: ":").last.map(String.init) ?? name
+            let content = match.range(at: 3)
+            guard normalizedBodyKeys.contains(Self.normalize(local)), content.length > 0 else { continue }
+            result += source.substring(with: NSRange(location: cursor, length: content.location - cursor))
+            result += "&lt;redacted&gt;"
+            cursor = content.location + content.length
         }
         guard cursor > 0 else { return text }
         return result + source.substring(from: cursor)
@@ -194,9 +220,14 @@ public struct NetworkSanitizer: Sendable {
     /// XML quoting: a backslash doesn't escape a quote, so `note="C:\"` ends at its second quote; and
     /// XML allows line breaks around an attribute's `=`.
     private static let xmlKeyValuePattern = try! NSRegularExpression(
-        // Quoted values (attributes) may sit across line breaks; an unquoted value stays on its line,
-        // so `note:` followed by a line break can't take the next line's key as its value.
-        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(?:(["']?[ \t\r\n]*[:=][ \t\r\n]*)("[^"]*"|'[^']*')|(["']?[ \t]*[:=][ \t]*)([^\s&;,})\]<>"']+))"#
+        // An attribute (`=` and a quoted value) may sit across line breaks; text pairs, quoted or
+        // not, stay on their line, so `note:` at a line's end can't take the next line as its value.
+        pattern: #"(^|[^A-Za-z0-9_.%+-])([A-Za-z0-9_.%+-]+)(?:([ \t\r\n]*=[ \t\r\n]*)("[^"]*"|'[^']*')|(["']?[ \t]*[:=][ \t]*)("[^"]*"|'[^']*')|(["']?[ \t]*[:=][ \t]*)([^\s&;,})\]<>"']+))"#
+    )
+
+    /// An element named after a key, `<password>secret</password>`: its text is masked.
+    private static let xmlElementPattern = try! NSRegularExpression(
+        pattern: #"<([A-Za-z_][A-Za-z0-9_.:-]*)(\s[^>]*)?>([^<]*)</\1\s*>"#
     )
 
     // MARK: - Records
