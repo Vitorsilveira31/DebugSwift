@@ -5,12 +5,14 @@ import SwiftUI
 struct DebugCookieItem: Identifiable {
     let host: String
     let cookie: DebugCookie
-    var id: String { host + "|" + cookie.name }
+    var id: String { host + "|" + cookie.id }
 }
 
 struct DebugCookiesView: View {
     @State var hosts: [DebugCookieHost] = []
     @State var failure = ""
+    @State var status = ""
+    @State var confirmsClear = false
 
     var body: some View {
         List {
@@ -24,21 +26,56 @@ struct DebugCookiesView: View {
             ForEach(hosts) { host in
                 Section {
                     ForEach(host.cookies.map { DebugCookieItem(host: host.host, cookie: $0) }) { item in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: item.cookie.name)
-                            Text(verbatim: item.cookie.value)
-                                .font(.system(.footnote, design: .monospaced))
-                                .foregroundColor(Color.secondary)
-                                .lineLimit(3)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: item.cookie.path.map { "\(item.cookie.name)  \($0)" } ?? item.cookie.name)
+                                Text(verbatim: item.cookie.value)
+                                    .font(.system(.footnote, design: .monospaced))
+                                    .foregroundColor(Color.secondary)
+                                    .lineLimit(3)
+                            }
+                            Spacer()
+                            Button("Delete", role: .destructive) { delete(item) }
+                                .buttonStyle(.borderless)
                         }
                     }
                 } header: {
                     Text(verbatim: host.host)
                 }
             }
+            if !hosts.isEmpty {
+                Section {
+                    Button("Delete all cookies", role: .destructive) { confirmsClear = true }
+                    if !status.isEmpty {
+                        Text(verbatim: status).font(.caption)
+                    }
+                }
+            }
         }
         .navigationTitle("HTTP Cookies")
         .onAppear { load() }
+        .alert("Delete all cookies?", isPresented: $confirmsClear) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { clear() }
+        }
+    }
+
+    func delete(_ item: DebugCookieItem) {
+        var arguments = ["host": item.host, "name": item.cookie.name]
+        if let path = item.cookie.path { arguments["path"] = path }
+        act("cookies.delete", arguments)
+    }
+
+    func clear() {
+        act("cookies.clear", [:])
+    }
+
+    func act(_ operation: String, _ arguments: [String: String]) {
+        switch DebugResourceClient.fetch(operation, arguments, as: DebugActionReply.self) {
+        case let .success(reply): status = reply.message ?? ""
+        case let .failure(error): status = error.message
+        }
+        load()
     }
 
     func load() {
