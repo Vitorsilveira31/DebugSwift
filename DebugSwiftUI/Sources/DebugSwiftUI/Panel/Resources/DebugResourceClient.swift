@@ -141,7 +141,9 @@ struct DebugTableData: Decodable {
 struct DebugCookie: Decodable, Identifiable {
     let name: String
     let value: String
-    var id: String { name }
+    /// iOS only: a host can hold cookies with the same name on several paths.
+    var path: String? = nil
+    var id: String { name + "|" + (path ?? "") }
 }
 
 struct DebugCookieHost: Decodable, Identifiable {

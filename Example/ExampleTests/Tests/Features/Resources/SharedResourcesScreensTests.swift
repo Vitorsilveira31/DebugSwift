@@ -366,6 +366,57 @@ struct SharedResourcesScreensTests {
         #expect((try? DebugResourceClient.fetch("db.query", ["db": "Core Data/Notes", "sql": "SELECT 1"], as: DebugTableData.self).get()) == nil)
     }
 
+    @Test("Adding a keychain item never replaces one that exists")
+    func keychainAddKeepsExisting() throws {
+        let key = "shared-keychain-add-\(UUID().uuidString.prefix(8))"
+        let keychain = Keychain()
+        try keychain.set(Data([0xff, 0x00]), key: key)
+        defer { try? keychain.remove(key) }
+        let reply = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: DebugKeychainEditView.payload(service: nil, key: key, value: "text"))
+        #expect(reply.contains("already exists"))
+        #expect(try keychain.getData(key) == Data([0xff, 0x00]))
+    }
+
+    @Test("A Core Data store set read-only refuses writing SQL on its file and still reads")
+    func readOnlyStoreFile() throws {
+        let entity = NSEntityDescription()
+        entity.name = "Note"
+        entity.managedObjectClassName = NSStringFromClass(NSManagedObject.self)
+        let body = NSAttributeDescription()
+        body.name = "body"
+        body.attributeType = .stringAttributeType
+        body.isOptional = true
+        entity.properties = [body]
+        let model = NSManagedObjectModel()
+        model.entities = [entity]
+        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/shared-readonly-\(UUID().uuidString.prefix(8)).sqlite")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let container = NSPersistentContainer(name: "ReadOnly", managedObjectModel: model)
+        container.persistentStoreDescriptions = [NSPersistentStoreDescription(url: url)]
+        container.loadPersistentStores { _, error in #expect(error == nil) }
+        NSManagedObject(entity: entity, insertInto: container.viewContext).setValue("kept", forKey: "body")
+        try container.viewContext.save()
+
+        let previous = CoreDataManager.shared.getAvailableContexts()
+        let wasReadOnly = DebugSwift.Resources.shared.coreDataReadOnly
+        defer {
+            CoreDataManager.shared.configure(contexts: Dictionary(previous.map { ($0.name, $0.context) }, uniquingKeysWith: { first, _ in first }))
+            DebugSwift.Resources.shared.coreDataReadOnly = wasReadOnly
+            for coordinator in [container.persistentStoreCoordinator] {
+                coordinator.persistentStores.forEach { try? coordinator.remove($0) }
+            }
+            for suffix in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: url.path + suffix) }
+        }
+        CoreDataManager.shared.configure(contexts: ["ReadOnly": container.viewContext])
+        DebugSwift.Resources.shared.coreDataReadOnly = true
+
+        let name = "Documents/\(url.lastPathComponent)"
+        _ = try DebugResourceClient.fetch("db.list", as: DebugDatabaseListing.self).get()
+        #expect((try? DebugResourceClient.fetch("db.query", ["db": name, "sql": "DELETE FROM ZNOTE"], as: DebugTableData.self).get()) == nil)
+        let read = try DebugResourceClient.fetch("db.query", ["db": name, "sql": "SELECT ZBODY FROM ZNOTE"], as: DebugTableData.self).get()
+        #expect(read.rows.first?.first == .some("kept"))
+    }
+
     @Test("A keychain item with an empty account can be saved and deleted")
     func keychainEmptyAccount() throws {
         let service = "debugswift-empty-account-\(UUID().uuidString.prefix(8))"
@@ -405,19 +456,20 @@ struct SharedResourcesScreensTests {
         #expect(sqlite3_open_v2(snapshot.path, &copy, SQLITE_OPEN_READONLY, nil) == SQLITE_OK)
         defer { sqlite3_close(copy) }
         var statement: OpaquePointer?
-        #expect(sqlite3_prepare_v2(copy, "SELECT body FROM notes", -1, &statement, nil) == SQLITE_OK)
+        try #require(sqlite3_prepare_v2(copy, "SELECT body FROM notes", -1, &statement, nil) == SQLITE_OK)
         defer { sqlite3_finalize(statement) }
-        #expect(sqlite3_step(statement) == SQLITE_ROW)
-        #expect(String(cString: sqlite3_column_text(statement, 0)) == "kept")
+        try #require(sqlite3_step(statement) == SQLITE_ROW)
+        let body = try #require(sqlite3_column_text(statement, 0))
+        #expect(String(cString: body) == "kept")
     }
 
     @Test("Databases in two App Groups with the same file name keep apart")
     func appGroupDatabaseNames() throws {
         let groups = ["group.debugswift.tests.one", "group.debugswift.tests.two"]
-        // The test app has no App Group entitlement, so folders outside its home stand in for the
-        // containers.
+        // The test app has no App Group entitlement, so folders in tmp stand in for the containers;
+        // a group's own name wins over the tmp path.
         let containers = groups.map { _ in
-            URL(fileURLWithPath: NSHomeDirectory()).deletingLastPathComponent().appendingPathComponent("debugswift-group-\(UUID().uuidString.prefix(8))")
+            FileManager.default.temporaryDirectory.appendingPathComponent("debugswift-group-\(UUID().uuidString.prefix(8))")
         }
         let lookup = DebugSwift.Resources.appGroupContainer
         // Registered before any setup, so a failed setup still restores the shared configuration.
@@ -455,11 +507,22 @@ struct SharedResourcesScreensTests {
         let host = try #require(listing.hosts.first { $0.host == domain })
         #expect(host.cookies.map(\.name) == ["session"])
 
+        // The same name on another path is a separate cookie, deleted on its own.
+        let admin = try #require(HTTPCookie(properties: [.domain: domain, .path: "/admin", .name: "session", .value: "root"]))
+        HTTPCookieStorage.shared.setCookie(admin)
+        defer { HTTPCookieStorage.shared.deleteCookie(admin) }
+        let paths = try DebugResourceClient.fetch("cookies.list", as: DebugCookieListing.self).get().hosts.first { $0.host == domain }?.cookies
+            .filter { $0.name == "session" }.compactMap(\.path)
+        #expect(paths == ["/", "/admin"])
+        _ = try DebugResourceClient.fetch("cookies.delete", ["host": domain, "name": "session", "path": "/admin"], as: DebugActionReply.self).get()
+        #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.path == "/admin" } == false)
+        #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.path == "/" && $0.name == "session" } == true)
+
         // One cookie can be deleted, then all of them.
         let other = try #require(HTTPCookie(properties: [.domain: domain, .path: "/", .name: "theme", .value: "dark"]))
         HTTPCookieStorage.shared.setCookie(other)
         defer { HTTPCookieStorage.shared.deleteCookie(other) }
-        let deleted = try DebugResourceClient.fetch("cookies.delete", ["host": domain, "name": "session"], as: DebugActionReply.self).get()
+        let deleted = try DebugResourceClient.fetch("cookies.delete", ["host": domain, "name": "session", "path": "/"], as: DebugActionReply.self).get()
         #expect(deleted.message == "Deleted session.")
         #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.name == "session" } == false)
         #expect(HTTPCookieStorage.shared.cookies?.contains { $0.domain == domain && $0.name == "theme" } == true)
