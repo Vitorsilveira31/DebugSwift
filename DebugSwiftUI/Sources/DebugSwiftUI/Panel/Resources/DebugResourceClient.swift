@@ -91,11 +91,16 @@ struct DebugKeystoreAlias: Decodable, Identifiable {
     let size: Int?
     let insideSecureHardware: Bool?
     let requiresUserAuthentication: Bool?
-    var id: String { alias }
+    /// iOS only: the keychain service the item belongs to, and its value.
+    let service: String?
+    let value: String?
+    var id: String { (service ?? "") + "|" + alias }
 }
 
 struct DebugKeystoreListing: Decodable {
     let aliases: [DebugKeystoreAlias]
+    /// iOS only: keychain items can be added, edited and deleted here.
+    let editable: Bool?
 }
 
 struct DebugDatabaseInfo: Decodable, Identifiable {

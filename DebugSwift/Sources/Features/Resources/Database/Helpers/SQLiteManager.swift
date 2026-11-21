@@ -362,3 +362,18 @@ enum QueryResult {
     case update(affectedRows: Int)
     case error(String)
 }
+
+// MARK: - Models
+
+struct DatabaseTable {
+    let name: String
+    let rowCount: Int
+    let columns: [DatabaseColumn]
+}
+
+struct DatabaseColumn {
+    let name: String
+    let type: String
+    let isPrimaryKey: Bool
+    let isNullable: Bool
+} 

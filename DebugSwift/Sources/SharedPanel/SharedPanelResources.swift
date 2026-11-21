@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import Security
 
 /// The Resources area of the shared panel on iOS: the app's files, its UserDefaults and HTTP
 /// cookies, in the shapes the Android runtime returns its files, SharedPreferences and cookies.
@@ -36,6 +37,11 @@ final class SharedPanelResources {
         case "prefs.list": return preferences()
         case "prefs.diff": return preferenceChanges()
         case "cookies.list": return cookies()
+        case "keystore.list": return keychainItems()
+        case "db.list": return databases()
+        case "db.tables": return tables(arguments["db"] ?? "")
+        case "db.rows": return rows(arguments["db"] ?? "", table: arguments["table"] ?? "", offset: Int(arguments["offset"] ?? "") ?? 0)
+        case "db.query": return query(arguments["db"] ?? "", sql: arguments["sql"] ?? "")
         default: return nil
         }
     }
@@ -55,6 +61,14 @@ final class SharedPanelResources {
             return setPreference(value)
         case ("preferences", "delete_preference"), ("persistent_data", "delete_preference"), ("user_defaults", "delete_preference"):
             return deletePreference(value)
+        case ("keychain", "set_keychain_item"):
+            return setKeychainItem(value)
+        case ("keychain", "delete_keychain_item"):
+            return deleteKeychainItem(value)
+        case ("database", "export_database"):
+            guard let path = databasePath(value) else { return "No database named \(value)." }
+            FileSharingManager.share(URL(fileURLWithPath: path))
+            return "Sharing \(value)."
         case ("preferences", "snapshot_preferences"):
             defaultsDiff.snapshotNow()
             snapshotAt = Date()
@@ -226,6 +240,141 @@ final class SharedPanelResources {
         ]
         if let snapshotAt { result["snapshotAt"] = SharedPanelData.timeFormatter.string(from: snapshotAt) }
         return result
+    }
+
+    // MARK: - Keychain
+
+    /// The app's generic-password items, each named service/key so two services can share a key.
+    private func keychainItems() -> [String: Any] {
+        let items = Keychain.allKeys(.genericPassword)
+            .map { (service: $0.0, key: $0.1) }
+            .filter { !Self.hiddenDefaults.contains($0.key) }
+        return [
+            "editable": true,
+            "aliases": items.sorted { ($0.service, $0.key) < ($1.service, $1.key) }.map { item -> [String: Any] in
+                [
+                    "alias": item.key,
+                    "service": item.service,
+                    "value": Keychain(service: item.service)[string: item.key] ?? ""
+                ]
+            }
+        ]
+    }
+
+    /// "service|key=value"; an empty service uses the app's default one.
+    private func setKeychainItem(_ value: String) -> String {
+        let parts = value.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2 else { return "Enter service|key=value." }
+        let pair = parts[1].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard pair.count == 2, !pair[0].isEmpty else { return "Enter a key." }
+        let keychain = parts[0].isEmpty ? Keychain() : Keychain(service: parts[0])
+        do {
+            try keychain.set(pair[1], key: pair[0])
+            return "Saved \(pair[0])."
+        } catch {
+            return "Could not save \(pair[0]): \(error.localizedDescription)"
+        }
+    }
+
+    /// "service|key".
+    private func deleteKeychainItem(_ value: String) -> String {
+        let parts = value.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2, !parts[1].isEmpty else { return "Enter service|key." }
+        let keychain = parts[0].isEmpty ? Keychain() : Keychain(service: parts[0])
+        do {
+            try keychain.remove(parts[1])
+            return "Deleted \(parts[1])."
+        } catch {
+            return "Could not delete \(parts[1]): \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Databases
+
+    /// SQLite files in the sandbox, named by their path under the app's home folder. Includes
+    /// Core Data stores and SwiftData's `.store` files, which are SQLite too.
+    private func databaseFiles() -> [(name: String, path: String, size: Int)] {
+        var files = DatabaseFileManager.shared.discoverDatabaseFiles()
+            .map { ($0.path, Int($0.size)) }
+        let support = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        if let stores = FileManager.default.enumerator(at: support, includingPropertiesForKeys: [.fileSizeKey]) {
+            for case let url as URL in stores where url.pathExtension == "store" && Self.isSQLite(url) {
+                files.append((url.path, (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0))
+            }
+        }
+        let home = NSHomeDirectory() + "/"
+        var seen = Set<String>()
+        return files.compactMap { path, size in
+            guard seen.insert(path).inserted else { return nil }
+            let name = path.hasPrefix(home) ? String(path.dropFirst(home.count)) : (path as NSString).lastPathComponent
+            return (name, path, size)
+        }.sorted { $0.name < $1.name }
+    }
+
+    private static func isSQLite(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        return (try? handle.read(upToCount: 16)) == Data("SQLite format 3\0".utf8)
+    }
+
+    private func databasePath(_ name: String) -> String? {
+        databaseFiles().first { $0.name == name }?.path
+    }
+
+    /// Realm files show their header as one informational table, as the iOS browser did.
+    private static func isRealm(_ path: String) -> Bool {
+        path.lowercased().hasSuffix(".realm")
+    }
+
+    private func databases() -> [String: Any] {
+        ["databases": databaseFiles().map { ["name": $0.name, "size": $0.size] }]
+    }
+
+    private func tables(_ name: String) -> [String: Any] {
+        guard let path = databasePath(name) else { return ["error": "No database named \(name)."] }
+        return [
+            "db": name,
+            "tables": (Self.isRealm(path) ? RealmManager.shared.getTables(from: path) : SQLiteManager.shared.getTables(from: path))
+                .map { ["name": $0.name, "rows": $0.rowCount] }
+        ]
+    }
+
+    private static let pageSize = 500
+
+    private func rows(_ name: String, table: String, offset: Int) -> [String: Any] {
+        guard let path = databasePath(name) else { return ["error": "No database named \(name)."] }
+        if Self.isRealm(path) {
+            let data = RealmManager.shared.getTableData(from: path, table: table)
+            return ["columns": data.columns, "rows": data.rows.map(Self.texts), "offset": 0, "total": data.rows.count]
+        }
+        let total = SQLiteManager.shared.getTables(from: path).first { $0.name == table }?.rowCount
+        let data = SQLiteManager.shared.getTableData(from: path, table: table, limit: Self.pageSize, offset: max(0, offset))
+        var result: [String: Any] = ["columns": data.columns, "rows": data.rows.map(Self.texts), "offset": max(0, offset)]
+        if let total { result["total"] = total }
+        return result
+    }
+
+    private func query(_ name: String, sql: String) -> [String: Any] {
+        guard let path = databasePath(name) else { return ["error": "No database named \(name)."] }
+        guard !Self.isRealm(path) else { return ["error": "SQL runs on SQLite databases, not Realm files."] }
+        guard !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return ["error": "Enter a SQL statement."] }
+        switch SQLiteManager.shared.executeQuery(path: path, query: sql) {
+        case let .select(columns, rows):
+            return ["columns": columns, "rows": rows.prefix(Self.pageSize).map(Self.texts), "total": rows.count]
+        case let .update(affected):
+            return ["columns": [String](), "rows": [[String]](), "message": affected == 1 ? "1 row changed." : "\(affected) rows changed."]
+        case let .error(message):
+            return ["error": message]
+        }
+    }
+
+    /// A row's values as text; NULL stays null.
+    private static func texts(_ row: [Any?]) -> [Any] {
+        row.map { value -> Any in
+            guard let value, !(value is NSNull) else { return NSNull() }
+            if let data = value as? Data { return "<\(data.count) bytes>" }
+            return "\(value)"
+        }
     }
 
     // MARK: - Cookies

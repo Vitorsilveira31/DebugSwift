@@ -6,6 +6,7 @@
 @_spi(DebugSwiftUI) @testable import DebugSwift
 @testable import DebugSwiftUI
 import Foundation
+import SQLite3
 import Testing
 
 /// The shared SwiftUI Resources screens read the same operations on iOS as on Android. These check
@@ -77,6 +78,54 @@ struct SharedResourcesScreensTests {
         #expect(values.first { $0.key == flag }?.type == "Boolean")
         _ = DebugSwiftRuntime.perform(featureID: "preferences", actionID: "set_preference", value: "Standard|\(number)=2")
         #expect(UserDefaults.standard.integer(forKey: number) == 2)
+    }
+
+    @Test("Keychain items list with their values, and can be added, edited and deleted")
+    func keychain() throws {
+        let key = "shared-keychain-\(UUID().uuidString.prefix(8))"
+        defer { _ = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: "|\(key)") }
+        #expect(DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "|\(key)=first") == "Saved \(key).")
+        var listing = try DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self).get()
+        #expect(listing.editable == true)
+        let item = try #require(listing.aliases.first { $0.alias == key })
+        #expect(item.value == "first")
+
+        _ = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "\(item.service ?? "")|\(key)=second")
+        listing = try DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self).get()
+        #expect(listing.aliases.first { $0.alias == key }?.value == "second")
+
+        _ = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: "\(item.service ?? "")|\(key)")
+        listing = try DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self).get()
+        #expect(!listing.aliases.contains { $0.alias == key })
+    }
+
+    @Test("A SQLite database lists its tables and rows, pages, and runs SQL")
+    func database() throws {
+        let name = "shared-db-\(UUID().uuidString.prefix(8)).sqlite"
+        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents").appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        sqlite3_exec(db, "CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT); INSERT INTO notes (body) VALUES ('one'), ('two'), (NULL);", nil, nil, nil)
+        sqlite3_close(db)
+
+        let listing = try DebugResourceClient.fetch("db.list", as: DebugDatabaseListing.self).get()
+        let database = try #require(listing.databases.first { $0.name == "Documents/\(name)" })
+        let tables = try DebugResourceClient.fetch("db.tables", ["db": database.name], as: DebugTableListing.self).get()
+        #expect(tables.tables.first { $0.name == "notes" }?.rows == 3)
+
+        let rows = try DebugResourceClient.fetch("db.rows", ["db": database.name, "table": "notes", "offset": "0"], as: DebugTableData.self).get()
+        #expect(rows.columns == ["id", "body"])
+        #expect(rows.rows.count == 3)
+        #expect(rows.rows.last?.last == .some(nil))
+        #expect(rows.total == 3)
+
+        let update = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "UPDATE notes SET body = 'three' WHERE body IS NULL"], as: DebugTableData.self).get()
+        #expect(update.message == "1 row changed.")
+        let select = try DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT body FROM notes ORDER BY id"], as: DebugTableData.self).get()
+        #expect(select.rows.map { $0.first ?? nil } == ["one", "two", "three"])
+        #expect((try? DebugResourceClient.fetch("db.query", ["db": database.name, "sql": "SELECT * FROM missing"], as: DebugTableData.self).get()) == nil)
     }
 
     @Test("Cookies are grouped by host")

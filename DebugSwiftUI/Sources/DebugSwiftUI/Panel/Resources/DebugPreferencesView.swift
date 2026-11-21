@@ -57,7 +57,7 @@ struct DebugPreferencesView: View {
                     NavigationLink {
                         DebugKeystoreView()
                     } label: {
-                        Text(verbatim: "Keystore aliases")
+                        Text(verbatim: DebugPlatform.isAndroid ? "Keystore aliases" : "Keychain items")
                     }
                 }
             }

@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// Android Keystore aliases with what the system reports about each key. Key material is never read.
+/// Secure storage: on Android the Keystore aliases with what the system reports about each key (key
+/// material is never read); on iOS the app's keychain items, which can be added, edited and deleted.
 struct DebugKeystoreView: View {
     @State var aliases: [DebugKeystoreAlias] = []
+    @State var editable = false
     @State var failure = ""
 
     var body: some View {
@@ -11,11 +13,26 @@ struct DebugKeystoreView: View {
                 Text(verbatim: failure).foregroundColor(Color.red)
             }
             if aliases.isEmpty && failure.isEmpty {
-                Text(verbatim: "No keys in the Android Keystore.")
+                Text(verbatim: DebugPlatform.isAndroid ? "No keys in the Android Keystore." : "No keychain items.")
                     .foregroundColor(Color.secondary)
             }
             ForEach(aliases) { alias in
-                DebugKeystoreRow(alias: alias)
+                if editable {
+                    NavigationLink {
+                        DebugKeychainEditView(service: alias.service ?? "", key: alias.alias, value: alias.value ?? "", isNew: false)
+                    } label: {
+                        DebugKeystoreRow(alias: alias)
+                    }
+                } else {
+                    DebugKeystoreRow(alias: alias)
+                }
+            }
+            if editable {
+                NavigationLink {
+                    DebugKeychainEditView(service: "", key: "", value: "", isNew: true)
+                } label: {
+                    Text(verbatim: "Add an item").foregroundColor(Color.accentColor)
+                }
             }
         }
         .navigationTitle("Secure Storage")
@@ -26,6 +43,7 @@ struct DebugKeystoreView: View {
         switch DebugResourceClient.fetch("keystore.list", as: DebugKeystoreListing.self) {
         case let .success(value):
             aliases = value.aliases
+            editable = value.editable == true
             failure = ""
         case let .failure(error):
             failure = error.message
@@ -42,17 +60,73 @@ struct DebugKeystoreRow: View {
         if let size = alias.size { parts.append("\(size) bits") }
         if alias.insideSecureHardware == true { parts.append("hardware-backed") }
         if alias.requiresUserAuthentication == true { parts.append("needs authentication") }
+        if let service = alias.service, !service.isEmpty { parts.append(service) }
         return parts.joined(separator: " · ")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(verbatim: alias.alias)
+            if let value = alias.value {
+                Text(verbatim: value)
+                    .font(.system(.footnote, design: .monospaced))
+                    .lineLimit(2)
+            }
             if !details.isEmpty {
                 Text(verbatim: details)
                     .font(.caption)
                     .foregroundColor(Color.secondary)
             }
         }
+    }
+}
+
+/// Adds, edits or deletes one keychain item (iOS).
+struct DebugKeychainEditView: View {
+    let service: String
+    @State var key: String
+    @State var value: String
+    let isNew: Bool
+    @State var status = ""
+    @Environment(\.dismiss) var dismiss
+
+    init(service: String, key: String, value: String, isNew: Bool) {
+        self.service = service
+        _key = State(initialValue: key)
+        _value = State(initialValue: value)
+        self.isNew = isNew
+    }
+
+    var body: some View {
+        Form {
+            if !service.isEmpty {
+                Section("Service") { Text(verbatim: service) }
+            }
+            Section("Key") {
+                if isNew {
+                    TextField("key", text: $key)
+                } else {
+                    Text(verbatim: key)
+                }
+            }
+            Section("Value") {
+                TextField("value", text: $value)
+            }
+            Section {
+                Button("Save") {
+                    status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "set_keychain_item", value: "\(service)|\(key)=\(value)")
+                }
+                if !isNew {
+                    Button("Delete", role: .destructive) {
+                        status = DebugSwiftRuntime.perform(featureID: "keychain", actionID: "delete_keychain_item", value: "\(service)|\(key)")
+                        dismiss()
+                    }
+                }
+                if !status.isEmpty {
+                    Text(verbatim: status).font(.caption)
+                }
+            }
+        }
+        .navigationTitle(Text(verbatim: isNew ? "New item" : key))
     }
 }
