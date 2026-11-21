@@ -107,7 +107,11 @@ struct DebugSwiftPanelPresenter: ViewModifier {
     func body(content: Content) -> some View {
         #if os(Android)
         content
-            .sheet(isPresented: $presentation.isPresented, onDismiss: { presentation.route = nil }) {
+            // Only the newest presenter on screen shows the sheet, so two never present at once.
+            .sheet(isPresented: Binding(
+                get: { presentation.isPresented && presentation.activePresenter == id },
+                set: { if !$0 { presentation.isPresented = false } }
+            ), onDismiss: { presentation.route = nil }) {
                 DebugSwiftRuntime.panel { presentation.dismiss() }
             }
             .onAppear { presentation.attach(id) }

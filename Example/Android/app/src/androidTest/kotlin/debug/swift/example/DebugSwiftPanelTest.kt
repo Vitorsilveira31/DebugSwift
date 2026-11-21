@@ -12,6 +12,8 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.rule.GrantPermissionRule
 import debug.swift.android.AndroidDebugTools
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -170,6 +172,31 @@ class DebugSwiftPanelTest {
         val removed = AndroidDebugTools.hostAPI("push.remove", org.json.JSONObject().put("id", id).toString())
         assertTrue("Removing by the id failed: $removed", org.json.JSONObject(removed).optBoolean("ok"))
         assertTrue("The notification is still in the history", !AndroidDebugTools.pushStateJSON().contains(id))
+    }
+
+    @Test
+    fun okHttpJsonWithAByteOrderMarkIsMasked() {
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        val json = "\uFEFF{\"password\":\"bom-secret-$marker\",\"note\":\"kept-$marker\"}"
+        val client = okhttp3.OkHttpClient.Builder()
+            .addInterceptor(debug.swift.android.DebugSwiftOkHttpInterceptor())
+            // Answers in place of a server, so the test needs no network.
+            .addInterceptor { chain ->
+                okhttp3.Response.Builder()
+                    .request(chain.request())
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(json.toByteArray(Charsets.UTF_8).toResponseBody("application/json; charset=utf-8".toMediaType()))
+                    .build()
+            }
+            .build()
+        client.newCall(okhttp3.Request.Builder().url("https://api.example.test/bom-$marker").build()).execute().close()
+
+        val live = AndroidDebugTools.networkInspectorSnapshotJSON("http")
+        assertTrue("This run's request is missing from the inspector", live.contains("bom-$marker"))
+        assertTrue("The body lost its other fields", live.contains("kept-$marker"))
+        assertTrue("A BOM-prefixed JSON body kept its password: $live", !live.contains("bom-secret-$marker"))
     }
 
     @Test

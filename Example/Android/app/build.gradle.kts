@@ -101,6 +101,8 @@ dependencies {
     androidTestImplementation(testLibs.androidx.test.ext.junit)
     // The Compose test artifacts bring Espresso 3.5, which fails on current Android versions.
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+    // The library uses OkHttp internally; the tests drive its interceptor directly.
+    androidTestImplementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Puts the activities ActivityScenario launches into the app's own manifest. Left only in the
     // test APK they run in another process, and closing each test waits 45 seconds for a timeout.
     debugImplementation(testLibs.androidx.test.core)

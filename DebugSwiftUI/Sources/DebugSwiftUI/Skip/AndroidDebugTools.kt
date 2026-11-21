@@ -4072,9 +4072,10 @@ object AndroidDebugTools {
         return ""
     }
 
-    private fun togglePushSimulation(context: Context): String {
+    /** `persist = false` leaves writing configuration and history to the caller, once for a whole update. */
+    private fun togglePushSimulation(context: Context, persist: Boolean = true): String {
         pushEnabled = !pushEnabled
-        persistPushConfiguration(context)
+        if (persist) persistPushConfiguration(context)
         if (pushEnabled) {
             refreshNotificationSettings(context)
             publishEvent("app", "Push notification simulation enabled")
@@ -4086,7 +4087,7 @@ object AndroidDebugTools {
         pendingPushNotifications.clear()
         pushHistory.filter { it.status == "Scheduled" }.forEach { record ->
             notificationExecutor.execute { NotificationManagerCompat.from(context).cancel(record.id.hashCode()) }
-            updatePushNotification(context, record.id, "Dismissed")
+            updatePushNotification(context, record.id, "Dismissed", persist = persist)
         }
         publishEvent("app", "Push notification simulation disabled")
         return "Push notification simulation disabled. Pending local notifications were cancelled."
@@ -4128,7 +4129,7 @@ object AndroidDebugTools {
         }
     }
 
-    private fun updatePushNotification(context: Context, id: String, status: String, interactionType: String? = null) {
+    private fun updatePushNotification(context: Context, id: String, status: String, interactionType: String? = null, persist: Boolean = true) {
         synchronized(pushHistory) {
             val index = pushHistory.indexOfFirst { it.id == id }
             if (index < 0) return
@@ -4138,7 +4139,7 @@ object AndroidDebugTools {
                 deliveryAtMs = if (status == "Delivered" || status == "Interacted") old.deliveryAtMs ?: System.currentTimeMillis() else old.deliveryAtMs,
                 interactionType = interactionType ?: old.interactionType
             )
-            savePushHistory(context)
+            if (persist) savePushHistory(context)
         }
         publishEvent("app", "Notification $id status: $status")
     }
@@ -5345,13 +5346,14 @@ object AndroidDebugTools {
                 val options = args.keys().asSequence().filter { it != "isEnabled" }.associateWith { args.get(it).toString() }
                 val rejected = options.mapNotNull { (key, value) -> pushConfigurationError(key, value) }
                 if (rejected.isNotEmpty()) return fail(rejected.joinToString(" "))
-                // Apply in memory, then write configuration and history once for the whole update.
+                // Apply in memory, the switch included, then write configuration and history once.
                 options.forEach { (key, value) -> setPushConfiguration(ctx, "$key=$value", persist = false) }
-                if (options.isNotEmpty()) {
+                val toggles = args.has("isEnabled") && args.optBoolean("isEnabled") != pushEnabled
+                if (toggles) togglePushSimulation(ctx, persist = false)
+                if (options.isNotEmpty() || toggles) {
                     persistPushConfiguration(ctx)
                     savePushHistory(ctx)
                 }
-                if (args.has("isEnabled")) setPushSimulationEnabled(args.optBoolean("isEnabled"))
                 ok("Notification configuration updated.")
             }
             "push.scenario" -> ok(runPushNotificationScenario(args.optString("name")))

@@ -106,6 +106,9 @@ final class DebugSwiftPresentation {
 
     var isAttached: Bool { !presenters.isEmpty }
 
+    /// The presenter that shows the panel: the newest one on screen.
+    var activePresenter: UUID? { presenters.last }
+
     /// Called by a `.debugSwiftPanel()` presenter when it appears: the floating button opens the
     /// panel through the presenters from now on.
     func attach(_ id: UUID) {
