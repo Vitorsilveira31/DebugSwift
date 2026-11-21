@@ -114,8 +114,7 @@ public class DebugSwift {
         var controllers: [UIViewController & MainFeatureType] = [
             NetworkViewController(),
             InterfaceViewController(),
-            ResourcesViewController(),
-            AppViewController()
+            ResourcesViewController()
         ]
 
         let hidden = FeatureHandling.hiddenFeatures
@@ -161,7 +160,10 @@ public class DebugSwift {
         case .resources:
             rootController = ResourcesViewController()
         case .app:
-            rootController = AppViewController()
+            rootController = SharedPanelOnlyViewController(
+                title: "App",
+                message: "The App tools are in the shared SwiftUI panel. Add DebugSwiftUI and call DebugSwiftSharedPanel.useForFloatingBall()."
+            )
         }
 
         rootController.navigationItem.largeTitleDisplayMode = .always
@@ -238,64 +240,20 @@ public extension DebugSwift {
         return navigationController
     }
 
-    /// The app tools exposed in the shared SwiftUI feature list.
+    /// The app tools exposed in the shared SwiftUI feature list, without those the host turned off.
     @MainActor
     static func availableAppFeatureIDs() -> [String] {
+        let disabled = App.shared.disableMethods
         var featureIDs = ["device_info", "push_token", "custom_actions", "custom_info"]
-        for action in AppViewController.ActionInfo.allCasesWithPermission {
-            switch action {
-            case .crash: featureIDs.append("crashes")
-            case .console: featureIDs.append("console")
-            case .oslogConsole: featureIDs.append("oslog_console")
-            case .location: featureIDs.append("location")
-            case .loadedLibraries: featureIDs.append("loaded_libraries")
-            case .pushNotifications: featureIDs.append("push_simulator")
-            case .deepLink: featureIDs.append("deep_links")
-            case .eventTimeline: featureIDs.append("event_bus")
-            case .agentDebugLog: featureIDs.append("agent_debug_log")
-            }
-        }
+        if !disabled.contains(.crashManager) { featureIDs.append("crashes") }
+        if !disabled.contains(.console) { featureIDs.append("console") }
+        featureIDs.append("oslog_console")
+        if !disabled.contains(.location) { featureIDs.append("location") }
+        featureIDs.append("loaded_libraries")
+        if !disabled.contains(.pushNotifications) { featureIDs.append("push_simulator") }
+        featureIDs += ["deep_links", "event_bus"]
+        if FeatureHandling.enabledBetaFeatures.contains(.agentDebugLog) { featureIDs.append("agent_debug_log") }
         return featureIDs
-    }
-
-    /// Builds the existing UIKit detail screen for an app tool that has not yet
-    /// been migrated to shared SwiftUI.
-    @MainActor
-    static func debugAppViewController(for featureID: String) -> UIViewController? {
-        let rootController: UIViewController
-        switch featureID {
-        case "crashes":
-            rootController = CrashViewController()
-        case "console":
-            rootController = ResourcesGenericController(viewModel: AppConsoleViewModel())
-        case "oslog_console":
-            guard #available(iOS 15.0, *) else { return nil }
-            rootController = OSLogConsoleViewController()
-        case "location":
-            rootController = LocationViewController()
-        case "loaded_libraries":
-            rootController = LoadedLibrariesViewController()
-        case "push_simulator":
-            rootController = PushNotificationController()
-        case "deep_links":
-            rootController = DeepLinkViewController()
-        case "event_bus":
-            rootController = EventTimelineViewController()
-        case "agent_debug_log":
-            rootController = AgentDebugLogViewController()
-        case "device_info", "push_token", "custom_actions", "custom_info":
-            rootController = AppViewController()
-        default:
-            return nil
-        }
-
-        rootController.navigationItem.largeTitleDisplayMode = .never
-        let navigationController = UINavigationController(rootViewController: rootController)
-        navigationController.navigationBar.prefersLargeTitles = false
-        navigationController.navigationBar.tintColor = .white
-        navigationController.view.backgroundColor = .black
-        navigationController.overrideUserInterfaceStyle = .dark
-        return navigationController
     }
 
     /// The performance tools exposed in the shared SwiftUI feature list.

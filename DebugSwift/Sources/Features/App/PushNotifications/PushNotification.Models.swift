@@ -65,6 +65,8 @@ public struct SimulatedNotification: Codable, Identifiable, Sendable {
             case .immediate:
                 return "Immediate"
             case .timeInterval(let interval):
+                // A stored interval can be anything: never convert one that doesn't fit an Int.
+                guard interval.isFinite, abs(interval) < Double(Int.max) else { return "In \(interval)s" }
                 return "In \(Int(interval))s"
             case .date(let date):
                 let formatter = DateFormatter()

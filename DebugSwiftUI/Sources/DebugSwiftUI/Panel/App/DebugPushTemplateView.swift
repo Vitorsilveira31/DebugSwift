@@ -20,13 +20,13 @@ struct DebugPushTemplateView: View {
             Section("Send") {
                 TextField("Delay in seconds", text: $delay)
                 Button("Send now") {
-                    status = DebugPush.act("simulate_template", "\(template.name)|\(delay)")
+                    status = DebugPush.act("simulate_template", "\(template.reference)|\(delay)")
                 }
             }
             if !template.isDefault {
                 Section {
                     Button("Remove this template", role: .destructive) {
-                        status = DebugPush.act("remove_template", template.name)
+                        status = DebugPush.act("remove_template", template.reference)
                         dismiss()
                     }
                 }
