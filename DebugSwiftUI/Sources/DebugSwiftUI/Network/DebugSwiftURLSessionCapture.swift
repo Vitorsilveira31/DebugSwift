@@ -437,6 +437,18 @@ private final class DebugSwiftProtocolObserver: NSObject, URLProtocolClient, @un
                 lock.unlock()
             }
         }
+        // An empty original response has no chunk to carry the replacement: send it now, once.
+        lock.lock()
+        let pendingReplacement = rewriteDelivered ? nil : (response ?? `protocol`.task?.response).flatMap(rewritten)?.0
+        if pendingReplacement != nil { rewriteDelivered = true }
+        if let pendingReplacement, let current = fullBody {
+            fullBody = current.count + pendingReplacement.count <= Self.keptBodyLimit ? current + pendingReplacement : nil
+        }
+        lock.unlock()
+        if let pendingReplacement {
+            client?.urlProtocol(`protocol`, didLoad: pendingReplacement)
+            if let capture { DebugSwift.Network.shared.delegate?.urlSession(capture, didReceive: pendingReplacement) }
+        }
         recordResponse()
         client?.urlProtocolDidFinishLoading(`protocol`)
         if let capture { DebugSwift.Network.shared.delegate?.didFinishLoading(capture) }

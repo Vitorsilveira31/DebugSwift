@@ -3513,6 +3513,8 @@ object AndroidDebugTools {
     /** Off when the host passed `.crashManager` to `DebugSwift().setup(disable:)`. */
     @Volatile var crashCaptureEnabled = true
     private var crashHandler: Thread.UncaughtExceptionHandler? = null
+    /** Whether the installed handler still records; it outlives being replaced if a newer handler calls it. */
+    private var crashHandlerActive: java.util.concurrent.atomic.AtomicBoolean? = null
     private var handlerBeforeCrashCapture: Thread.UncaughtExceptionHandler? = null
 
     /** Installs or removes DebugSwift's crash handler to match `crashCaptureEnabled`. */
@@ -3522,6 +3524,9 @@ object AndroidDebugTools {
             if (crashHandler == null && appContext != null) installCrashHandler()
         } else {
             val installed = crashHandler ?: return
+            // A handler the app installed after ours may still call ours: from now on it only forwards.
+            crashHandlerActive?.set(false)
+            crashHandlerActive = null
             // Put the app's own handler back, unless someone installed another one after ours.
             if (Thread.getDefaultUncaughtExceptionHandler() === installed) {
                 Thread.setDefaultUncaughtExceptionHandler(handlerBeforeCrashCapture)
@@ -3534,7 +3539,13 @@ object AndroidDebugTools {
     private fun installCrashHandler() {
         val original = Thread.getDefaultUncaughtExceptionHandler()
         handlerBeforeCrashCapture = original
+        val active = java.util.concurrent.atomic.AtomicBoolean(true)
+        crashHandlerActive = active
         val handler = Thread.UncaughtExceptionHandler { thread, error ->
+            if (!active.get()) {
+                original?.uncaughtException(thread, error)
+                return@UncaughtExceptionHandler
+            }
             val writer = StringWriter()
             error.printStackTrace(PrintWriter(writer))
             val record = "${timestamp()} · ${thread.name}\n${writer}"

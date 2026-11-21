@@ -43,12 +43,21 @@ struct DebugSwiftAndroidPanelContent: View {
                 .padding(.vertical, 10)
             }
 
-            NavigationStack {
-                DebugSwiftFeatureList(area: selectedArea)
-                    .navigationTitle(selectedArea.title)
+            if visibleAreas.isEmpty {
+                // Every area was hidden with `setup(hideFeatures:)`: no tools to show.
+                Text(verbatim: "All debug areas are hidden by this app's DebugSwift setup.")
+                    .foregroundColor(Color.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                NavigationStack {
+                    DebugSwiftFeatureList(area: selectedArea)
+                        .navigationTitle(selectedArea.title)
+                }
+                .id(selectedArea.id)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .id(selectedArea.id)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(ColorScheme.dark)
         .onAppear {
