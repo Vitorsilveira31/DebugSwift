@@ -25,6 +25,7 @@ import debug.swift.android.writeAgentSnapshot
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -499,10 +500,12 @@ class DebugSwiftPanelTest {
         val bom = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "<password>bom-secret-$marker</password>".toByteArray(Charsets.UTF_16LE)
         send("bom", bom.toRequestBody("application/xml".toMediaType()))
 
-        val live = AndroidDebugTools.networkInspectorSnapshotJSON("http")
-        assertTrue("This run's requests are missing from the inspector", live.contains("header-$marker") && live.contains("bom-$marker"))
-        assertTrue("A UTF-16 request with its charset in the header kept its password: $live", !live.contains("header-secret-$marker"))
-        assertTrue("A UTF-16 request with a byte order mark kept its password: $live", !live.contains("bom-secret-$marker"))
+        val rows = org.json.JSONObject(AndroidDebugTools.networkInspectorSnapshotJSON("http")).getJSONArray("requests")
+        fun body(path: String): String = (0 until rows.length()).map { rows.getJSONObject(it) }
+            .last { it.getString("url").endsWith("$path-$marker") }.getString("requestBody")
+        // The exact masked text: a NUL-separated secret would also pass a "doesn't contain" check.
+        assertEquals("password=<redacted>", body("header"))
+        assertEquals("<password>&lt;redacted&gt;</password>", body("bom"))
     }
 
     @Test
