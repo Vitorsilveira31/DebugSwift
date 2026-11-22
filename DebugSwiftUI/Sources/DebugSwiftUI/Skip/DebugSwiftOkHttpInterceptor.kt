@@ -116,7 +116,7 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
             requestBody,
             rewrittenText,
             requestHeaders = recordedRequestHeaders(request),
-            responseHeaders = finalResponse.headers.toMultimap()
+            responseHeaders = recordedResponseHeaders(finalResponse)
         )
         return finalResponse
     }
@@ -174,6 +174,14 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
      * application interceptors, so it is added here when missing: the masker picks the body's
      * format from it.
      */
+    /** The response's headers as recorded, with its body's media type when there's no `Content-Type` header. */
+    private fun recordedResponseHeaders(response: Response): Map<String, List<String>> {
+        val headers = response.headers.toMultimap()
+        val type = response.body?.contentType() ?: return headers
+        if (headers.keys.any { it.equals("Content-Type", ignoreCase = true) }) return headers
+        return headers + ("Content-Type" to listOf(type.toString()))
+    }
+
     private fun recordedRequestHeaders(request: okhttp3.Request): Map<String, List<String>> {
         val headers = request.headers.toMultimap()
         val type = request.body?.contentType() ?: return headers
