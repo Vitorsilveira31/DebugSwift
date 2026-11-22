@@ -290,77 +290,65 @@ public struct NetworkSanitizer: Sendable {
         func masked(_ name: String) -> Bool {
             normalizedBodyKeys.contains(Self.normalize(String(name.split(separator: ":").last ?? Substring(name))))
         }
+        // Each pass walks the document once (enumerated, not re-searched per element), so the time
+        // grows with the body's size, not with its number of elements.
         var source = text as NSString
         var result = ""
         var cursor = 0
         // Attributes are looked for inside tags only: `note="` in element text must not hide the
-        // tag that follows it.
-        let attributes = Self.xmlTagPattern.matches(in: text, range: NSRange(location: 0, length: source.length))
-            .filter { !Self.isNonMarkup($0, in: source) }
-            .flatMap { Self.xmlAttributePattern.matches(in: text, range: $0.range) }
-        for match in attributes where masked(source.substring(with: match.range(at: 1))) {
-            let value = match.range(at: 3)
-            // Keep the quotes: the value is everything between them, or up to the end of a document
-            // cut off inside it.
-            let closed = value.length >= 2 && source.character(at: value.location + value.length - 1) == source.character(at: value.location)
-            let inner = NSRange(location: value.location + 1, length: value.length - (closed ? 2 : 1))
-            result += source.substring(with: NSRange(location: cursor, length: inner.location - cursor))
-            result += Self.xmlRedactedValue
-            cursor = inner.location + inner.length
+        // tag that follows it. Each tag is scanned on its own text.
+        Self.xmlTagPattern.enumerateMatches(in: text, range: NSRange(location: 0, length: source.length)) { tag, _, _ in
+            guard let tag, !Self.isNonMarkup(tag, in: source) else { return }
+            let tagText = source.substring(with: tag.range)
+            let tagSource = tagText as NSString
+            for match in Self.xmlAttributePattern.matches(in: tagText, range: NSRange(location: 0, length: tagSource.length))
+            where masked(tagSource.substring(with: match.range(at: 1))) {
+                let value = match.range(at: 3)
+                // Keep the quotes: the value is everything between them, or up to the end of a
+                // document cut off inside it.
+                let closed = value.length >= 2
+                    && tagSource.character(at: value.location + value.length - 1) == tagSource.character(at: value.location)
+                let inner = tag.range.location + value.location + 1
+                result += source.substring(with: NSRange(location: cursor, length: inner - cursor))
+                result += Self.xmlRedactedValue
+                cursor = inner + value.length - (closed ? 2 : 1)
+            }
         }
         let attributesMasked = cursor > 0 ? result + source.substring(from: cursor) : text
 
+        // Elements: one pass over CDATA sections, comments, processing instructions and tags. Inside
+        // a masked element only tags of its name count, to find the closing tag that matches.
         source = attributesMasked as NSString
         result = ""
         cursor = 0
-        var position = 0
-        while position < source.length,
-              let start = Self.xmlStartTagPattern.firstMatch(
-                  in: attributesMasked, range: NSRange(location: position, length: source.length - position)
-              ) {
-            let contentStart = start.range.location + start.range.length
-            position = contentStart
-            // A tag written inside a CDATA section, comment or processing instruction isn't one.
-            guard !Self.isNonMarkup(start, in: source) else { continue }
-            let name = source.substring(with: start.range(at: 1))
-            guard masked(name) else { continue }
-            result += source.substring(with: NSRange(location: cursor, length: contentStart - cursor))
-            result += Self.xmlRedactedValue
+        var open: (name: String, depth: Int, contentStart: Int)?
+        Self.xmlTokenPattern.enumerateMatches(in: attributesMasked, range: NSRange(location: 0, length: source.length)) { token, _, _ in
+            guard let token, !Self.isNonMarkup(token, in: source) else { return }
+            let closing = token.range(at: 1).location != NSNotFound
+            let selfClosing = token.range(at: 3).location != NSNotFound
+            let name = source.substring(with: token.range(at: 2))
+            if var element = open {
+                guard name == element.name, !selfClosing else { return }
+                element.depth += closing ? -1 : 1
+                if element.depth == 0 {
+                    result += source.substring(with: NSRange(location: cursor, length: element.contentStart - cursor))
+                    result += Self.xmlRedactedValue
+                    cursor = token.range.location
+                    open = nil
+                } else {
+                    open = element
+                }
+            } else if !closing, !selfClosing, masked(name) {
+                open = (name, 1, token.range.location + token.range.length)
+            }
+        }
+        if let element = open {
             // A document cut off inside the element (a truncated capture) is masked to its end.
-            guard let end = Self.closingTag(named: name, in: source, from: contentStart) else { return result }
-            cursor = end.location
-            position = end.location + end.length
+            return result + source.substring(with: NSRange(location: cursor, length: element.contentStart - cursor))
+                + Self.xmlRedactedValue
         }
         guard cursor > 0 else { return attributesMasked }
         return result + source.substring(from: cursor)
-    }
-
-    /// The `</name>` that closes the element whose content starts at `location`, counting nested
-    /// elements of the same name, or `nil` when the document ends before it.
-    private static func closingTag(named name: String, in source: NSString, from location: Int) -> NSRange? {
-        let escaped = NSRegularExpression.escapedPattern(for: name)
-        // CDATA sections, comments and processing instructions come first, so a tag written inside
-        // one isn't counted; one left open runs to the end, and so does the element.
-        let pattern = Self.xmlNonMarkup + #"|<(/)?"# + escaped
-            + #"(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?(/)?>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
-        var depth = 1
-        var closing: NSRange?
-        // Enumerated, not collected: the scan stops at the closing tag instead of reading every
-        // later sibling.
-        regex.enumerateMatches(in: source as String, range: NSRange(location: location, length: source.length - location)) { match, _, stop in
-            guard let match, !Self.isNonMarkup(match, in: source) else { return }
-            if match.range(at: 1).location != NSNotFound {
-                depth -= 1
-                if depth == 0 {
-                    closing = match.range
-                    stop.pointee = true
-                }
-            } else if match.range(at: 2).location == NSNotFound {
-                depth += 1
-            }
-        }
-        return closing
     }
 
     /// An attribute: its name (group 1), `=` and a quoted value (group 3). XML attribute values
@@ -393,10 +381,11 @@ public struct NetworkSanitizer: Sendable {
         return next == 0x21 || next == 0x3F // `<!` or `<?`
     }
 
-    /// A start tag that isn't self-closing: its name (group 1), after the non-markup it skips.
-    /// Quoted attribute values may hold `>`.
-    private static let xmlStartTagPattern = try! NSRegularExpression(
-        pattern: xmlNonMarkup + "|<(" + xmlName + #")(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?>"#,
+    /// A CDATA section, comment or processing instruction (`xmlNonMarkup`), or a tag: `/` for an end
+    /// tag (group 1), its name (group 2) and `/` for a self-closing one (group 3). Quoted attribute
+    /// values may hold `>`.
+    private static let xmlTokenPattern = try! NSRegularExpression(
+        pattern: xmlNonMarkup + "|<(/)?(" + xmlName + #")(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?(/)?>"#,
         options: [.dotMatchesLineSeparators]
     )
 

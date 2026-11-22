@@ -236,6 +236,11 @@ struct NetworkSanitizerTests {
     @Test func manyMaskedSiblingsAreMaskedInOnePass() {
         let body = String(repeating: "<password>x</password>", count: 2_000)
         #expect(xml(body) == String(repeating: "<password>&lt;redacted&gt;</password>", count: 2_000))
+        // Time grows with the size: 20,000 elements with attributes take well under a second.
+        let start = Date()
+        let large = String(repeating: #"<x a="1"><password>x</password></x>"#, count: 20_000)
+        #expect(xml(large)?.contains("<password>x</password>") == false)
+        #expect(Date().timeIntervalSince(start) < 2)
     }
 
     @Test func processingInstructionsCommentsAndCDATAHoldNoTags() {
