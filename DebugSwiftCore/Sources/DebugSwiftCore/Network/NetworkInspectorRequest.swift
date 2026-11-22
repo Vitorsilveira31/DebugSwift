@@ -35,6 +35,9 @@ public struct NetworkInspectorRequest: Codable, Sendable, Equatable, Identifiabl
     ///     `startedAtMilliseconds` when left out.
     ///   - mimeType: The response MIME type; the response `Content-Type` header when left out.
     ///   - graphqlOperation: The GraphQL operation label; read from the request body when left out.
+    ///   - requestBytes: The request body's captured size, when the body passed is a truncated copy;
+    ///     the size of `requestBody` when left out.
+    ///   - responseBytes: The same for the response body.
     public init(
         id: String,
         url: String,
@@ -51,7 +54,9 @@ public struct NetworkInspectorRequest: Codable, Sendable, Equatable, Identifiabl
         mimeType: String? = nil,
         error: String = "",
         source: String = "http",
-        graphqlOperation: String? = nil
+        graphqlOperation: String? = nil,
+        requestBytes: Int? = nil,
+        responseBytes: Int? = nil
     ) {
         let requestText = String(data: requestBody, encoding: .utf8) ?? ""
         self.id = id
@@ -61,8 +66,8 @@ public struct NetworkInspectorRequest: Codable, Sendable, Equatable, Identifiabl
         self.timestamp = timestamp ?? Self.timestamp(milliseconds: startedAtMilliseconds)
         self.timestampMilliseconds = startedAtMilliseconds
         self.durationMilliseconds = durationMilliseconds
-        self.requestBytes = requestBody.count
-        self.responseBytes = responseBody.count
+        self.requestBytes = requestBytes ?? requestBody.count
+        self.responseBytes = responseBytes ?? responseBody.count
         self.requestHeaders = requestHeaders
         self.responseHeaders = responseHeaders
         self.requestBody = requestText

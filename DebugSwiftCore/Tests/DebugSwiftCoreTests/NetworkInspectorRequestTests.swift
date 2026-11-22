@@ -72,4 +72,17 @@ struct NetworkInspectorRequestTests {
         let decoded = try JSONDecoder().decode(Snapshot.self, from: Data(json.utf8))
         #expect(decoded.requests == [request(), request(statusCode: "500")])
     }
+
+    @Test func capturedSizesAndLabelWinOverATruncatedCopy() {
+        let row = NetworkInspectorRequest(
+            id: "2", url: "https://api.example.com/graphql", method: "POST", statusCode: "200",
+            startedAtMilliseconds: 0, durationMilliseconds: 1, requestHeaders: [:], responseHeaders: [:],
+            requestBody: Data(#"{"query":"query GetUs"#.utf8), responseBody: Data("cut".utf8),
+            graphqlOperation: "Query: GetUser", requestBytes: 40_000, responseBytes: 500_000
+        )
+        #expect(row.graphqlOperation == "Query: GetUser")
+        #expect(row.requestBytes == 40_000)
+        #expect(row.responseBytes == 500_000)
+        #expect(row.log.contains("------- RESPONSE SIZE -------\n500000 bytes"))
+    }
 }

@@ -383,6 +383,10 @@ internal fun AndroidDebugTools.inspectorRecordJSON(record: NetworkRecord): JSONO
     .put("decryptedResponseBody", record.decryptedResponseBody)
     .put("error", record.error)
     .put("source", record.source)
+    // Captured from the whole bodies, before they were cut to what a record keeps.
+    .put("graphqlOperation", record.graphqlOperation)
+    .put("requestBytes", record.requestBytes)
+    .put("responseBytes", record.responseBytes)
 
 /** The inspector's `{"requests": [...]}` for these records, built by DebugSwiftCore as on iOS. */
 internal fun AndroidDebugTools.inspectorRowsJSON(records: List<NetworkRecord>): String {

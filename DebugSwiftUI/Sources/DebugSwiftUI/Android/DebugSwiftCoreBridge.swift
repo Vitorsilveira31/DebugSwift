@@ -23,7 +23,8 @@ import SkipFuse
 ///   decryptedResponseBody}`, headers as `{name: [values]}`; answers the same fields masked.
 /// - `network.rows`: `{records: [{id, url, method, statusCode, startedAt (ms), durationMs,
 ///   requestHeaders, responseHeaders, requestBody, responseBody, decryptedResponseBody, error,
-///   source}]}`; answers `{json}`, the network inspector's `{"requests": [...]}`.
+///   source, graphqlOperation?, requestBytes?, responseBytes?}]}`; answers `{json}`, the network
+///   inspector's `{"requests": [...]}`.
 /// - `network.log`: `{record}`, one record as for `network.rows`; answers `{text}`, the request log
 ///   the inspector copies.
 enum DebugSwiftCoreBridge {
@@ -122,7 +123,12 @@ enum DebugSwiftCoreBridge {
             responseBody: Data((record["responseBody"] as? String ?? "").utf8),
             decryptedResponseBody: Data((record["decryptedResponseBody"] as? String ?? "").utf8),
             error: record["error"] as? String ?? "",
-            source: record["source"] as? String ?? "http"
+            source: record["source"] as? String ?? "http",
+            // Kotlin keeps a truncated copy of large bodies: the label and the sizes it captured
+            // from the whole body win over what the copy would give.
+            graphqlOperation: record["graphqlOperation"] as? String,
+            requestBytes: (record["requestBytes"] as? NSNumber)?.intValue,
+            responseBytes: (record["responseBytes"] as? NSNumber)?.intValue
         )
     }
 
