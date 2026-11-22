@@ -39,9 +39,13 @@ jobs:
         # The newest stable SemVer tag, as git-version.yml finds it. With none yet (the first stable
         # release) it stays empty, and the notes start at the first commit. The releases API isn't used:
         # without a stable release it answers 404 with a JSON body that ended up as the tag.
-        tag=$(git tag -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+        # The tag being released is left out, in case it already exists (a release run again).
+        tag=$(git tag -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "${TAG_NAME#v}" | sort -V | tail -1 || true)
         echo "PREVIOUS_TAG=$tag" >> $GITHUB_OUTPUT
         echo "Previous tag: ${tag:-none}"
+      env:
+        # Passed through the environment, not interpolated into the script, so the input is data.
+        TAG_NAME: ${{ github.event.inputs.tag_name }}
 
     - name: Extract version from tag
       id: extract_version
