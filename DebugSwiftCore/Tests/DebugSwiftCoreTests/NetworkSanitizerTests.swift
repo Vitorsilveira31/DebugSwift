@@ -365,4 +365,14 @@ struct NetworkSanitizerTests {
         let body = Data("<?xml version=\"1.0\"\(padding)encoding=\"utf-7\"?>+ADw-password+AD4-hunter2+ADw-/password+AD4-".utf8)
         #expect(sanitizer.sanitize(body: body, contentType: "application/xml") == Data("<redacted>".utf8))
     }
+
+    @Test func decodedTextReadsRawBodiesAsTheSanitizerDoes() {
+        let bare = "<password>x</password>".data(using: .utf16LittleEndian)!
+        #expect(NetworkSanitizer.decodedText(of: bare, contentType: "application/xml") == "<password>x</password>")
+        let bom = Data([0xFE, 0xFF]) + "a=b".data(using: .utf16BigEndian)!
+        #expect(NetworkSanitizer.decodedText(of: bom, contentType: "text/plain") == "a=b")
+        let utf7 = Data(#"<?xml version="1.0" encoding="UTF-7"?>+ADw-password+AD4-x"#.utf8)
+        #expect(NetworkSanitizer.decodedText(of: utf7, contentType: "application/xml") == nil)
+        #expect(NetworkSanitizer.decodedText(of: Data("{}".utf8), contentType: nil) == "{}")
+    }
 }

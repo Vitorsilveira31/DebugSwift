@@ -195,22 +195,37 @@ public struct NetworkSanitizer: Sendable {
     /// isn't UTF-8. A body that its declared encoding can't decode is replaced by the placeholder:
     /// unread text could hold anything.
     private func maskingText(_ body: Data, contentType: String?, xml: Bool, mask: (String) -> String) -> Data {
-        let (declaredEncoding, bom, declared) = Self.textEncoding(of: body, contentType: contentType, xml: xml)
-        guard var encoding = declaredEncoding else { return Data(Self.redactedValue.utf8) }
-        var decoded = String(data: body.dropFirst(bom.count), encoding: encoding)
-        if decoded == nil, !declared {
-            // Nothing said it's UTF-8: read it as Latin-1, which takes any byte and writes it back
-            // unchanged, so the ASCII keys are still found.
-            encoding = .isoLatin1
-            decoded = String(data: body, encoding: encoding)
+        guard let (text, encoding, bom) = Self.decode(body, contentType: contentType, xml: xml) else {
+            return Data(Self.redactedValue.utf8)
         }
-        guard let text = decoded else { return Data(Self.redactedValue.utf8) }
         let masked = mask(text)
         guard masked != text else { return body }
         guard let data = masked.data(using: encoding, allowLossyConversion: false) else {
             return Data(Self.redactedValue.utf8)
         }
         return bom + data
+    }
+
+    /// A raw body's text, read as the sanitizer reads it before masking, for a platform that records
+    /// bodies as text (Android): a byte order mark, the `charset`, an XML declaration or the
+    /// signature of BOM-less UTF-16/32 XML, else UTF-8, else Latin-1. `nil` when the declared
+    /// encoding can't be read: record the placeholder then, not a guess.
+    public static func decodedText(of body: Data, contentType: String?) -> String? {
+        let type = (contentType?.split(separator: ";", maxSplits: 1).first.map(String.init) ?? "")
+            .trimmingCharacters(in: .whitespaces).lowercased()
+        let subtype = type.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ""
+        return decode(body, contentType: contentType, xml: subtype == "xml" || subtype.hasSuffix("+xml"))?.text
+    }
+
+    /// The text, the encoding it was read in and the byte order mark it started with.
+    private static func decode(_ body: Data, contentType: String?, xml: Bool) -> (text: String, encoding: String.Encoding, bom: Data)? {
+        let (declaredEncoding, bom, declared) = textEncoding(of: body, contentType: contentType, xml: xml)
+        guard let encoding = declaredEncoding else { return nil }
+        if let text = String(data: body.dropFirst(bom.count), encoding: encoding) { return (text, encoding, bom) }
+        // Nothing said it's UTF-8: read it as Latin-1, which takes any byte and writes it back
+        // unchanged, so the ASCII keys are still found.
+        guard !declared, let text = String(data: body, encoding: .isoLatin1) else { return nil }
+        return (text, .isoLatin1, Data())
     }
 
     /// The encoding of a text body (`nil` for a declared one this can't read), the byte order mark it

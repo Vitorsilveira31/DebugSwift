@@ -36,11 +36,10 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         val requestBody = runCatching {
             val buffer = Buffer()
             request.body?.writeTo(buffer)
-            // The declared charset: the body's media type, then the request's Content-Type header.
-            val declared = request.body?.contentType()?.charset()
-                ?: request.header("Content-Type")?.toMediaTypeOrNull()?.charset()
+            // The declared type: the body's media type, else the request's Content-Type header.
+            val type = request.body?.contentType()?.toString() ?: request.header("Content-Type")
             if (buffer.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(buffer.size)
-            else decodeBody(buffer.readByteArray(), declared)
+            else decodeBody(buffer.readByteArray(), type)
         }.getOrDefault("")
         val requestBytes = request.body?.contentLength()?.takeIf { it >= 0 } ?: 0L
 
@@ -96,7 +95,7 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
                 originalBytes = size
                 // Decoded as requests are, so a BOM-prefixed or BOM-less UTF-16 body is text the
                 // masker can read downstream.
-                decodeBody(peeked.bytes(), peeked.contentType()?.charset())
+                decodeBody(peeked.bytes(), peeked.contentType()?.toString() ?: response.header("Content-Type"))
             }
         }.getOrDefault("")
         val rewrittenText = rewriteRule?.responseBody ?: originalText
@@ -159,28 +158,15 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
     }
 
     /**
-     * A captured body as text, read as DebugSwiftCore reads raw bodies: a byte order mark first
-     * (dropped), then the declared charset, then the signature of BOM-less UTF-32 or UTF-16 XML
-     * (`<` with NULs, XML 1.0 appendix F), else UTF-8.
+     * A captured body as text, read by DebugSwiftCore as it reads raw bodies before masking (byte
+     * order mark, charset, XML declaration, BOM-less UTF-16/32 XML), so the text the bridge masks is
+     * what the bytes say. A body whose declared encoding can't be read comes back as the placeholder.
      */
-    private fun decodeBody(bytes: ByteArray, declared: java.nio.charset.Charset?): String {
-        fun starts(vararg prefix: Int) = bytes.size >= prefix.size && prefix.indices.all { bytes[it] == prefix[it].toByte() }
-        val utf32LE = java.nio.charset.Charset.forName("UTF-32LE")
-        val utf32BE = java.nio.charset.Charset.forName("UTF-32BE")
-        val (charset, skip) = when {
-            starts(0xFF, 0xFE, 0x00, 0x00) -> utf32LE to 4
-            starts(0x00, 0x00, 0xFE, 0xFF) -> utf32BE to 4
-            starts(0xEF, 0xBB, 0xBF) -> Charsets.UTF_8 to 3
-            starts(0xFE, 0xFF) -> Charsets.UTF_16BE to 2
-            starts(0xFF, 0xFE) -> Charsets.UTF_16LE to 2
-            declared != null -> declared to 0
-            starts(0x3C, 0x00, 0x00, 0x00) -> utf32LE to 0
-            starts(0x00, 0x00, 0x00, 0x3C) -> utf32BE to 0
-            starts(0x3C, 0x00) -> Charsets.UTF_16LE to 0
-            starts(0x00, 0x3C) -> Charsets.UTF_16BE to 0
-            else -> Charsets.UTF_8 to 0
-        }
-        return String(bytes, skip, bytes.size - skip, charset)
+    private fun decodeBody(bytes: ByteArray, contentType: String?): String {
+        val input = org.json.JSONObject()
+            .put("bytes", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+            .put("contentType", contentType ?: "")
+        return org.json.JSONObject(DebugSwiftCoreBridge.call("body.text", input.toString())).optString("text")
     }
 
     /**

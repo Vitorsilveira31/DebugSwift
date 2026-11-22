@@ -21,6 +21,8 @@ import SkipFuse
 ///   agentLog: {path, enabled, sessionId}}`; answers `{json}`, the `agent-snapshot.json` iOS writes.
 /// - `sanitize.record`: `{url, requestHeaders, responseHeaders, requestBody, responseBody,
 ///   decryptedResponseBody}`, headers as `{name: [values]}`; answers the same fields masked.
+/// - `body.text`: `{bytes (Base64), contentType}`; answers `{text}`, the body read as
+///   `NetworkSanitizer.decodedText` reads it (the placeholder when it can't be).
 /// - `network.rows`: `{records: [{id, url, method, statusCode, startedAt (ms), durationMs,
 ///   requestHeaders, responseHeaders, requestBody, responseBody, decryptedResponseBody, error,
 ///   source, graphqlOperation?, requestBytes?, responseBytes?}]}`; answers `{json}`, the network
@@ -53,6 +55,7 @@ enum DebugSwiftCoreBridge {
             "bodyKeys": NetworkSanitizer.defaultBodyKeys.sorted()
         ]
         case "sanitize.record": sanitizeRecord(input)
+        case "body.text": bodyText(input)
         case "url.matches": ["matches": urlMatches(input)]
         case "graphql.label": ["label": GraphQLInspector.operationLabel(from: input["body"] as? String ?? "")]
         case "har.encode": ["json": HAREncoder.encodeJSON(harCaptures(input)) ?? ""]
@@ -180,6 +183,14 @@ enum DebugSwiftCoreBridge {
             return text.matchesAny(wildcardPatterns: patterns, strategy: strategy)
         }
         return url.matchesAny(wildcardPatterns: patterns, strategy: strategy, queryStrategy: query)
+    }
+
+    /// A captured body's text as Core reads raw bodies; the placeholder when its declared encoding
+    /// can't be read.
+    private static func bodyText(_ input: [String: Any]) -> [String: Any] {
+        let body = Data(base64Encoded: input["bytes"] as? String ?? "") ?? Data()
+        let text = NetworkSanitizer.decodedText(of: body, contentType: input["contentType"] as? String)
+        return ["text": text ?? NetworkSanitizer.redactedValue]
     }
 
     private static func sanitizeRecord(_ input: [String: Any]) -> [String: Any] {

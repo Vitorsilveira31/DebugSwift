@@ -499,6 +499,9 @@ class DebugSwiftPanelTest {
         // A byte order mark and no charset.
         val bom = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "<password>bom-secret-$marker</password>".toByteArray(Charsets.UTF_16LE)
         send("bom", bom.toRequestBody("application/xml".toMediaType()))
+        // An XML declaration naming an encoding DebugSwiftCore can't read: recorded as the placeholder.
+        send("utf7", "<?xml version=\"1.0\" encoding=\"UTF-7\"?>+ADw-password+AD4-utf7-secret-$marker+ADw-/password+AD4-".toByteArray(Charsets.US_ASCII)
+            .toRequestBody("application/xml".toMediaType()))
         // UTF-16 XML without a byte order mark or charset.
         send("bare", "<password>bare-secret-$marker</password>".toByteArray(Charsets.UTF_16LE).toRequestBody("application/xml".toMediaType()))
 
@@ -509,6 +512,7 @@ class DebugSwiftPanelTest {
         assertEquals("password=<redacted>", body("header"))
         assertEquals("<password>&lt;redacted&gt;</password>", body("bom"))
         assertEquals("<password>&lt;redacted&gt;</password>", body("bare"))
+        assertEquals("<redacted>", body("utf7"))
     }
 
     @Test
