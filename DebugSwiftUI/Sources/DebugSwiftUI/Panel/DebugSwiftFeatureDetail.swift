@@ -82,7 +82,7 @@ struct DebugSwiftFeatureDetail: View {
             ["refresh", "browse_files", "export"]
         case "realm":
             ["refresh", "export"]
-        case "sqlite", "core_data", "swift_data":
+        case "database", "core_data", "swift_data":
             ["refresh", "run_query", "export"]
         case "grid":
             ["refresh", "set_grid", "toggle", "capture"]
@@ -127,7 +127,7 @@ struct DebugSwiftFeatureDetail: View {
         case "preferences", "persistent_data": "Store|key=value to write; Store|key to remove; Store|CLEAR to delete all"
         case "files": "App path: files/, cache/, or databases/"
         case "push_simulator": "Notification command or ID"
-        case "sqlite", "core_data", "swift_data": "Database name|SQL statement"
+        case "database", "core_data", "swift_data": "Database name|SQL statement"
         case "custom_actions": "Registered action title"
         #if os(Android)
         case "custom_info": "Name=value"

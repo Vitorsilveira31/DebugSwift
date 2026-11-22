@@ -165,7 +165,7 @@ one and can be retired.
 | measurement | Dedicated | pick two elements, read gaps, centers and size difference in dp |
 | color_palette | Dedicated | dominant colors from a pixel copy of the window; tap to copy a hex value |
 | animation_control | Dedicated | sets the three system scales when `WRITE_SECURE_SETTINGS` is granted by adb; otherwise slows View animations in the app and says what is missing |
-| compose_renders | Dedicated | recompositions per second and totals for the whole app; a `DebugSwiftComposeProbe` still counts one screen |
+| render_tracking | Dedicated | recompositions per second and totals for the whole app; a `DebugSwiftComposeProbe` still counts one screen |
 | doc_recorder | Dedicated | start recording, close the panel, use the app, capture a screenshot numbered with each tap and scroll |
 
 ### Resources (all dedicated)

@@ -13,6 +13,15 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.rule.GrantPermissionRule
 import android.view.MotionEvent
 import debug.swift.android.AndroidDebugTools
+import debug.swift.android.clearDocumentation
+import debug.swift.android.documentationState
+import debug.swift.android.exportHar
+import debug.swift.android.failNextNetworkRequest
+import debug.swift.android.matchingNetworkRewriteRule
+import debug.swift.android.networkInspectorSnapshotJSON
+import debug.swift.android.pushStateJSON
+import debug.swift.android.setDocumentationRecording
+import debug.swift.android.writeAgentSnapshot
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertTrue

@@ -459,11 +459,11 @@ public enum DebugSwiftRuntime {
     private static func iosInterfaceSetting(for featureID: String) -> DebugSwiftInterfaceSetting? {
         switch featureID {
         case "touches": .touches
-        case "colorize": .colorizedBorders
+        case "view_borders": .colorizedBorders
         case "animations": .slowAnimations
         case "dark_mode": .darkMode
         case "measurement": .measurement
-        case "swiftui_render": .swiftUIRenderTracking
+        case "render_tracking": .swiftUIRenderTracking
         default: nil
         }
     }

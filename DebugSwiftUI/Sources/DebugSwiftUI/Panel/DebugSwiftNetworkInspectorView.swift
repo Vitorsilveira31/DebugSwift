@@ -1,3 +1,4 @@
+import DebugSwiftCore
 import Foundation
 import SwiftUI
 
@@ -5,30 +6,10 @@ import SwiftUI
 import DebugSwift
 #endif
 
-struct DebugSwiftNetworkRequestSnapshot: Codable, Identifiable {
-    let id: String
-    let url: String
-    let method: String
-    let statusCode: String
-    let timestamp: String
-    let timestampMilliseconds: Int64
-    let durationMilliseconds: Int
-    let requestBytes: Int
-    let responseBytes: Int
-    let requestHeaders: [String: String]
-    let responseHeaders: [String: String]
-    let requestBody: String
-    let responseBody: String
-    let decryptedResponseBody: String
-    let requestBodyBase64: String?
-    let responseBodyBase64: String?
-    let decryptedResponseBodyBase64: String?
-    let mimeType: String
-    let error: String
-    let graphqlOperation: String
-    let source: String
-    let isSuccess: Bool
+/// A captured request as the inspector lists it; built by DebugSwiftCore on both platforms.
+typealias DebugSwiftNetworkRequestSnapshot = NetworkInspectorRequest
 
+extension NetworkInspectorRequest {
     var displayRequestBody: String {
         requestBody.isEmpty ? (requestBytes == 0 ? "No request body" : "Binary request body · \(requestBytes) bytes") : requestBody
     }
