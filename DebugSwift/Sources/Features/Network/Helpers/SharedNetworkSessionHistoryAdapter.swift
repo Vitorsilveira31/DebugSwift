@@ -142,12 +142,7 @@ public extension DebugSwift.Network {
     }
 
     private static func sharedHistoryGraphQLOperation(_ model: HttpModel) -> String {
-        guard let operation = GraphQLInspectorAdapter.detail(for: model).operation else { return "" }
-        switch operation {
-        case .query(let name): return name.map { "Query: \($0)" } ?? "Query"
-        case .mutation(let name): return name.map { "Mutation: \($0)" } ?? "Mutation"
-        case .subscription(let name): return name.map { "Subscription: \($0)" } ?? "Subscription"
-        }
+        GraphQLInspectorAdapter.detail(for: model).operation?.label ?? ""
     }
 }
 #endif

@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.rule.GrantPermissionRule
+import android.view.MotionEvent
 import debug.swift.android.AndroidDebugTools
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -79,6 +80,130 @@ class DebugSwiftPanelTest {
         open("Network", "HTTP Inspector")
         waitFor(hasText("api.example.test/orders?id=42&access_token=%3Credacted%3E", substring = true))
         assertNoNode(hasText("secret123", substring = true))
+    }
+
+    @Test
+    fun rulesSetFromKotlinMaskThroughDebugSwiftCore() {
+        // DebugSwiftNetworkSanitizer hands the rules to DebugSwiftCore over JNI; a key added here is masked there.
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        debug.swift.android.DebugSwiftNetworkSanitizer.configure(
+            bodyKeys = debug.swift.android.DebugSwiftNetworkSanitizer.defaultBodyKeys + "pin",
+            headers = debug.swift.android.DebugSwiftNetworkSanitizer.defaultHeaders + "X-Session"
+        )
+        try {
+            val masked = debug.swift.android.DebugSwiftNetworkSanitizer.sanitize(
+                url = "https://user:pw@api.example.test/a?token=t-$marker&page=2",
+                requestHeaders = mapOf("X-Session" to listOf("s-$marker"), "Accept" to listOf("a", "b")),
+                responseHeaders = emptyMap(),
+                requestBody = """{"pin":"1234-$marker","name":"ana"}""",
+                responseBody = "",
+                decryptedResponseBody = "pin=9-$marker note=kept"
+            )
+            assertTrue(masked.url, masked.url == "https://user:%3Credacted%3E@api.example.test/a?token=%3Credacted%3E&page=2")
+            assertTrue("${masked.requestHeaders}", masked.requestHeaders["X-Session"] == listOf("<redacted>"))
+            assertTrue("${masked.requestHeaders}", masked.requestHeaders["Accept"] == listOf("a", "b"))
+            assertTrue(masked.requestBody, masked.requestBody.contains(""""pin":"<redacted>"""") && !masked.requestBody.contains(marker))
+            assertTrue(masked.decryptedResponseBody, masked.decryptedResponseBody == "pin=<redacted> note=kept")
+            // A JSON null leaves password masking on.
+            debug.swift.android.DebugSwiftNetworkSanitizer.configureJSON("""{"redactsURLPassword":null}""")
+            val stillMasked = debug.swift.android.DebugSwiftNetworkSanitizer.sanitize(
+                "https://user:pw@api.example.test/", emptyMap(), emptyMap(), "", "", ""
+            )
+            assertTrue(stillMasked.url, stillMasked.url == "https://user:%3Credacted%3E@api.example.test/")
+        } finally {
+            debug.swift.android.DebugSwiftNetworkSanitizer.configure(
+                bodyKeys = debug.swift.android.DebugSwiftNetworkSanitizer.defaultBodyKeys,
+                headers = debug.swift.android.DebugSwiftNetworkSanitizer.defaultHeaders
+            )
+        }
+    }
+
+    @Test
+    fun rewriteRulesMatchURLsThroughDebugSwiftCore() {
+        // The same wildcard rules as iOS: a full match of the URL, query items exact and in any order.
+        fun matches(url: String, pattern: String, full: Boolean, queryExact: Boolean): Boolean =
+            org.json.JSONObject(
+                debug.swift.android.DebugSwiftCoreBridge.call(
+                    "url.matches",
+                    org.json.JSONObject().put("url", url).put("patterns", org.json.JSONArray(listOf(pattern)))
+                        .put("full", full).put("queryExact", queryExact).toString()
+                )
+            ).optBoolean("matches")
+        assertTrue(matches("https://api.example.test/orders?b=2&a=1", "*/orders?a=1&b=2", full = true, queryExact = true))
+        assertTrue(!matches("https://api.example.test/orders?a=1&b=2&c=3", "*/orders?a=1&b=2", full = true, queryExact = true))
+        assertTrue(matches("https://api.example.test/orders?a=1&b=2&c=3", "*/orders?a=1&b=2", full = true, queryExact = false))
+        assertTrue(matches("https://api.example.test/v2/orders/42", "orders/*", full = false, queryExact = false))
+        assertTrue(!matches("https://api.example.test/v2/orders/42", "orders/*", full = true, queryExact = false))
+
+        val original = AndroidDebugTools.networkInjectionSettingsJSON()
+        try {
+            val settings = org.json.JSONObject(original)
+            settings.getJSONObject("rewrite").put("isEnabled", true).put("rules", org.json.JSONArray().put(
+                org.json.JSONObject().put("id", "rule-1").put("urlPattern", "*/profile?id=*").put("responseBody", "{}")
+                    .put("isEnabled", true).put("matchType", "wildcard")
+            ))
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(settings.toString())
+            assertTrue(AndroidDebugTools.matchingNetworkRewriteRule("https://api.example.test/profile?id=7", "GET")?.id == "rule-1")
+            assertTrue(AndroidDebugTools.matchingNetworkRewriteRule("https://api.example.test/profile", "GET") == null)
+        } finally {
+            AndroidDebugTools.applyNetworkInjectionSettingsJSON(original)
+        }
+    }
+
+    @Test
+    fun graphQLLabelsHARAndCURLComeFromDebugSwiftCore() {
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        AndroidDebugTools.recordNetwork(
+            method = "POST",
+            url = "https://api.example.test/graphql-$marker",
+            status = 200,
+            durationMs = 7,
+            requestBytes = 40,
+            responseBytes = 12,
+            requestBody = """{"query":"query GetUser { user { id } }"}""",
+            responseBody = """{"data":{}}""",
+            requestHeaders = mapOf("Content-Type" to listOf("application/json"), "Authorization" to listOf("Bearer t")),
+            responseHeaders = mapOf("Content-Type" to listOf("application/json"))
+        )
+        // The label iOS lists for the same request.
+        val list = org.json.JSONObject(AndroidDebugTools.networkInspectorSnapshotJSON("graphql")).toString()
+        assertTrue(list, list.contains("Query: GetUser"))
+
+        val har = org.json.JSONObject(requireNotNull(AndroidDebugTools.exportHar("http")).readText())
+        val entries = har.getJSONObject("log").getJSONArray("entries")
+        val entry = (0 until entries.length()).map(entries::getJSONObject)
+            .first { it.getJSONObject("request").getString("url").endsWith("graphql-$marker") }
+        assertTrue("$entry", entry.getJSONObject("request").getJSONObject("postData").getString("text").contains("GetUser"))
+        assertTrue("$entry", entry.getJSONObject("response").getJSONObject("content").getString("text") == """{"data":{}}""")
+
+        val curl = org.json.JSONObject(
+            debug.swift.android.DebugSwiftCoreBridge.call(
+                "curl.command",
+                org.json.JSONObject().put("method", "POST").put("url", "https://api.example.test/a'b")
+                    .put("headers", org.json.JSONObject().put("authorization", org.json.JSONArray(listOf("Bearer secret"))))
+                    .put("body", "x=1").toString()
+            )
+        ).getString("command")
+        // HTTP field names ignore case: a lowercase `authorization` is masked too.
+        assertTrue(curl, curl == "curl -X POST 'https://api.example.test/a'\\''b' -H 'authorization: <redacted>' -d 'x=1'")
+    }
+
+    @Test
+    fun theAgentSnapshotIsWrittenByDebugSwiftCore() {
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        AndroidDebugTools.recordNetwork(
+            method = "GET", url = "https://api.example.test/snapshot-$marker?token=abc", status = 503,
+            durationMs = 9, requestBytes = 0, responseBytes = 0, requestBody = "", responseBody = "", error = "Service down"
+        )
+        val reply = AndroidDebugTools.writeAgentSnapshot()
+        val snapshot = org.json.JSONObject(java.io.File(reply.getString("path")).readText())
+        assertTrue("$snapshot", snapshot.getInt("schemaVersion") == 1 && snapshot.getString("platform") == "android")
+        assertTrue("$snapshot", snapshot.getJSONObject("app").getString("bundleId") == "com.debugswift.example")
+        val requests = snapshot.getJSONArray("network")
+        val request = (0 until requests.length()).map(requests::getJSONObject).last()
+        assertTrue("$request", request.getString("url") == "https://api.example.test/snapshot-$marker?token=%3Credacted%3E")
+        assertTrue("$request", request.getInt("status") == 503 && request.getString("error") == "Service down")
+        assertTrue("$snapshot", snapshot.getJSONObject("agentLog").has("sessionId"))
     }
 
     @Test
@@ -248,6 +373,27 @@ class DebugSwiftPanelTest {
             assertTrue("Listed ${listing.optJSONArray("entries")?.length()} entries", listing.getJSONArray("entries").length() == 520)
         } finally {
             folder.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aTouchSeenTwiceIsRecordedOnce() {
+        AndroidDebugTools.clearDocumentation()
+        AndroidDebugTools.setDocumentationRecording(true)
+        try {
+            val now = android.os.SystemClock.uptimeMillis()
+            val down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, 100f, 400f, 0)
+            val up = MotionEvent.obtain(now, now + 80, MotionEvent.ACTION_UP, 100f, 900f, 0)
+            // Two forwarding callbacks pass each event on: once each.
+            listOf(down, down, up, up).forEach { AndroidDebugTools.recordTouch(it) }
+            down.recycle()
+            up.recycle()
+            val gestures = org.json.JSONObject(AndroidDebugTools.documentationState()).getJSONArray("gestures")
+            assertTrue("Recorded ${gestures.length()} gestures: $gestures", gestures.length() == 1)
+            assertTrue("The gesture is the scroll", gestures.getJSONObject(0).getString("kind") == "scroll")
+        } finally {
+            AndroidDebugTools.setDocumentationRecording(false)
+            AndroidDebugTools.clearDocumentation()
         }
     }
 

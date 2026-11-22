@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct DebugGesture: Decodable {
     let kind: String
@@ -65,11 +68,20 @@ struct DebugDocRecorderView: View {
                 }
                 if !state.screenshot.isEmpty {
                     Section("Last screenshot") {
+                        #if os(iOS)
+                        // AsyncImage loads through URLSession, which doesn't read local files on iOS.
+                        if let image = UIImage(contentsOfFile: state.screenshot) {
+                            Image(uiImage: image).resizable().scaledToFit()
+                        } else {
+                            Text(verbatim: state.screenshot).font(.caption)
+                        }
+                        #else
                         AsyncImage(url: URL(fileURLWithPath: state.screenshot)) { image in
                             image.resizable().scaledToFit()
                         } placeholder: {
                             Text(verbatim: state.screenshot).font(.caption)
                         }
+                        #endif
                     }
                 }
             }
@@ -80,10 +92,12 @@ struct DebugDocRecorderView: View {
 
     func describe(_ gesture: DebugGesture, density: Double) -> String {
         func dp(_ value: Double) -> Int { Int((value / max(density, 0.1)).rounded()) }
+        // Android reports pixels and its density; iOS reports points.
+        let unit = DebugPlatform.isAndroid ? "dp" : "pt"
         if gesture.kind == "scroll" {
-            return "Scroll (\(dp(gesture.startX)), \(dp(gesture.startY))) to (\(dp(gesture.endX)), \(dp(gesture.endY))) dp"
+            return "Scroll (\(dp(gesture.startX)), \(dp(gesture.startY))) to (\(dp(gesture.endX)), \(dp(gesture.endY))) \(unit)"
         }
-        return "Tap at (\(dp(gesture.endX)), \(dp(gesture.endY))) dp"
+        return "Tap at (\(dp(gesture.endX)), \(dp(gesture.endY))) \(unit)"
     }
 
     func record(_ on: Bool) {

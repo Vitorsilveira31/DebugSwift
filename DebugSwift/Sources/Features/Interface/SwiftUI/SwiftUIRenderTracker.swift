@@ -97,7 +97,11 @@ public class SwiftUIRenderTracker: @unchecked Sendable {
         ]
     }
     
+    /// Changes on every `clearStats()`, so a sampler can tell a reset from fewer renders.
+    private(set) var resetGeneration = 0
+
     public func clearStats() {
+        resetGeneration += 1
         renderCounts.removeAll()
         lastRenderTimes.removeAll()
         activeOverlays.removeAll() // Clear active overlays to prevent stuck states
@@ -186,6 +190,8 @@ public class SwiftUIRenderTracker: @unchecked Sendable {
     
     internal func trackRender(for view: UIView, viewType: String) {
         guard isEnabled else { return }
+        // The debugger's own views (its window, or the shared panel shown as a sheet) aren't the app's.
+        guard !SharedPanelInterface.isDebuggerView(view) else { return }
         
         let identifier = "\(viewType)_\(ObjectIdentifier(view))"
         

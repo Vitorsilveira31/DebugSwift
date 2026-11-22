@@ -880,19 +880,22 @@ object AndroidDebugTools {
         val graphOperation = graphqlOperation(requestBody)
         // Mask before storing: the list, the history file, HAR, cURL and the agent log all read
         // this record. Only replay needs the original request, so it stays in memory alone.
-        val sanitizer = DebugSwiftNetworkSanitizer
-        val requestType = headerValue(requestHeaders, "Content-Type")
-        val responseType = headerValue(responseHeaders, "Content-Type")
-        val safeUrl = sanitizer.sanitizeUrl(url)
+        val masked = DebugSwiftNetworkSanitizer.sanitize(
+            url = url,
+            requestHeaders = requestHeaders,
+            responseHeaders = responseHeaders,
+            requestBody = requestBody,
+            responseBody = responseBody,
+            decryptedResponseBody = decryptedResponseBody?.takeIf { it.isNotEmpty() }
+                ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty()
+        )
         val record = NetworkRecord(
-                System.currentTimeMillis(), method, safeUrl, status, durationMs,
+                System.currentTimeMillis(), method, masked.url, status, durationMs,
                 requestBytes, responseBytes,
-                sanitizer.sanitizeHeaders(requestHeaders), sanitizer.sanitizeHeaders(responseHeaders),
-                sanitizer.sanitizeBody(requestBody, requestType).take(32_000),
-                sanitizer.sanitizeBody(responseBody, responseType).take(64_000),
-                sanitizer.sanitizeText(
-                    decryptedResponseBody?.takeIf { it.isNotEmpty() } ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty()
-                ).take(64_000),
+                masked.requestHeaders, masked.responseHeaders,
+                masked.requestBody.take(32_000),
+                masked.responseBody.take(64_000),
+                masked.decryptedResponseBody.take(64_000),
                 error, graphOperation, source
             )
         rememberReplayRequest(record.id, ReplayRequest(url, requestHeaders, requestBody))
@@ -908,10 +911,10 @@ object AndroidDebugTools {
         appendAgentEntry(
             kind = "network",
             location = "OkHttp/$source",
-            message = "$method $safeUrl ($status)",
+            message = "$method ${masked.url} ($status)",
             data = mapOf(
                 "method" to method,
-                "url" to safeUrl,
+                "url" to masked.url,
                 "status" to status,
                 "durationMs" to durationMs,
                 "requestBytes" to requestBytes,
@@ -920,7 +923,7 @@ object AndroidDebugTools {
             )
         )
         recordThresholdRequest(url)
-        publishEvent("network", "$method $safeUrl ($status, ${durationMs}ms)")
+        publishEvent("network", "$method ${masked.url} ($status, ${durationMs}ms)")
     }
 
     /** The unmasked request behind a stored record, kept in memory only so replay can resend it. */
@@ -1527,7 +1530,7 @@ object AndroidDebugTools {
             if (!rule.httpMethod.isNullOrEmpty() && !rule.httpMethod.equals(method, ignoreCase = true)) return@filter false
             when (rule.matchType) {
                 "exact" -> url.equals(rule.urlPattern, ignoreCase = true)
-                else -> matchesWildcardURL(url, rule.urlPattern, full = true, queryExact = true)
+                else -> matchesWildcardURL(url, listOf(rule.urlPattern), full = true, queryExact = true)
             }
         }
         if (matches.isEmpty()) return null
@@ -1567,71 +1570,14 @@ object AndroidDebugTools {
     private fun matchesRequest(url: String, method: String, urlPatterns: List<String>, httpMethods: List<String>): Boolean {
         val methodMatches = httpMethods.isEmpty() || httpMethods.any { it.equals(method, ignoreCase = true) }
         if (!methodMatches) return false
-        return urlPatterns.isEmpty() || urlPatterns.any { matchesWildcardURL(url, it, full = false, queryExact = false) }
+        return urlPatterns.isEmpty() || matchesWildcardURL(url, urlPatterns, full = false, queryExact = false)
     }
 
-    private data class QueryPattern(val name: String, val value: String?, val hasValue: Boolean)
-
-    private fun matchesWildcardURL(url: String, pattern: String, full: Boolean, queryExact: Boolean): Boolean {
-        val queryPattern = parseWildcardQuery(pattern)
-        if (queryPattern == null) {
-            val target = if (pattern.contains("?") && pattern.substringAfterLast('?').contains("=")) url else url.substringBefore('#')
-            return matchesWildcardString(target, pattern, full)
-        }
-        val (basePattern, expectedItems) = queryPattern
-        val baseURL = url.substringBefore('#').substringBefore('?')
-        if (!matchesWildcardString(baseURL, basePattern.ifEmpty { "*" }, full)) return false
-        val rawQuery = Uri.parse(url).encodedQuery.orEmpty()
-        val actualItems = if (rawQuery.isEmpty()) emptyList() else rawQuery.split('&').map { item ->
-            val pair = item.split('=', limit = 2)
-            Uri.decode(pair[0]) to pair.getOrNull(1)?.let { Uri.decode(it) }
-        }
-        if (queryExact && actualItems.size != expectedItems.size) return false
-        val used = mutableSetOf<Int>()
-        expectedItems.forEach { expected ->
-            val matchIndex = actualItems.indices.firstOrNull { index ->
-                index !in used && matchesWildcardString(actualItems[index].first, expected.name, full = true) &&
-                    (!expected.hasValue || matchesWildcardString(actualItems[index].second.orEmpty(), expected.value.orEmpty(), full = true))
-            } ?: return false
-            used.add(matchIndex)
-        }
-        return !queryExact || used.size == actualItems.size
-    }
-
-    private fun parseWildcardQuery(pattern: String): Pair<String, List<QueryPattern>>? {
-        val withoutFragment = pattern.substringBefore('#')
-        var searchIndex = 0
-        while (searchIndex < withoutFragment.length) {
-            val questionIndex = withoutFragment.indexOf('?', searchIndex)
-            if (questionIndex < 0) return null
-            val nextQuestion = withoutFragment.indexOf('?', questionIndex + 1).let { if (it < 0) withoutFragment.length else it }
-            val candidate = withoutFragment.substring(questionIndex + 1, nextQuestion)
-            if (candidate.contains('=') || candidate.contains('&') || (candidate.isNotEmpty() && !candidate.contains('/'))) {
-                val items = candidate.split('&').filter(String::isNotEmpty).map { item ->
-                    val equalsIndex = item.indexOf('=')
-                    if (equalsIndex < 0) QueryPattern(Uri.decode(item), null, false)
-                    else QueryPattern(Uri.decode(item.substring(0, equalsIndex)), Uri.decode(item.substring(equalsIndex + 1)), true)
-                }
-                return withoutFragment.substring(0, questionIndex) to items
-            }
-            searchIndex = questionIndex + 1
-        }
-        return null
-    }
-
-    private fun matchesWildcardString(value: String, pattern: String, full: Boolean): Boolean {
-        val expression = buildString {
-            if (full) append('^')
-            pattern.forEach { character ->
-                when (character) {
-                    '*' -> append(".*")
-                    '?' -> append('.')
-                    else -> append(Regex.escape(character.toString()))
-                }
-            }
-            if (full) append('$')
-        }
-        return runCatching { Regex(expression, RegexOption.IGNORE_CASE).containsMatchIn(value) }.getOrDefault(false)
+    /** DebugSwiftCore's URL wildcard matching, the one iOS uses for the same rules. */
+    private fun matchesWildcardURL(url: String, patterns: List<String>, full: Boolean, queryExact: Boolean): Boolean {
+        val input = JSONObject().put("url", url).put("patterns", org.json.JSONArray(patterns))
+            .put("full", full).put("queryExact", queryExact)
+        return JSONObject(DebugSwiftCoreBridge.call("url.matches", input.toString())).optBoolean("matches")
     }
 
     fun webSocketOpened(webSocket: WebSocket, url: String, responseCode: Int) {
@@ -1828,7 +1774,15 @@ object AndroidDebugTools {
         if (host.isNotBlank() && host !in webViewHosts) webViewHosts.add(host)
     }
 
+    /** The last event recorded, by its down time, event time and action. */
+    private var lastTouch: Triple<Long, Long, Int>? = null
+
     fun recordTouch(event: MotionEvent) {
+        // When another library wraps the window callback after DebugSwift, a later install wraps it
+        // again, and each event reaches here twice: record it once.
+        val identity = Triple(event.downTime, event.eventTime, event.actionMasked)
+        if (identity == lastTouch) return
+        lastTouch = identity
         val point = localTouchPosition(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -1888,47 +1842,24 @@ object AndroidDebugTools {
             "network_history" -> liveHistoryRecords()
             else -> networkRecords.toList()
         }
+        // DebugSwiftCore writes the HAR, as on iOS; the records are already masked.
         records.forEach { record ->
-            val request = org.json.JSONObject()
-                .put("method", record.method)
-                .put("url", record.url)
-                .put("httpVersion", "HTTP/1.1")
-                .put("headers", harHeaders(record.requestHeaders))
-                .put("queryString", org.json.JSONArray())
-                .put("cookies", org.json.JSONArray())
-                .put("headersSize", -1)
-                .put("bodySize", record.requestBytes)
-            if (record.requestBody.isNotEmpty()) {
-                request.put("postData", org.json.JSONObject()
-                    .put("mimeType", headerValue(record.requestHeaders, "Content-Type") ?: "application/octet-stream")
-                    .put("text", record.requestBody))
-            }
-            val responseContent = org.json.JSONObject()
-                .put("size", record.responseBytes)
-                .put("mimeType", headerValue(record.responseHeaders, "Content-Type") ?: "application/octet-stream")
-            record.responseBody.takeIf { it.isNotEmpty() }?.let { responseContent.put("text", it) }
             entries.put(
                 org.json.JSONObject()
-                    .put("startedDateTime", harTimestamp(record.timestamp))
-                    .put("time", record.durationMs)
-                    .put("request", request)
-                    .put("response", org.json.JSONObject()
-                        .put("status", record.status)
-                        .put("statusText", record.error)
-                        .put("httpVersion", "HTTP/1.1")
-                        .put("headers", harHeaders(record.responseHeaders))
-                        .put("cookies", org.json.JSONArray())
-                        .put("content", responseContent)
-                        .put("redirectURL", "")
-                        .put("headersSize", -1)
-                        .put("bodySize", record.responseBytes))
-                    .put("cache", org.json.JSONObject())
-                    .put("timings", org.json.JSONObject().put("send", -1).put("wait", record.durationMs).put("receive", -1))
+                    .put("method", record.method)
+                    .put("url", record.url)
+                    .put("startedAt", record.timestamp)
+                    .put("durationMs", record.durationMs)
+                    .put("status", record.status)
+                    .put("requestHeaders", headersJSON(record.requestHeaders))
+                    .put("responseHeaders", headersJSON(record.responseHeaders))
+                    .put("requestBody", record.requestBody)
+                    .put("responseBody", record.responseBody)
             )
         }
-        val har = org.json.JSONObject().put("log", org.json.JSONObject().put("version", "1.2").put("creator", org.json.JSONObject().put("name", "DebugSwift Android").put("version", "1.0")).put("entries", entries))
+        val reply = JSONObject(DebugSwiftCoreBridge.call("har.encode", JSONObject().put("records", entries).toString()))
         val file = File(context.cacheDir, "debugswift-${System.currentTimeMillis()}.har")
-        file.writeText(har.toString(2))
+        file.writeText(reply.optString("json"))
         publishEvent("resources", "Exported ${entries.length()} network requests to ${file.name}")
         return file
     }
@@ -1955,20 +1886,28 @@ object AndroidDebugTools {
             val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
             for (index in 0 until rows.length()) {
                 val row = rows.getJSONObject(index)
+                // Files written before capture was masked hold raw values; mask them on load.
+                val masked = DebugSwiftNetworkSanitizer.sanitize(
+                    url = row.optString("url"),
+                    requestHeaders = decodeHeaders(row.optJSONObject("requestHeaders")),
+                    responseHeaders = decodeHeaders(row.optJSONObject("responseHeaders")),
+                    requestBody = row.optString("requestBody"),
+                    responseBody = row.optString("responseBody"),
+                    decryptedResponseBody = row.optString("decryptedResponseBody")
+                )
                 val record = NetworkRecord(
                         timestamp = row.optLong("timestamp"),
                         method = row.optString("method"),
-                        url = DebugSwiftNetworkSanitizer.sanitizeUrl(row.optString("url")),
+                        url = masked.url,
                         status = row.optInt("status"),
                         durationMs = row.optLong("durationMs"),
                         requestBytes = row.optLong("requestBytes"),
                         responseBytes = row.optLong("responseBytes"),
-                        // Files written before capture was masked hold raw values; mask them on load.
-                        requestHeaders = DebugSwiftNetworkSanitizer.sanitizeHeaders(decodeHeaders(row.optJSONObject("requestHeaders"))),
-                        responseHeaders = DebugSwiftNetworkSanitizer.sanitizeHeaders(decodeHeaders(row.optJSONObject("responseHeaders"))),
-                        requestBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("requestBody"), headerValue(decodeHeaders(row.optJSONObject("requestHeaders")), "Content-Type")),
-                        responseBody = DebugSwiftNetworkSanitizer.sanitizeBody(row.optString("responseBody"), headerValue(decodeHeaders(row.optJSONObject("responseHeaders")), "Content-Type")),
-                        decryptedResponseBody = DebugSwiftNetworkSanitizer.sanitizeText(row.optString("decryptedResponseBody")).take(64_000),
+                        requestHeaders = masked.requestHeaders,
+                        responseHeaders = masked.responseHeaders,
+                        requestBody = masked.requestBody,
+                        responseBody = masked.responseBody,
+                        decryptedResponseBody = masked.decryptedResponseBody.take(64_000),
                         error = row.optString("error"),
                         graphqlOperation = row.optString("graphqlOperation"),
                         source = row.optString("source", "http"),
@@ -2060,21 +1999,11 @@ object AndroidDebugTools {
         }
     }
 
-    private fun harHeaders(headers: Map<String, List<String>>): org.json.JSONArray = org.json.JSONArray().also { array ->
-        headers.forEach { (name, values) -> values.forEach { value ->
-            array.put(org.json.JSONObject().put("name", name).put("value", value))
-        } }
-    }
-
     private fun headerValue(headers: Map<String, List<String>>, name: String): String? =
         headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
 
     private fun formatHeaders(headers: Map<String, List<String>>): String =
         headers.entries.joinToString("\n") { (name, values) -> "$name: ${values.joinToString(", ")}" }
-
-    private fun harTimestamp(timestamp: Long): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-        timeZone = java.util.TimeZone.getTimeZone("UTC")
-    }.format(Date(timestamp))
 
     private fun networkSnapshot(featureID: String): String {
         if (featureID == "network_injection") {
@@ -2446,17 +2375,15 @@ object AndroidDebugTools {
         append("\n------- MIME TYPE -------\n${headerValue(record.responseHeaders, "Content-Type") ?: "No data"}")
     }
 
-    private fun networkRecordCurl(record: NetworkRecord): String = buildString {
-        append("curl -X ").append(record.method).append(" '").append(record.url.replace("'", "'\\''")).append("'")
-        record.requestHeaders.forEach { (name, values) ->
-            val sensitive = name.equals("Authorization", true) || name.equals("Cookie", true) || name.equals("Set-Cookie", true)
-            val value = if (sensitive) "<redacted>" else values.joinToString(", ")
-            append(" -H '").append(name.replace("'", "'\\''")).append(": ").append(value.replace("'", "'\\''")).append("'")
-        }
-        if (record.requestBody.isNotEmpty()) {
-            append(" --data-raw '").append(record.requestBody.replace("'", "'\\''")).append("'")
-        }
+    /** DebugSwiftCore's cURL command for the request, credentials masked, as on iOS. */
+    private fun networkRecordCurl(record: NetworkRecord): String {
+        val input = JSONObject().put("method", record.method).put("url", record.url)
+            .put("headers", headersJSON(record.requestHeaders)).put("body", record.requestBody)
+        return JSONObject(DebugSwiftCoreBridge.call("curl.command", input.toString())).optString("command")
     }
+
+    private fun headersJSON(headers: Map<String, List<String>>): JSONObject =
+        JSONObject().also { json -> headers.forEach { (name, values) -> json.put(name, org.json.JSONArray(values)) } }
 
     private fun replayNetworkRecord(record: NetworkRecord): String {
         val method = record.method.uppercase(Locale.ROOT)
@@ -2887,7 +2814,7 @@ object AndroidDebugTools {
 
     /**
      * Writes `agent-snapshot.json` next to the agent log: app, device, current resource use and the
-     * latest requests. Same schema as the Swift `AgentSnapshot` (Documentation/AGENT-SNAPSHOT.md).
+     * latest requests, written by DebugSwiftCore's `AgentSnapshot` (Documentation/AGENT-SNAPSHOT.md).
      * Stored records are already sanitized, so their URLs go out as they are.
      */
     fun writeAgentSnapshot(): JSONObject {
@@ -2905,10 +2832,8 @@ object AndroidDebugTools {
                 .apply { if (record.error.isNotEmpty()) put("error", record.error) })
         }
         val logFile = File(context.filesDir, AGENT_LOG_FILENAME)
-        val snapshot = JSONObject()
-            .put("schemaVersion", 1)
-            .put("generatedAt", System.currentTimeMillis())
-            .put("platform", "android")
+        // DebugSwiftCore builds the file, so both platforms write the same `AgentSnapshot`.
+        val input = JSONObject()
             .put("app", JSONObject()
                 .put("bundleId", context.packageName)
                 .put("version", packageInfo?.versionName.orEmpty())
@@ -2925,9 +2850,10 @@ object AndroidDebugTools {
                 .put("path", logFile.absolutePath)
                 .put("enabled", agentLogEnabled)
                 .put("sessionId", agentLogSessionID))
+        val snapshot = JSONObject(DebugSwiftCoreBridge.call("agent.snapshot", input.toString())).optString("json")
         val file = File(context.filesDir, "agent-snapshot.json")
         return runCatching {
-            file.writeText(snapshot.toString(2))
+            file.writeText(snapshot)
             appendAgentEntry(
                 kind = "lifecycle",
                 location = "AgentDebugLog.writeSnapshot",
@@ -5062,12 +4988,10 @@ object AndroidDebugTools {
         if (writeImmediately) writeRecord() else persistenceExecutor.execute { writeRecord() }
     }
 
+    /** DebugSwiftCore's label for a GraphQL body ("Query: GetUser"), the one iOS lists; "" otherwise. */
     private fun graphqlOperation(body: String): String {
         if (body.isBlank()) return ""
-        val name = Regex("\"operationName\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.getOrNull(1)
-        if (name != null) return name
-        val operation = Regex("\\b(query|mutation|subscription)\\s+([A-Za-z_][A-Za-z0-9_]*)").find(body)
-        return operation?.let { "${it.groupValues[1]} ${it.groupValues[2]}" }.orEmpty()
+        return JSONObject(DebugSwiftCoreBridge.call("graphql.label", JSONObject().put("body", body).toString())).optString("label")
     }
 
     private fun safeValue(value: Any?): String = when (value) {
