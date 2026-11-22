@@ -175,7 +175,8 @@ public struct NetworkSanitizer: Sendable {
     private static let xmlRedactedValue = "&lt;redacted&gt;"
 
     /// Masks the value of every attribute named after a key, keeping its quotes, then the whole
-    /// content of every element named after a key, nested markup and CDATA included. Names may carry
+    /// content of every element named after a key, nested markup and CDATA included; a closing tag
+    /// written inside CDATA or a comment doesn't end the element. Names may carry
     /// a namespace prefix (`ns:password`); the local name is compared.
     private func maskingXML(_ text: String) -> String {
         guard !normalizedBodyKeys.isEmpty else { return text }
@@ -185,8 +186,11 @@ public struct NetworkSanitizer: Sendable {
         var source = text as NSString
         var result = ""
         var cursor = 0
-        for match in Self.xmlAttributePattern.matches(in: text, range: NSRange(location: 0, length: source.length))
-        where masked(source.substring(with: match.range(at: 1))) {
+        // Attributes are looked for inside tags only: `note="` in element text must not hide the
+        // tag that follows it.
+        let attributes = Self.xmlTagPattern.matches(in: text, range: NSRange(location: 0, length: source.length))
+            .flatMap { Self.xmlAttributePattern.matches(in: text, range: $0.range) }
+        for match in attributes where masked(source.substring(with: match.range(at: 1))) {
             let value = match.range(at: 3)
             // Keep the quotes: the value is everything between them, or up to the end of a document
             // cut off inside it.
@@ -225,10 +229,14 @@ public struct NetworkSanitizer: Sendable {
     /// elements of the same name, or `nil` when the document ends before it.
     private static func closingTag(named name: String, in source: NSString, from location: Int) -> NSRange? {
         let escaped = NSRegularExpression.escapedPattern(for: name)
-        let pattern = "<(/)?" + escaped + #"(?:\s(?:[^>"'/]|"[^"]*"|'[^']*'|/(?!>))*)?(/)?>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        // CDATA sections and comments come first, so a tag written inside one isn't counted; one
+        // left open runs to the end, and so does the element.
+        let pattern = #"<!\[CDATA\[.*?(?:\]\]>|\z)|<!--.*?(?:-->|\z)|<(/)?"# + escaped
+            + #"(?:\s(?:[^>"'/]|"[^"]*"|'[^']*'|/(?!>))*)?(/)?>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         var depth = 1
         for match in regex.matches(in: source as String, range: NSRange(location: location, length: source.length - location)) {
+            guard source.character(at: match.range.location + 1) != 0x21 else { continue } // `<!`: CDATA or comment
             if match.range(at: 1).location != NSNotFound {
                 depth -= 1
                 if depth == 0 { return match.range }
@@ -244,6 +252,12 @@ public struct NetworkSanitizer: Sendable {
     /// end of a document cut off inside it.
     private static let xmlAttributePattern = try! NSRegularExpression(
         pattern: #"(?<=[\s<])([A-Za-z_][\w.:-]*)(\s*=\s*)("[^"]*(?:"|\z)|'[^']*(?:'|\z))"#
+    )
+
+    /// Any start tag, self-closing or cut off at the end of the document, as the range its
+    /// attributes are looked for in.
+    private static let xmlTagPattern = try! NSRegularExpression(
+        pattern: #"<[A-Za-z_][\w.:-]*(?:\s(?:[^>"']|"[^"]*"|'[^']*')*(?:"[^"]*|'[^']*)?)?(?:>|\z)"#
     )
 
     /// A start tag that isn't self-closing: its name (group 1). Quoted attribute values may hold `>`.

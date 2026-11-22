@@ -214,4 +214,17 @@ struct NetworkSanitizerTests {
         let body = Data(#"<user name="ana"><city>Rio</city></user>"#.utf8)
         #expect(sanitizer.sanitize(body: body, contentType: "application/xml") == body)
     }
+
+    @Test func aClosingTagInsideCDATAOrACommentDoesNotEndTheElement() {
+        #expect(xml("<password><![CDATA[</password>hunter2]]></password>") == "<password>&lt;redacted&gt;</password>")
+        #expect(xml("<password><!-- </password> -->hunter2</password><user>ana</user>")
+            == "<password>&lt;redacted&gt;</password><user>ana</user>")
+        #expect(xml("<password><![CDATA[hunter2") == "<password>&lt;redacted&gt;")
+    }
+
+    @Test func attributesAreOnlyLookedForInsideTags() {
+        #expect(xml(#"<root>note="<user password="hunter2"/></root>"#)
+            == #"<root>note="<user password="&lt;redacted&gt;"/></root>"#)
+        #expect(xml(#"<root>password="text"</root>"#) == #"<root>password="text"</root>"#)
+    }
 }
