@@ -499,6 +499,8 @@ class DebugSwiftPanelTest {
         // A byte order mark and no charset.
         val bom = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "<password>bom-secret-$marker</password>".toByteArray(Charsets.UTF_16LE)
         send("bom", bom.toRequestBody("application/xml".toMediaType()))
+        // UTF-16 XML without a byte order mark or charset.
+        send("bare", "<password>bare-secret-$marker</password>".toByteArray(Charsets.UTF_16LE).toRequestBody("application/xml".toMediaType()))
 
         val rows = org.json.JSONObject(AndroidDebugTools.networkInspectorSnapshotJSON("http")).getJSONArray("requests")
         fun body(path: String): String = (0 until rows.length()).map { rows.getJSONObject(it) }
@@ -506,6 +508,7 @@ class DebugSwiftPanelTest {
         // The exact masked text: a NUL-separated secret would also pass a "doesn't contain" check.
         assertEquals("password=<redacted>", body("header"))
         assertEquals("<password>&lt;redacted&gt;</password>", body("bom"))
+        assertEquals("<password>&lt;redacted&gt;</password>", body("bare"))
     }
 
     @Test

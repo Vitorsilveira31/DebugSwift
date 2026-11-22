@@ -36,13 +36,11 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         val requestBody = runCatching {
             val buffer = Buffer()
             request.body?.writeTo(buffer)
-            // Read in the body's byte order mark or else the declared charset (the body's media type,
-            // then the request's Content-Type header), as OkHttp reads responses, so a UTF-16 body
-            // is text the masker can read.
+            // The declared charset: the body's media type, then the request's Content-Type header.
             val declared = request.body?.contentType()?.charset()
                 ?: request.header("Content-Type")?.toMediaTypeOrNull()?.charset()
             if (buffer.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(buffer.size)
-            else buffer.readString(bomCharset(buffer) ?: declared ?: Charsets.UTF_8)
+            else decodeBody(buffer.readByteArray(), declared)
         }.getOrDefault("")
         val requestBytes = request.body?.contentLength()?.takeIf { it >= 0 } ?: 0L
 
@@ -96,9 +94,9 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
                 tooLargeToKeep(null)
             } else {
                 originalBytes = size
-                // OkHttp decodes with the response's charset and drops a byte-order mark, so a
-                // BOM-prefixed JSON body still parses, and is masked, downstream.
-                peeked.string()
+                // Decoded as requests are, so a BOM-prefixed or BOM-less UTF-16 body is text the
+                // masker can read downstream.
+                decodeBody(peeked.bytes(), peeked.contentType()?.charset())
             }
         }.getOrDefault("")
         val rewrittenText = rewriteRule?.responseBody ?: originalText
@@ -160,22 +158,29 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         else -> IOException("Failure injected by DebugSwift.")
     }
 
-    /** The charset a byte order mark at the start of the buffer names, the mark consumed; null without one. */
-    private fun bomCharset(buffer: Buffer): java.nio.charset.Charset? {
-        val marks = listOf(
-            byteArrayOf(0xFF.toByte(), 0xFE.toByte(), 0, 0) to java.nio.charset.Charset.forName("UTF-32LE"),
-            byteArrayOf(0, 0, 0xFE.toByte(), 0xFF.toByte()) to java.nio.charset.Charset.forName("UTF-32BE"),
-            byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) to Charsets.UTF_8,
-            byteArrayOf(0xFE.toByte(), 0xFF.toByte()) to Charsets.UTF_16BE,
-            byteArrayOf(0xFF.toByte(), 0xFE.toByte()) to Charsets.UTF_16LE
-        )
-        for ((mark, charset) in marks) {
-            if (buffer.size >= mark.size && (mark.indices).all { buffer[it.toLong()] == mark[it] }) {
-                buffer.skip(mark.size.toLong())
-                return charset
-            }
+    /**
+     * A captured body as text, read as DebugSwiftCore reads raw bodies: a byte order mark first
+     * (dropped), then the declared charset, then the signature of BOM-less UTF-32 or UTF-16 XML
+     * (`<` with NULs, XML 1.0 appendix F), else UTF-8.
+     */
+    private fun decodeBody(bytes: ByteArray, declared: java.nio.charset.Charset?): String {
+        fun starts(vararg prefix: Int) = bytes.size >= prefix.size && prefix.indices.all { bytes[it] == prefix[it].toByte() }
+        val utf32LE = java.nio.charset.Charset.forName("UTF-32LE")
+        val utf32BE = java.nio.charset.Charset.forName("UTF-32BE")
+        val (charset, skip) = when {
+            starts(0xFF, 0xFE, 0x00, 0x00) -> utf32LE to 4
+            starts(0x00, 0x00, 0xFE, 0xFF) -> utf32BE to 4
+            starts(0xEF, 0xBB, 0xBF) -> Charsets.UTF_8 to 3
+            starts(0xFE, 0xFF) -> Charsets.UTF_16BE to 2
+            starts(0xFF, 0xFE) -> Charsets.UTF_16LE to 2
+            declared != null -> declared to 0
+            starts(0x3C, 0x00, 0x00, 0x00) -> utf32LE to 0
+            starts(0x00, 0x00, 0x00, 0x3C) -> utf32BE to 0
+            starts(0x3C, 0x00) -> Charsets.UTF_16LE to 0
+            starts(0x00, 0x3C) -> Charsets.UTF_16BE to 0
+            else -> Charsets.UTF_8 to 0
         }
-        return null
+        return String(bytes, skip, bytes.size - skip, charset)
     }
 
     /**
