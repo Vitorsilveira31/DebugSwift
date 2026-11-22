@@ -101,8 +101,7 @@ fun AndroidDebugTools.interfaceToolEnabled(featureID: String): Boolean {
     if (featureID == "dark_mode") {
         return AppCompatDelegate.getDefaultNightMode() == AppCompatDelegate.MODE_NIGHT_YES
     }
-    val nativeID = if (featureID == "colorize") "view_borders" else featureID
-    return synchronized(enabledTools) { nativeID in enabledTools }
+    return synchronized(enabledTools) { featureID in enabledTools }
 }
 
 fun AndroidDebugTools.setInterfaceToolEnabled(featureID: String, enabled: Boolean): String {
@@ -110,16 +109,15 @@ fun AndroidDebugTools.setInterfaceToolEnabled(featureID: String, enabled: Boolea
         val context = appContext ?: return "Android runtime has not been installed."
         return setDarkModeOverride(context, enabled)
     }
-    val nativeID = if (featureID == "colorize") "view_borders" else featureID
-    if (nativeID !in setOf("grid", "touches", "view_borders")) {
+    if (featureID !in setOf("grid", "touches", "view_borders")) {
         return "Interface toggle '$featureID' is not available on Android."
     }
     synchronized(enabledTools) {
-        if (enabled) enabledTools.add(nativeID) else enabledTools.remove(nativeID)
+        if (enabled) enabledTools.add(featureID) else enabledTools.remove(featureID)
     }
     updateOverlay()
-    publishEvent("interface", "$nativeID ${if (enabled) "enabled" else "disabled"}")
-    return "$nativeID ${if (enabled) "enabled" else "disabled"}."
+    publishEvent("interface", "$featureID ${if (enabled) "enabled" else "disabled"}")
+    return "$featureID ${if (enabled) "enabled" else "disabled"}."
 }
 
 fun AndroidDebugTools.recordWebViewHost(host: String) {
@@ -153,7 +151,7 @@ internal fun AndroidDebugTools.interfaceSnapshot(context: Context, featureID: St
             } + "\n\nUse Open Developer options to change these system-wide settings."
         }
         "dark_mode" -> appearanceSnapshot(context)
-        "compose_renders" -> "Compose recompositions observed: $composeRenderCount\nMeasured frame callbacks: $frameCount\nSlow frames: $slowFrameCount"
+        "render_tracking" -> "Compose recompositions observed: $composeRenderCount\nMeasured frame callbacks: $frameCount\nSlow frames: $slowFrameCount"
         "doc_recorder" -> "Recorded gestures: ${recordedInteractions.size}\nTaps: ${recordedInteractions.count { it.kind == "tap" }}\nScrolls: ${recordedInteractions.count { it.kind == "scroll" }}\nLast screenshot: ${lastRecordingPath.ifEmpty { "none" }}"
         "color_palette" -> "Most common colors in the last captured app window:\n${lastPalette.joinToString("\n").ifEmpty { "Capture a screen to sample its colors." }}"
         else -> "View hierarchy entries: ${captureHierarchy().lineSequence().count()}"

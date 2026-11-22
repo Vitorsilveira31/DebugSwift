@@ -25,10 +25,10 @@ struct SharedInterfaceScreensTests {
             tracker.overlayStyle = previousStyle
             tracker.clearStats()
         }
-        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "tracking", value: "true")
-        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "style", value: "none")
-        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear")
-        #expect(DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "style", value: "sparkles").contains("Unknown"))
+        _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "tracking", value: "true")
+        _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "style", value: "none")
+        _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "clear")
+        #expect(DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "style", value: "sparkles").contains("Unknown"))
 
         let first = UIView()
         let second = UIView()
@@ -53,12 +53,12 @@ struct SharedInterfaceScreensTests {
         state = try DebugResourceClient.fetch("app.compose.state", as: DebugComposeState.self).get()
         #expect(state.probeRenders == probesBefore + 1)
 
-        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear")
+        _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "clear")
         state = try DebugResourceClient.fetch("app.compose.state", as: DebugComposeState.self).get()
         #expect(state.total == 0)
         #expect(state.views?.isEmpty == true)
 
-        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "tracking", value: "false")
+        _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "tracking", value: "false")
         tracker.trackRender(for: first, viewType: "CardView")
         state = try DebugResourceClient.fetch("app.compose.state", as: DebugComposeState.self).get()
         #expect(state.tracking == false)
@@ -98,8 +98,8 @@ struct SharedInterfaceScreensTests {
     @Test("A late render sample spreads its renders over the seconds it covers")
     func renderSampling() {
         let interface = SharedPanelInterface.shared
-        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear")
-        defer { _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear") }
+        _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "clear")
+        defer { _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "clear") }
         let start = Date()
         interface.record(total: 0, at: start)
         interface.record(total: 10, at: start.addingTimeInterval(1))
@@ -199,7 +199,7 @@ struct SharedInterfaceScreensTests {
         }
         UserInterfaceToolkit.shared.swiftUIRenderTrackingEnabled = false
         DebugSwift.SwiftUIRender.shared.isEnabled = true
-        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "tracking", value: "false")
+        _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "tracking", value: "false")
         #expect(!tracker.isEnabled)
     }
 
@@ -211,9 +211,9 @@ struct SharedInterfaceScreensTests {
         let previousStyle = tracker.overlayStyle
         tracker.isEnabled = true
         tracker.overlayStyle = .none
-        _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear")
+        _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "clear")
         defer {
-            _ = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: "clear")
+            _ = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: "clear")
             tracker.isEnabled = wasEnabled
             tracker.overlayStyle = previousStyle
         }
@@ -361,7 +361,7 @@ struct SharedInterfaceScreensTests {
         #expect(ids.first == "view_hierarchy")
         #expect(ids.contains("doc_recorder"))
         #expect(ids.contains("color_palette"))
-        for id in ["swiftui_render", "doc_recorder", "color_palette"] {
+        for id in ["render_tracking", "doc_recorder", "color_palette"] {
             let navigation = DebugSwift.debugInterfaceViewController(for: id) as? UINavigationController
             #expect(navigation?.viewControllers.first is SharedPanelOnlyViewController)
         }

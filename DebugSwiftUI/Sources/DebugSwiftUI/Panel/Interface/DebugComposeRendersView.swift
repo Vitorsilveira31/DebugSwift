@@ -138,7 +138,7 @@ struct DebugComposeRendersView: View {
     }
 
     func act(_ actionID: String, _ value: String) {
-        status = DebugSwiftRuntime.perform(featureID: "swiftui_render", actionID: actionID, value: value)
+        status = DebugSwiftRuntime.perform(featureID: "render_tracking", actionID: actionID, value: value)
         refresh()
     }
 
