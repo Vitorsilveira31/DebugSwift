@@ -66,8 +66,9 @@ public enum HAREncoder {
     /// Charles and Proxyman without conversion.
     ///
     /// Bodies are written as given: callers pass them already masked by `NetworkSanitizer`, whose
-    /// built-in rules cover JSON (also when there is no `Content-Type`) and form-encoded bodies only.
-    /// A secret in a `text/*`, XML or other body reaches the export unless a `customBodyRedactor` masks it.
+    /// built-in rules cover JSON (also when there is no `Content-Type`), form-encoded, XML and `text/*`
+    /// bodies. A secret in another body, or one without a type that isn't JSON, reaches the export
+    /// unless a `customBodyRedactor` masks it.
     public static func encode(_ captures: [HARCapture]) -> [String: Any] {
         let entries = captures.map { capture -> [String: Any] in
             var request: [String: Any] = [

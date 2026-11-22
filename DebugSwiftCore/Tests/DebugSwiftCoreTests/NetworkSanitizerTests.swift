@@ -168,4 +168,50 @@ struct NetworkSanitizerTests {
         custom.customBodyRedactor = { _, _ in Data([0xff, 0xfe]) }
         #expect(custom.sanitize(unformattedText: "card 4111") == "<redacted>")
     }
+
+    private func xml(_ text: String, type: String = "application/xml") -> String? {
+        String(data: sanitizer.sanitize(body: Data(text.utf8), contentType: type), encoding: .utf8)
+    }
+
+    @Test func masksKeyValuePairsInTextBodies() {
+        let masked = sanitizer.sanitize(body: Data("user=ana password=secret".utf8), contentType: "text/plain; charset=utf-8")
+        #expect(String(data: masked, encoding: .utf8) == "user=ana password=<redacted>")
+        let plain = Data("nothing to hide".utf8)
+        #expect(sanitizer.sanitize(body: plain, contentType: "text/plain") == plain)
+        let image = Data([0x89, 0x50, 0x4e, 0x47])
+        #expect(sanitizer.sanitize(body: image, contentType: "image/png") == image)
+    }
+
+    @Test func masksXMLElementsAndAttributesNamedAfterAKey() {
+        #expect(xml("<login><user>ana</user><password>secret</password></login>")
+            == "<login><user>ana</user><password>&lt;redacted&gt;</password></login>")
+        #expect(xml(#"<user name="ana" password="hunter2"/>"#, type: "text/xml")
+            == #"<user name="ana" password="&lt;redacted&gt;"/>"#)
+        #expect(xml("<user token = 'abc'/>") == "<user token = '&lt;redacted&gt;'/>")
+        #expect(xml("<s:Envelope><ns:password>x</ns:password></s:Envelope>", type: "application/soap+xml")
+            == "<s:Envelope><ns:password>&lt;redacted&gt;</ns:password></s:Envelope>")
+    }
+
+    @Test func anXMLElementIsMaskedWholeWhateverItHolds() {
+        // A `>` in a quoted attribute doesn't end the start tag.
+        #expect(xml(#"<password hint=">">hunter2</password>"#) == #"<password hint=">">&lt;redacted&gt;</password>"#)
+        #expect(xml("<password><![CDATA[a<b]]></password>") == "<password>&lt;redacted&gt;</password>")
+        #expect(xml("<password><part>a</part>\n<part>b</part></password><user>ana</user>")
+            == "<password>&lt;redacted&gt;</password><user>ana</user>")
+        // A nested element of the same name doesn't end the outer one.
+        #expect(xml("<password><password>a</password>b</password>") == "<password>&lt;redacted&gt;</password>")
+        // A longer name that starts like a key isn't that key.
+        #expect(xml("<passwordHint>dog</passwordHint>") == "<passwordHint>dog</passwordHint>")
+        #expect(xml("<password/><user>ana</user>") == "<password/><user>ana</user>")
+    }
+
+    @Test func aCutOffXMLDocumentIsMaskedToItsEnd() {
+        #expect(xml("<login><password>hunter2") == "<login><password>&lt;redacted&gt;")
+        #expect(xml(#"<user password="hunt"#) == #"<user password="&lt;redacted&gt;"#)
+    }
+
+    @Test func anXMLDocumentWithNothingToMaskIsReturnedByteForByte() {
+        let body = Data(#"<user name="ana"><city>Rio</city></user>"#.utf8)
+        #expect(sanitizer.sanitize(body: body, contentType: "application/xml") == body)
+    }
 }

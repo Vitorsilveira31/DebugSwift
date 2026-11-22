@@ -108,8 +108,11 @@ public struct NetworkSanitizer: Sendable {
 
     // MARK: - Body
 
-    /// Masks matching keys in JSON (at any depth) and `application/x-www-form-urlencoded` bodies.
-    /// A body with nothing to mask is returned byte for byte.
+    /// Masks matching keys in JSON (at any depth), `application/x-www-form-urlencoded`, XML and
+    /// `text/*` bodies. XML masks the content of an element named after a key and the value of an
+    /// attribute named after one; other text masks `key=value` and `key: value` pairs, as
+    /// `sanitize(unformattedText:)` does. A body without a type is masked only as JSON. A body with
+    /// nothing to mask is returned byte for byte.
     public func sanitize(body: Data, contentType: String?) -> Data {
         var result = body
         if !normalizedBodyKeys.isEmpty, !body.isEmpty {
@@ -121,6 +124,12 @@ public struct NetworkSanitizer: Sendable {
                 }
             } else if type.isEmpty || type.contains("json") {
                 result = sanitizeJSON(body) ?? body
+            } else if type.contains("xml"), let text = String(data: body, encoding: .utf8) {
+                let masked = maskingXML(text)
+                if masked != text { result = Data(masked.utf8) }
+            } else if type.hasPrefix("text/"), let text = String(data: body, encoding: .utf8) {
+                let masked = maskingKeys(inUnformattedText: text)
+                if masked != text { result = Data(masked.utf8) }
             }
         }
         if let customBodyRedactor {
@@ -161,6 +170,86 @@ public struct NetworkSanitizer: Sendable {
         guard cursor > 0 else { return text }
         return result + source.substring(from: cursor)
     }
+
+    /// The placeholder as XML text, so a masked document stays well-formed.
+    private static let xmlRedactedValue = "&lt;redacted&gt;"
+
+    /// Masks the value of every attribute named after a key, keeping its quotes, then the whole
+    /// content of every element named after a key, nested markup and CDATA included. Names may carry
+    /// a namespace prefix (`ns:password`); the local name is compared.
+    private func maskingXML(_ text: String) -> String {
+        guard !normalizedBodyKeys.isEmpty else { return text }
+        func masked(_ name: String) -> Bool {
+            normalizedBodyKeys.contains(Self.normalize(String(name.split(separator: ":").last ?? Substring(name))))
+        }
+        var source = text as NSString
+        var result = ""
+        var cursor = 0
+        for match in Self.xmlAttributePattern.matches(in: text, range: NSRange(location: 0, length: source.length))
+        where masked(source.substring(with: match.range(at: 1))) {
+            let value = match.range(at: 3)
+            // Keep the quotes: the value is everything between them, or up to the end of a document
+            // cut off inside it.
+            let closed = value.length >= 2 && source.character(at: value.location + value.length - 1) == source.character(at: value.location)
+            let inner = NSRange(location: value.location + 1, length: value.length - (closed ? 2 : 1))
+            result += source.substring(with: NSRange(location: cursor, length: inner.location - cursor))
+            result += Self.xmlRedactedValue
+            cursor = inner.location + inner.length
+        }
+        let attributesMasked = cursor > 0 ? result + source.substring(from: cursor) : text
+
+        source = attributesMasked as NSString
+        result = ""
+        cursor = 0
+        var position = 0
+        while position < source.length,
+              let start = Self.xmlStartTagPattern.firstMatch(
+                  in: attributesMasked, range: NSRange(location: position, length: source.length - position)
+              ) {
+            let name = source.substring(with: start.range(at: 1))
+            let contentStart = start.range.location + start.range.length
+            position = contentStart
+            guard masked(name) else { continue }
+            result += source.substring(with: NSRange(location: cursor, length: contentStart - cursor))
+            result += Self.xmlRedactedValue
+            // A document cut off inside the element (a truncated capture) is masked to its end.
+            guard let end = Self.closingTag(named: name, in: source, from: contentStart) else { return result }
+            cursor = end.location
+            position = end.location + end.length
+        }
+        guard cursor > 0 else { return attributesMasked }
+        return result + source.substring(from: cursor)
+    }
+
+    /// The `</name>` that closes the element whose content starts at `location`, counting nested
+    /// elements of the same name, or `nil` when the document ends before it.
+    private static func closingTag(named name: String, in source: NSString, from location: Int) -> NSRange? {
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        let pattern = "<(/)?" + escaped + #"(?:\s(?:[^>"'/]|"[^"]*"|'[^']*'|/(?!>))*)?(/)?>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        var depth = 1
+        for match in regex.matches(in: source as String, range: NSRange(location: location, length: source.length - location)) {
+            if match.range(at: 1).location != NSNotFound {
+                depth -= 1
+                if depth == 0 { return match.range }
+            } else if match.range(at: 2).location == NSNotFound {
+                depth += 1
+            }
+        }
+        return nil
+    }
+
+    /// An attribute: its name (group 1), `=` and a quoted value (group 3). XML attribute values
+    /// don't escape quotes with a backslash, so a value ends at its first matching quote, or at the
+    /// end of a document cut off inside it.
+    private static let xmlAttributePattern = try! NSRegularExpression(
+        pattern: #"(?<=[\s<])([A-Za-z_][\w.:-]*)(\s*=\s*)("[^"]*(?:"|\z)|'[^']*(?:'|\z))"#
+    )
+
+    /// A start tag that isn't self-closing: its name (group 1). Quoted attribute values may hold `>`.
+    private static let xmlStartTagPattern = try! NSRegularExpression(
+        pattern: #"<([A-Za-z_][\w.:-]*)(?:\s(?:[^>"'/]|"[^"]*"|'[^']*'|/(?!>))*)?>"#
+    )
 
     /// The host's redactor over text whose type is unknown; output that isn't UTF-8 becomes the
     /// placeholder rather than the unmasked text.
