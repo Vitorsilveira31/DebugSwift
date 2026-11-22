@@ -18,14 +18,19 @@ DebugSwift
 
 ---
 
-<img width="1970" alt="Image" src="https://github.com/user-attachments/assets/a569b038-9058-4260-ae7c-47f3376cf629" />
-<img width="1970" alt="Image" src="https://github.com/user-attachments/assets/35cbc0c4-4938-4b1f-bab2-69427aa66ffb" />
-<img width="1970" alt="Image" src="https://github.com/user-attachments/assets/334ccefa-5951-494f-8faa-5f016d39f946" />
-<img width="1970" alt="Image" src="https://github.com/user-attachments/assets/246cde3c-7a14-45de-ae01-e810c42d8e65" />
-<img width="1970" alt="Image" src="https://github.com/user-attachments/assets/fadde188-dcba-46d8-9460-762f9be98bd6" />
-<img width="1970" height="1184" alt="Image" src="https://github.com/user-attachments/assets/8085e55c-a7e6-4e3b-8ceb-8fc7034480fe" />
-<img width="1970" alt="Image" src="https://github.com/user-attachments/assets/a435a660-a4b2-4a3f-852e-a7bf0709e75e" />
-<img width="1970" alt="Image" src="https://github.com/user-attachments/assets/15f34de1-214f-4bc3-95bc-b25efc2d383e" />
+The tools live in one SwiftUI panel shared by iOS and Android (DebugSwiftUI), so both platforms show the same screens:
+
+| | iOS | Android |
+|---|---|---|
+| The panel | <img width="280" alt="The panel on iOS" src="Documentation/Screenshots/SharedPanel/ios-01-panel.png" /> | <img width="280" alt="The panel on Android" src="Documentation/Screenshots/SharedPanel/android-01-panel.png" /> |
+| Live metrics | <img width="280" alt="Live metrics on iOS" src="Documentation/Screenshots/SharedPanel/ios-02-live-metrics.png" /> | <img width="280" alt="Live metrics on Android" src="Documentation/Screenshots/SharedPanel/android-02-live-metrics.png" /> |
+| System log | <img width="280" alt="System log on iOS" src="Documentation/Screenshots/SharedPanel/ios-03-system-log.png" /> | <img width="280" alt="System log on Android" src="Documentation/Screenshots/SharedPanel/android-03-system-log.png" /> |
+| Files | <img width="280" alt="Files on iOS" src="Documentation/Screenshots/SharedPanel/ios-04-files.png" /> | <img width="280" alt="Files on Android" src="Documentation/Screenshots/SharedPanel/android-04-files.png" /> |
+| Databases | <img width="280" alt="Databases on iOS" src="Documentation/Screenshots/SharedPanel/ios-05-databases.png" /> | <img width="280" alt="Databases on Android" src="Documentation/Screenshots/SharedPanel/android-05-databases.png" /> |
+| Color palette | <img width="280" alt="Color palette on iOS" src="Documentation/Screenshots/SharedPanel/ios-06-color-palette.png" /> | <img width="280" alt="Color palette on Android" src="Documentation/Screenshots/SharedPanel/android-06-color-palette.png" /> |
+| Documentation recorder | <img width="280" alt="Documentation recorder on iOS" src="Documentation/Screenshots/SharedPanel/ios-07-doc-recorder.png" /> | <img width="280" alt="Documentation recorder on Android" src="Documentation/Screenshots/SharedPanel/android-07-doc-recorder.png" /> |
+| Render tracking | <img width="280" alt="Render tracking on iOS" src="Documentation/Screenshots/SharedPanel/ios-08-render-tracking.png" /> | <img width="280" alt="Render tracking on Android" src="Documentation/Screenshots/SharedPanel/android-08-render-tracking.png" /> |
+| HTTP inspector | <img width="280" alt="HTTP inspector on iOS" src="Documentation/Screenshots/SharedPanel/ios-09-http-inspector.png" /> | <img width="280" alt="HTTP inspector on Android" src="Documentation/Screenshots/SharedPanel/android-09-http-inspector.png" /> |
 
 ## About this fork
 
