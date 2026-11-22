@@ -262,41 +262,8 @@ fun AndroidDebugTools.networkInspectorSnapshotJSON(featureID: String): String {
         "network_history" -> liveHistoryRecords()
         else -> networkRecords.filter { it.source == "http" }
     }
-    val rows = JSONArray()
-    records.takeLast(if (featureID == "network_history") MAX_NETWORK_HISTORY_RECORDS else MAX_RECORDS).forEach { record ->
-        rows.put(JSONObject()
-            .put("id", record.id)
-            .put("url", record.url)
-            .put("method", record.method)
-            .put("statusCode", record.status.toString())
-            .put("timestamp", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(record.timestamp)))
-            .put("timestampMilliseconds", record.timestamp)
-            .put("durationMilliseconds", record.durationMs)
-            .put("requestBytes", record.requestBytes)
-            .put("responseBytes", record.responseBytes)
-            .put("requestHeaders", JSONObject().apply { record.requestHeaders.forEach { (key, values) -> put(key, values.joinToString(", ")) } })
-            .put("responseHeaders", JSONObject().apply { record.responseHeaders.forEach { (key, values) -> put(key, values.joinToString(", ")) } })
-            .put("requestBody", record.requestBody)
-            .put("responseBody", record.responseBody)
-            .put("decryptedResponseBody", record.decryptedResponseBody)
-            .put("requestBodyBase64", android.util.Base64.encodeToString(record.requestBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
-            .put("responseBodyBase64", android.util.Base64.encodeToString(record.responseBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
-            .put("decryptedResponseBodyBase64", android.util.Base64.encodeToString(record.decryptedResponseBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
-            .put("mimeType", headerValue(record.responseHeaders, "Content-Type") ?: "")
-            .put("error", record.error)
-            .put("graphqlOperation", record.graphqlOperation)
-            .put("source", record.source)
-            .put("isSuccess", isSuccessfulExchange(record)))
-    }
-    return JSONObject().put("requests", rows).toString()
+    return inspectorRowsJSON(records.takeLast(if (featureID == "network_history") MAX_NETWORK_HISTORY_RECORDS else MAX_RECORDS))
 }
-
-/**
- * Matches iOS, where a 1xx, 3xx, 4xx or 5xx status marks the request as failed: only a 2xx
- * response without a transport error counts as a success.
- */
-internal fun AndroidDebugTools.isSuccessfulExchange(record: NetworkRecord): Boolean =
-    record.error.isBlank() && record.status in 200..299
 
 fun AndroidDebugTools.networkSessionHistorySnapshotJSON(): String {
     val cutoff = System.currentTimeMillis() - networkHistoryRetentionMs
@@ -324,12 +291,7 @@ fun AndroidDebugTools.networkSessionHistorySnapshotJSON(): String {
 }
 
 fun AndroidDebugTools.networkSessionRequestsSnapshotJSON(sessionID: String): String {
-    val requests = JSONArray()
-    liveHistoryRecords()
-        .filter { it.sessionID == sessionID }
-        .sortedBy { it.timestamp }
-        .forEach { requests.put(networkSessionRequestJSONObject(it)) }
-    return JSONObject().put("requests", requests).toString()
+    return inspectorRowsJSON(liveHistoryRecords().filter { it.sessionID == sessionID }.sortedBy { it.timestamp })
 }
 
 fun AndroidDebugTools.performNetworkSessionHistoryAction(actionID: String, sessionID: String): String = when (actionID) {
@@ -406,31 +368,26 @@ internal fun AndroidDebugTools.importNetworkSessionAsRewriteRules(sessionID: Str
     }
 }
 
-internal fun AndroidDebugTools.networkSessionRequestJSONObject(record: NetworkRecord): JSONObject {
-    val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(record.timestamp))
-    return JSONObject()
-        .put("id", record.id)
-        .put("url", record.url)
-        .put("method", record.method)
-        .put("statusCode", record.status.toString())
-        .put("timestamp", timestamp)
-        .put("timestampMilliseconds", record.timestamp)
-        .put("durationMilliseconds", record.durationMs.toInt())
-        .put("requestBytes", record.requestBytes)
-        .put("responseBytes", record.responseBytes)
-        .put("requestHeaders", JSONObject().apply { record.requestHeaders.forEach { (key, values) -> put(key, values.joinToString(", ")) } })
-        .put("responseHeaders", JSONObject().apply { record.responseHeaders.forEach { (key, values) -> put(key, values.joinToString(", ")) } })
-        .put("requestBody", record.requestBody)
-        .put("responseBody", record.responseBody)
-        .put("decryptedResponseBody", record.decryptedResponseBody)
-        .put("requestBodyBase64", android.util.Base64.encodeToString(record.requestBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
-        .put("responseBodyBase64", android.util.Base64.encodeToString(record.responseBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
-        .put("decryptedResponseBodyBase64", android.util.Base64.encodeToString(record.decryptedResponseBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
-        .put("mimeType", headerValue(record.responseHeaders, "Content-Type") ?: "")
-        .put("error", record.error)
-        .put("graphqlOperation", record.graphqlOperation)
-        .put("source", record.source)
-        .put("isSuccess", isSuccessfulExchange(record))
+/** A record as DebugSwiftCore's `NetworkInspectorRequest` reads it, for the `network.*` operations. */
+internal fun AndroidDebugTools.inspectorRecordJSON(record: NetworkRecord): JSONObject = JSONObject()
+    .put("id", record.id)
+    .put("url", record.url)
+    .put("method", record.method)
+    .put("statusCode", record.status.toString())
+    .put("startedAt", record.timestamp)
+    .put("durationMs", record.durationMs)
+    .put("requestHeaders", encodeHeaders(record.requestHeaders))
+    .put("responseHeaders", encodeHeaders(record.responseHeaders))
+    .put("requestBody", record.requestBody)
+    .put("responseBody", record.responseBody)
+    .put("decryptedResponseBody", record.decryptedResponseBody)
+    .put("error", record.error)
+    .put("source", record.source)
+
+/** The inspector's `{"requests": [...]}` for these records, built by DebugSwiftCore as on iOS. */
+internal fun AndroidDebugTools.inspectorRowsJSON(records: List<NetworkRecord>): String {
+    val input = JSONObject().put("records", JSONArray().apply { records.forEach { put(inspectorRecordJSON(it)) } })
+    return JSONObject(DebugSwiftCoreBridge.call("network.rows", input.toString())).optString("json", """{"requests":[]}""")
 }
 
 fun AndroidDebugTools.performNetworkInspectorAction(featureID: String, actionID: String, requestID: String): String {
@@ -480,16 +437,9 @@ internal fun AndroidDebugTools.copyToClipboard(context: Context, label: String, 
     return "$label copied."
 }
 
-internal fun AndroidDebugTools.networkRecordLog(record: NetworkRecord): String = buildString {
-    appendLine("[${record.method}] ${Date(record.timestamp)} (${record.status})")
-    appendLine("\n------- URL -------\n${record.url}")
-    appendLine("\n------- REQUEST HEADER -------\n${formatHeaders(record.requestHeaders).ifBlank { "No data" }}")
-    appendLine("\n------- REQUEST -------\n${record.requestBody.ifBlank { "No data" }}")
-    appendLine("\n------- RESPONSE HEADER -------\n${formatHeaders(record.responseHeaders).ifBlank { "No data" }}")
-    appendLine("\n------- RESPONSE -------\n${record.decryptedResponseBody.ifBlank { record.responseBody.ifBlank { "No data" } }}")
-    appendLine("\n------- RESPONSE SIZE -------\n${formatBytes(record.responseBytes)}")
-    appendLine("\n------- TOTAL TIME -------\n${record.durationMs}ms")
-    append("\n------- MIME TYPE -------\n${headerValue(record.responseHeaders, "Content-Type") ?: "No data"}")
+internal fun AndroidDebugTools.networkRecordLog(record: NetworkRecord): String {
+    val input = JSONObject().put("record", inspectorRecordJSON(record))
+    return JSONObject(DebugSwiftCoreBridge.call("network.log", input.toString())).optString("text")
 }
 
 /** DebugSwiftCore's cURL command for the request, credentials masked, as on iOS. */
