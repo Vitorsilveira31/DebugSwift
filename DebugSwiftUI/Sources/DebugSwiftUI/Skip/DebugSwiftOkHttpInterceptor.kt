@@ -36,10 +36,13 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         val requestBody = runCatching {
             val buffer = Buffer()
             request.body?.writeTo(buffer)
-            // Read in the body's byte order mark or else the request's declared charset, as OkHttp
-            // reads responses, so a UTF-16 body is text the masker can read.
+            // Read in the body's byte order mark or else the declared charset (the body's media type,
+            // then the request's Content-Type header), as OkHttp reads responses, so a UTF-16 body
+            // is text the masker can read.
+            val declared = request.body?.contentType()?.charset()
+                ?: request.header("Content-Type")?.toMediaTypeOrNull()?.charset()
             if (buffer.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(buffer.size)
-            else buffer.readString(bomCharset(buffer) ?: request.body?.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8)
+            else buffer.readString(bomCharset(buffer) ?: declared ?: Charsets.UTF_8)
         }.getOrDefault("")
         val requestBytes = request.body?.contentLength()?.takeIf { it >= 0 } ?: 0L
 

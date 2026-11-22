@@ -24,6 +24,7 @@ import debug.swift.android.setDocumentationRecording
 import debug.swift.android.writeAgentSnapshot
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -475,6 +476,33 @@ class DebugSwiftPanelTest {
         assertTrue("This run's request is missing from the inspector", live.contains("bom-$marker"))
         assertTrue("The body lost its other fields", live.contains("kept-$marker"))
         assertTrue("A BOM-prefixed JSON body kept its password: $live", !live.contains("bom-secret-$marker"))
+    }
+
+    @Test
+    fun okHttpRequestBodiesAreReadInTheirCharset() {
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        val client = okhttp3.OkHttpClient.Builder()
+            .addInterceptor(debug.swift.android.DebugSwiftOkHttpInterceptor())
+            .addInterceptor { chain ->
+                okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(200).message("OK").body("".toResponseBody("text/plain".toMediaType())).build()
+            }
+            .build()
+        fun send(path: String, body: okhttp3.RequestBody, header: String? = null) {
+            val request = okhttp3.Request.Builder().url("https://api.example.test/$path-$marker").post(body)
+            if (header != null) request.header("Content-Type", header)
+            client.newCall(request.build()).execute().close()
+        }
+        // The charset only in the header, the body without a media type.
+        send("header", "password=header-secret-$marker".toByteArray(Charsets.UTF_16LE).toRequestBody(null), "text/plain; charset=utf-16le")
+        // A byte order mark and no charset.
+        val bom = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "<password>bom-secret-$marker</password>".toByteArray(Charsets.UTF_16LE)
+        send("bom", bom.toRequestBody("application/xml".toMediaType()))
+
+        val live = AndroidDebugTools.networkInspectorSnapshotJSON("http")
+        assertTrue("This run's requests are missing from the inspector", live.contains("header-$marker") && live.contains("bom-$marker"))
+        assertTrue("A UTF-16 request with its charset in the header kept its password: $live", !live.contains("header-secret-$marker"))
+        assertTrue("A UTF-16 request with a byte order mark kept its password: $live", !live.contains("bom-secret-$marker"))
     }
 
     @Test
