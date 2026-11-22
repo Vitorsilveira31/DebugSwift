@@ -255,4 +255,10 @@ struct NetworkSanitizerTests {
         #expect(xml("<données><ü:password>x</ü:password></données>") == "<données><ü:password>&lt;redacted&gt;</ü:password></données>")
         #expect(xml(#"<usuário password="x"/>"#) == #"<usuário password="&lt;redacted&gt;"/>"#)
     }
+
+    @Test func contentTypeParametersDoNotPickTheMasker() {
+        let text = sanitizer.sanitize(body: Data("password=hunter2".utf8), contentType: #"text/plain; name="payload.xml""#)
+        #expect(String(data: text, encoding: .utf8) == "password=<redacted>")
+        #expect(xml("<password>x</password>", type: #"application/soap+xml; action="urn:json""#) == "<password>&lt;redacted&gt;</password>")
+    }
 }

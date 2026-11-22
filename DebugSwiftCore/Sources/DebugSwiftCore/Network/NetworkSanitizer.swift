@@ -116,7 +116,9 @@ public struct NetworkSanitizer: Sendable {
     public func sanitize(body: Data, contentType: String?) -> Data {
         var result = body
         if !normalizedBodyKeys.isEmpty, !body.isEmpty {
-            let type = contentType?.lowercased() ?? ""
+            // The media type alone: a parameter such as `name="payload.xml"` must not pick the masker.
+            let type = (contentType?.split(separator: ";", maxSplits: 1).first.map(String.init) ?? "")
+                .trimmingCharacters(in: .whitespaces).lowercased()
             if type.contains("x-www-form-urlencoded") {
                 if let text = String(data: body, encoding: .utf8) {
                     let sanitized = sanitizeFormEncoded(text, keys: normalizedBodyKeys)
