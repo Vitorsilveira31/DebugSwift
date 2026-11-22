@@ -338,4 +338,25 @@ struct NetworkSanitizerTests {
         let plain = Data("password=hunter2".utf8)
         #expect(String(data: sanitizer.sanitize(body: plain, contentType: "text/plain; charset=UTF-8"), encoding: .utf8) == "password=<redacted>")
     }
+
+    @Test func theSubtypeAndItsSuffixPickTheMasker() {
+        #expect(xml("<password>x</password>", type: "application/vnd.json+xml") == "<password>&lt;redacted&gt;</password>")
+        let report = Data("<password>x</password>".utf8)
+        #expect(sanitizer.sanitize(body: report, contentType: "application/vnd.example.xml-report") == report)
+        let json = sanitizer.sanitize(body: Data(#"{"password":"x"}"#.utf8), contentType: "application/problem+json")
+        #expect(String(data: json, encoding: .utf8) == #"{"password":"<redacted>"}"#)
+    }
+
+    @Test func aQuotedCharsetIsUnescapedAndOnlyAnXMLDeclarationNamesAnEncoding() {
+        let utf16 = "password=demo".data(using: .utf16LittleEndian)!
+        #expect(String(data: sanitizer.sanitize(body: utf16, contentType: #"text/plain; charset="utf\-16le""#), encoding: .utf16LittleEndian)
+            == "password=<redacted>")
+        #expect(xml(#"<?xml-example encoding="utf-16"?><password>demo</password>"#)
+            == #"<?xml-example encoding="utf-16"?><password>&lt;redacted&gt;</password>"#)
+    }
+
+    @Test func processingInstructionsInsideADOCTYPESubsetAreSkipped() {
+        let body = #"<!DOCTYPE r [<?pi <password> ]> ?>]><r>ana</r>"#
+        #expect(xml(body) == body)
+    }
 }

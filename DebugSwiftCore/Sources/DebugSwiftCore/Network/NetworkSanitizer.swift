@@ -132,14 +132,19 @@ public struct NetworkSanitizer: Sendable {
             // The media type alone: a parameter such as `name="payload.xml"` must not pick the masker.
             let type = (contentType?.split(separator: ";", maxSplits: 1).first.map(String.init) ?? "")
                 .trimmingCharacters(in: .whitespaces).lowercased()
-            if type.contains("x-www-form-urlencoded") {
+            // The subtype and its structured suffix decide (`+xml`, `+json`), not a substring:
+            // `application/vnd.json+xml` is XML and `application/vnd.example.xml-report` is neither.
+            let subtype = type.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ""
+            let isXML = subtype == "xml" || subtype.hasSuffix("+xml")
+            let isJSON = !isXML && (subtype == "json" || subtype.hasSuffix("+json"))
+            if subtype == "x-www-form-urlencoded" {
                 if let text = String(data: body, encoding: .utf8) {
                     let sanitized = sanitizeFormEncoded(text, keys: normalizedBodyKeys)
                     if sanitized != text { result = Data(sanitized.utf8) }
                 }
-            } else if type.isEmpty || type.contains("json") {
+            } else if type.isEmpty || isJSON {
                 result = sanitizeJSON(body) ?? body
-            } else if type.contains("xml") {
+            } else if isXML {
                 result = maskingText(body, contentType: decodedText ? nil : contentType, xml: !decodedText) { maskingXML($0) }
             } else if type.hasPrefix("text/") {
                 result = maskingText(body, contentType: decodedText ? nil : contentType, xml: false) { maskingKeys(inUnformattedText: $0) }
@@ -273,14 +278,24 @@ public struct NetworkSanitizer: Sendable {
         for parameter in parameters.dropFirst() {
             let pair = parameter.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
             guard pair.count == 2, pair[0].lowercased() == "charset" else { continue }
-            return pair[1].trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            var value = pair[1]
+            guard value.hasPrefix("\""), value.count >= 2 else { return value }
+            // A quoted value: drop the quotes and undo its quoted-pairs (`"utf\-16le"`).
+            value = String(value.dropFirst().dropLast(value.hasSuffix("\"") ? 1 : 0))
+            var unescaped = ""
+            var escaping = false
+            for character in value {
+                if escaping || character != "\\" { unescaped.append(character); escaping = false } else { escaping = true }
+            }
+            return unescaped
         }
         return nil
     }
 
-    /// The `encoding` of an XML declaration (group 1).
+    /// The `encoding` of an XML declaration (group 1): `<?xml version="…" encoding="…"` at the very
+    /// start, not another processing instruction.
     private static let xmlEncodingPattern = try! NSRegularExpression(
-        pattern: #"^\s*<\?xml[^>]*\bencoding\s*=\s*["']([A-Za-z0-9._-]+)["']"#
+        pattern: #"^<\?xml\s+version\s*=\s*["'][^"']*["']\s+encoding\s*=\s*["']([A-Za-z0-9._-]+)["']"#
     )
 
     /// The placeholder as XML text, so a masked document stays well-formed.
@@ -379,7 +394,7 @@ public struct NetworkSanitizer: Sendable {
     // The alternatives inside the DOCTYPE never match the same text (a `<` is either a comment's
     // start or a lone `<`) and repeat possessively, so a subset cut off before `]>` fails in linear
     // time instead of backtracking.
-    private static let xmlNonMarkup = #"<!DOCTYPE(?:[^\[>"']|"[^"]*"|'[^']*')*+(?:\[(?:<!--.*?-->|<(?!!--)|[^\]"'<]|"[^"]*"|'[^']*')*+\])?\s*>"#
+    private static let xmlNonMarkup = #"<!DOCTYPE(?:[^\[>"']|"[^"]*"|'[^']*')*+(?:\[(?:<!--.*?-->|<\?.*?\?>|<(?!!--|\?)|[^\]"'<]|"[^"]*"|'[^']*')*+\])?\s*>"#
         + #"|<!\[CDATA\[.*?(?:\]\]>|\z)|<!--.*?(?:-->|\z)|<\?.*?(?:\?>|\z)"#
 
     /// Whether a match of a pattern that starts with `xmlNonMarkup` is one of those, not a tag.
