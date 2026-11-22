@@ -3,6 +3,7 @@
 // DebugSwift
 //
 
+import DebugSwiftCore
 import Foundation
 
 #if canImport(SwiftData)
@@ -36,40 +37,27 @@ public extension DebugSwift.Network {
     func sharedSessionRequestsSnapshotJSON(sessionID: String) async -> String {
         guard let id = UUID(uuidString: sessionID) else { return "{\"requests\":[]}" }
         let requests = await NetworkSessionPersistenceManager.shared.fetchRequests(for: id)
-        let rows: [[String: Any]] = requests.map { request in
+        let rows = requests.map { request in
             let model = request.makeHttpModel()
             let duration = Double((model.totalDuration ?? "0").replacingOccurrences(of: " (s)", with: "")) ?? 0
-            let requestData = model.requestData ?? Data()
-            let responseData = model.responseData ?? Data()
-            let requestHeaders = Self.sharedHistoryHeaders(model.requestHeaderFields)
-            let responseHeaders = Self.sharedHistoryHeaders(model.responseHeaderFields)
             let timestamp = model.startTime ?? ""
-            return [
-                "id": request.id.uuidString,
-                "url": model.url?.absoluteString ?? "",
-                "method": model.method ?? "GET",
-                "statusCode": model.statusCode ?? "0",
-                "timestamp": timestamp,
-                "timestampMilliseconds": Self.sharedHistoryTimestamp(timestamp),
-                "durationMilliseconds": Int((duration * 1_000).rounded()),
-                "requestBytes": requestData.count,
-                "responseBytes": responseData.count,
-                "requestHeaders": requestHeaders,
-                "responseHeaders": responseHeaders,
-                "requestBody": String(data: requestData, encoding: .utf8) ?? "",
-                "responseBody": String(data: responseData, encoding: .utf8) ?? "",
-                "decryptedResponseBody": "",
-                "requestBodyBase64": requestData.base64EncodedString(),
-                "responseBodyBase64": responseData.base64EncodedString(),
-                "decryptedResponseBodyBase64": "",
-                "mimeType": model.mineType ?? "",
-                "error": model.errorLocalizedDescription ?? model.errorDescription ?? "",
-                "graphqlOperation": Self.sharedHistoryGraphQLOperation(model),
-                "source": "http",
-                "isSuccess": model.isSuccess
-            ]
+            return NetworkInspectorRequest(
+                id: request.id.uuidString,
+                url: model.url?.absoluteString ?? "",
+                method: model.method ?? "GET",
+                statusCode: model.statusCode ?? "0",
+                startedAtMilliseconds: Self.sharedHistoryTimestamp(timestamp),
+                timestamp: timestamp,
+                durationMilliseconds: Int((duration * 1_000).rounded()),
+                requestHeaders: Self.sharedHistoryHeaders(model.requestHeaderFields),
+                responseHeaders: Self.sharedHistoryHeaders(model.responseHeaderFields),
+                requestBody: model.requestData ?? Data(),
+                responseBody: model.responseData ?? Data(),
+                mimeType: model.mineType,
+                error: model.errorLocalizedDescription ?? model.errorDescription ?? ""
+            )
         }
-        return Self.sharedSessionJSON(["requests": rows])
+        return NetworkInspectorRequest.snapshotJSON(rows)
     }
 
     func performSharedSessionHistoryAction(actionID: String, sessionID: String = "") async -> String {
@@ -139,10 +127,6 @@ public extension DebugSwift.Network {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return Int64((formatter.date(from: value)?.timeIntervalSince1970 ?? 0) * 1_000)
-    }
-
-    private static func sharedHistoryGraphQLOperation(_ model: HttpModel) -> String {
-        GraphQLInspectorAdapter.detail(for: model).operation?.label ?? ""
     }
 }
 #endif

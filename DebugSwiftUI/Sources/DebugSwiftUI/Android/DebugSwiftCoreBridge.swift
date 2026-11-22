@@ -21,6 +21,12 @@ import SkipFuse
 ///   agentLog: {path, enabled, sessionId}}`; answers `{json}`, the `agent-snapshot.json` iOS writes.
 /// - `sanitize.record`: `{url, requestHeaders, responseHeaders, requestBody, responseBody,
 ///   decryptedResponseBody}`, headers as `{name: [values]}`; answers the same fields masked.
+/// - `network.rows`: `{records: [{id, url, method, statusCode, startedAt (ms), durationMs,
+///   requestHeaders, responseHeaders, requestBody, responseBody, decryptedResponseBody, error,
+///   source, graphqlOperation?, requestBytes?, responseBytes?}]}`; answers `{json}`, the network
+///   inspector's `{"requests": [...]}`.
+/// - `network.log`: `{record}`, one record as for `network.rows`; answers `{text}`, the request log
+///   the inspector copies.
 enum DebugSwiftCoreBridge {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var sanitizer = NetworkSanitizer.default
@@ -52,6 +58,8 @@ enum DebugSwiftCoreBridge {
         case "har.encode": ["json": HAREncoder.encodeJSON(harCaptures(input)) ?? ""]
         case "curl.command": ["command": curlCommand(input)]
         case "agent.snapshot": ["json": agentSnapshot(input)]
+        case "network.rows": ["json": NetworkInspectorRequest.snapshotJSON((input["records"] as? [[String: Any]] ?? []).map(inspectorRequest))]
+        case "network.log": ["text": inspectorRequest(input["record"] as? [String: Any] ?? [:]).log]
         default: ["error": "Unknown DebugSwiftCore operation: \(operation)."]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: output),
@@ -99,6 +107,29 @@ enum DebugSwiftCoreBridge {
                 time: (record["durationMs"] as? NSNumber)?.doubleValue ?? 0
             )
         }
+    }
+
+    private static func inspectorRequest(_ record: [String: Any]) -> NetworkInspectorRequest {
+        NetworkInspectorRequest(
+            id: record["id"] as? String ?? "",
+            url: record["url"] as? String ?? "",
+            method: record["method"] as? String ?? "GET",
+            statusCode: record["statusCode"] as? String ?? "0",
+            startedAtMilliseconds: (record["startedAt"] as? NSNumber)?.int64Value ?? 0,
+            durationMilliseconds: (record["durationMs"] as? NSNumber)?.intValue ?? 0,
+            requestHeaders: joined(record["requestHeaders"]),
+            responseHeaders: joined(record["responseHeaders"]),
+            requestBody: Data((record["requestBody"] as? String ?? "").utf8),
+            responseBody: Data((record["responseBody"] as? String ?? "").utf8),
+            decryptedResponseBody: Data((record["decryptedResponseBody"] as? String ?? "").utf8),
+            error: record["error"] as? String ?? "",
+            source: record["source"] as? String ?? "http",
+            // Kotlin keeps a truncated copy of large bodies: the label and the sizes it captured
+            // from the whole body win over what the copy would give.
+            graphqlOperation: record["graphqlOperation"] as? String,
+            requestBytes: (record["requestBytes"] as? NSNumber)?.intValue,
+            responseBytes: (record["responseBytes"] as? NSNumber)?.intValue
+        )
     }
 
     private static func curlCommand(_ input: [String: Any]) -> String {
