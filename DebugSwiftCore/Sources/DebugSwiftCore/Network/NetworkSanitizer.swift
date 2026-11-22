@@ -232,37 +232,43 @@ public struct NetworkSanitizer: Sendable {
         // CDATA sections and comments come first, so a tag written inside one isn't counted; one
         // left open runs to the end, and so does the element.
         let pattern = #"<!\[CDATA\[.*?(?:\]\]>|\z)|<!--.*?(?:-->|\z)|<(/)?"# + escaped
-            + #"(?:\s(?:[^>"'/]|"[^"]*"|'[^']*'|/(?!>))*)?(/)?>"#
+            + #"(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?(/)?>"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         var depth = 1
-        for match in regex.matches(in: source as String, range: NSRange(location: location, length: source.length - location)) {
-            guard source.character(at: match.range.location + 1) != 0x21 else { continue } // `<!`: CDATA or comment
+        var closing: NSRange?
+        // Enumerated, not collected: the scan stops at the closing tag instead of reading every
+        // later sibling.
+        regex.enumerateMatches(in: source as String, range: NSRange(location: location, length: source.length - location)) { match, _, stop in
+            guard let match, source.character(at: match.range.location + 1) != 0x21 else { return } // `<!`: CDATA or comment
             if match.range(at: 1).location != NSNotFound {
                 depth -= 1
-                if depth == 0 { return match.range }
+                if depth == 0 {
+                    closing = match.range
+                    stop.pointee = true
+                }
             } else if match.range(at: 2).location == NSNotFound {
                 depth += 1
             }
         }
-        return nil
+        return closing
     }
 
     /// An attribute: its name (group 1), `=` and a quoted value (group 3). XML attribute values
-    /// don't escape quotes with a backslash, so a value ends at its first matching quote, or at the
-    /// end of a document cut off inside it.
+    /// don't escape quotes with a backslash and can't hold `<`, so a value ends at its first
+    /// matching quote; one left open ends before the next `<` or at the end of a cut-off document.
     private static let xmlAttributePattern = try! NSRegularExpression(
-        pattern: #"(?<=[\s<])([A-Za-z_][\w.:-]*)(\s*=\s*)("[^"]*(?:"|\z)|'[^']*(?:'|\z))"#
+        pattern: #"(?<=[\s<])([A-Za-z_][\w.:-]*)(\s*=\s*)("[^"<]*(?:"|(?=<)|\z)|'[^'<]*(?:'|(?=<)|\z))"#
     )
 
-    /// Any start tag, self-closing or cut off at the end of the document, as the range its
-    /// attributes are looked for in.
+    /// Any start tag, self-closing or cut off, as the range its attributes are looked for in. It
+    /// ends at `>`, or, when malformed, before the next `<` or at the end of the document.
     private static let xmlTagPattern = try! NSRegularExpression(
-        pattern: #"<[A-Za-z_][\w.:-]*(?:\s(?:[^>"']|"[^"]*"|'[^']*')*(?:"[^"]*|'[^']*)?)?(?:>|\z)"#
+        pattern: #"<[A-Za-z_][\w.:-]*(?:\s(?:[^<>"']|"[^"<]*"|'[^'<]*')*(?:"[^"<]*|'[^'<]*)?)?(?:>|(?=<)|\z)"#
     )
 
     /// A start tag that isn't self-closing: its name (group 1). Quoted attribute values may hold `>`.
     private static let xmlStartTagPattern = try! NSRegularExpression(
-        pattern: #"<([A-Za-z_][\w.:-]*)(?:\s(?:[^>"'/]|"[^"]*"|'[^']*'|/(?!>))*)?>"#
+        pattern: #"<([A-Za-z_][\w.:-]*)(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?>"#
     )
 
     /// The host's redactor over text whose type is unknown; output that isn't UTF-8 becomes the

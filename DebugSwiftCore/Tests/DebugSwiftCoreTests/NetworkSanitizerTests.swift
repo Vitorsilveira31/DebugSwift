@@ -227,4 +227,14 @@ struct NetworkSanitizerTests {
             == #"<root>note="<user password="&lt;redacted&gt;"/></root>"#)
         #expect(xml(#"<root>password="text"</root>"#) == #"<root>password="text"</root>"#)
     }
+
+    @Test func anUnclosedAttributeValueDoesNotHideTheTagsAfterIt() {
+        #expect(xml(#"<a hint="oops><user password="hunter2"/>"#) == #"<a hint="oops><user password="&lt;redacted&gt;"/>"#)
+        #expect(xml(#"<user password="hunt<b/>"#) == #"<user password="&lt;redacted&gt;<b/>"#)
+    }
+
+    @Test func manyMaskedSiblingsAreMaskedInOnePass() {
+        let body = String(repeating: "<password>x</password>", count: 2_000)
+        #expect(xml(body) == String(repeating: "<password>&lt;redacted&gt;</password>", count: 2_000))
+    }
 }
