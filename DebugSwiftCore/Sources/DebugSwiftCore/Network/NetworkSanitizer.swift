@@ -325,6 +325,9 @@ public struct NetworkSanitizer: Sendable {
     /// a namespace prefix (`ns:password`); the local name is compared.
     private func maskingXML(_ text: String) -> String {
         guard !normalizedBodyKeys.isEmpty else { return text }
+        // Entities aren't resolved: a declared one can hold a secret that elements only reference
+        // (`&credential;`), and its value sits in the skipped DOCTYPE. Such a body is replaced whole.
+        if text.contains("<!ENTITY") { return Self.redactedValue }
         func masked(_ name: String) -> Bool {
             normalizedBodyKeys.contains(Self.normalize(String(name.split(separator: ":").last ?? Substring(name))))
         }

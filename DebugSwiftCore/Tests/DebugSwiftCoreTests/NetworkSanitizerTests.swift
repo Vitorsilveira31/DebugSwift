@@ -288,10 +288,15 @@ struct NetworkSanitizerTests {
     }
 
     @Test func aDOCTYPEIsSkippedWithItsLiterals() {
-        #expect(xml(#"<!DOCTYPE r [<!ENTITY e "<!--">]><r><password>hunter2</password></r>"#)
-            == #"<!DOCTYPE r [<!ENTITY e "<!--">]><r><password>&lt;redacted&gt;</password></r>"#)
-        let entity = #"<!DOCTYPE r [<!ENTITY e '<password>'>]><r>ana</r>"#
-        #expect(xml(entity) == entity)
+        #expect(xml(#"<!DOCTYPE r [<!-- a "quote --><?pi x?>]><r><password>hunter2</password></r>"#)
+            == #"<!DOCTYPE r [<!-- a "quote --><?pi x?>]><r><password>&lt;redacted&gt;</password></r>"#)
+        let doctype = #"<!DOCTYPE r SYSTEM "r.dtd"><r>ana</r>"#
+        #expect(xml(doctype) == doctype)
+    }
+
+    @Test func aBodyThatDeclaresEntitiesIsReplacedWhole() {
+        #expect(xml(#"<!DOCTYPE r [<!ENTITY credential "hunter2">]><r><password>&credential;</password></r>"#) == "<redacted>")
+        #expect(xml(#"<!DOCTYPE r [<!ENTITY e "<!--">]><r><password>hunter2</password></r>"#) == "<redacted>")
     }
 
     @Test func decodedTextIsNotReadAgainInTheHeadersCharset() {
