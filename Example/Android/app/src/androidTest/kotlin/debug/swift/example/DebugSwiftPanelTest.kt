@@ -24,6 +24,8 @@ import debug.swift.android.setDocumentationRecording
 import debug.swift.android.writeAgentSnapshot
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -475,6 +477,71 @@ class DebugSwiftPanelTest {
         assertTrue("This run's request is missing from the inspector", live.contains("bom-$marker"))
         assertTrue("The body lost its other fields", live.contains("kept-$marker"))
         assertTrue("A BOM-prefixed JSON body kept its password: $live", !live.contains("bom-secret-$marker"))
+    }
+
+    @Test
+    fun okHttpRequestBodiesAreReadInTheirCharset() {
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        val client = okhttp3.OkHttpClient.Builder()
+            .addInterceptor(debug.swift.android.DebugSwiftOkHttpInterceptor())
+            .addInterceptor { chain ->
+                okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(200).message("OK").body("".toResponseBody("text/plain".toMediaType())).build()
+            }
+            .build()
+        fun send(path: String, body: okhttp3.RequestBody, header: String? = null) {
+            val request = okhttp3.Request.Builder().url("https://api.example.test/$path-$marker").post(body)
+            if (header != null) request.header("Content-Type", header)
+            client.newCall(request.build()).execute().close()
+        }
+        // The charset only in the header, the body without a media type.
+        send("header", "password=header-secret-$marker".toByteArray(Charsets.UTF_16LE).toRequestBody(null), "text/plain; charset=utf-16le")
+        // A byte order mark and no charset.
+        val bom = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "<password>bom-secret-$marker</password>".toByteArray(Charsets.UTF_16LE)
+        send("bom", bom.toRequestBody("application/xml".toMediaType()))
+        // An XML declaration naming an encoding DebugSwiftCore can't read: recorded as the placeholder.
+        send("utf7", "<?xml version=\"1.0\" encoding=\"UTF-7\"?>+ADw-password+AD4-utf7-secret-$marker+ADw-/password+AD4-".toByteArray(Charsets.US_ASCII)
+            .toRequestBody("application/xml".toMediaType()))
+        // UTF-16 XML without a byte order mark or charset.
+        send("bare", "<password>bare-secret-$marker</password>".toByteArray(Charsets.UTF_16LE).toRequestBody("application/xml".toMediaType()))
+
+        val rows = org.json.JSONObject(AndroidDebugTools.networkInspectorSnapshotJSON("http")).getJSONArray("requests")
+        fun body(path: String): String = (0 until rows.length()).map { rows.getJSONObject(it) }
+            .last { it.getString("url").endsWith("$path-$marker") }.getString("requestBody")
+        // The exact masked text: a NUL-separated secret would also pass a "doesn't contain" check.
+        assertEquals("password=<redacted>", body("header"))
+        assertEquals("<password>&lt;redacted&gt;</password>", body("bom"))
+        assertEquals("<password>&lt;redacted&gt;</password>", body("bare"))
+        assertEquals("<redacted>", body("utf7"))
+    }
+
+    @Test
+    fun okHttpXMLNamesItsEncodingInTheDeclaration() {
+        // ISO-8859-1 named only by the XML declaration, and a key outside ASCII: DebugSwiftCore reads
+        // the bytes as the declaration says, so the key matches and the value is masked.
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        debug.swift.android.DebugSwiftNetworkSanitizer.configure(
+            bodyKeys = debug.swift.android.DebugSwiftNetworkSanitizer.defaultBodyKeys + "contraseña"
+        )
+        try {
+            val client = okhttp3.OkHttpClient.Builder()
+                .addInterceptor(debug.swift.android.DebugSwiftOkHttpInterceptor())
+                .addInterceptor { chain ->
+                    okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                        .code(200).message("OK").body("".toResponseBody("text/plain".toMediaType())).build()
+                }
+                .build()
+            val xml = "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><contraseña>latin-secret-$marker</contraseña>"
+            client.newCall(okhttp3.Request.Builder().url("https://api.example.test/latin-$marker")
+                .post(xml.toByteArray(Charsets.ISO_8859_1).toRequestBody("application/xml".toMediaType())).build()).execute().close()
+
+            val rows = org.json.JSONObject(AndroidDebugTools.networkInspectorSnapshotJSON("http")).getJSONArray("requests")
+            val body = (0 until rows.length()).map { rows.getJSONObject(it) }
+                .last { it.getString("url").endsWith("latin-$marker") }.getString("requestBody")
+            assertEquals("<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><contraseña>&lt;redacted&gt;</contraseña>", body)
+        } finally {
+            debug.swift.android.DebugSwiftNetworkSanitizer.configure(bodyKeys = debug.swift.android.DebugSwiftNetworkSanitizer.defaultBodyKeys)
+        }
     }
 
     @Test

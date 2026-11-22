@@ -36,7 +36,10 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         val requestBody = runCatching {
             val buffer = Buffer()
             request.body?.writeTo(buffer)
-            if (buffer.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(buffer.size) else buffer.readUtf8()
+            // The declared type: the body's media type, else the request's Content-Type header.
+            val type = request.body?.contentType()?.toString() ?: request.header("Content-Type")
+            if (buffer.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(buffer.size)
+            else decodeBody(buffer.readByteArray(), type)
         }.getOrDefault("")
         val requestBytes = request.body?.contentLength()?.takeIf { it >= 0 } ?: 0L
 
@@ -59,7 +62,7 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         }
         if (injectedFailure != null) {
             val failure = networkIOException(injectedFailure)
-            AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", failure.message ?: "network error", request.headers.toMultimap())
+            AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", failure.message ?: "network error", recordedRequestHeaders(request))
             throw failure
         }
 
@@ -75,7 +78,7 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         val response = try {
             chain.proceed(request)
         } catch (error: IOException) {
-            AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", error.message ?: "network error", request.headers.toMultimap())
+            AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", error.message ?: "network error", recordedRequestHeaders(request))
             throw error
         }
         // The response's own size, kept apart from the text recorded for it: a body too large to keep
@@ -90,9 +93,9 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
                 tooLargeToKeep(null)
             } else {
                 originalBytes = size
-                // OkHttp decodes with the response's charset and drops a byte-order mark, so a
-                // BOM-prefixed JSON body still parses, and is masked, downstream.
-                peeked.string()
+                // Decoded as requests are, so a BOM-prefixed or BOM-less UTF-16 body is text the
+                // masker can read downstream.
+                decodeBody(peeked.bytes(), peeked.contentType()?.toString() ?: response.header("Content-Type"))
             }
         }.getOrDefault("")
         val rewrittenText = rewriteRule?.responseBody ?: originalText
@@ -112,8 +115,8 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
             if (rewriteRule != null) rewrittenText.toByteArray().size.toLong() else originalBytes,
             requestBody,
             rewrittenText,
-            requestHeaders = request.headers.toMultimap(),
-            responseHeaders = finalResponse.headers.toMultimap()
+            requestHeaders = recordedRequestHeaders(request),
+            responseHeaders = recordedResponseHeaders(finalResponse)
         )
         return finalResponse
     }
@@ -129,7 +132,7 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
             requestBody,
             body,
             error,
-            requestHeaders = request.headers.toMultimap()
+            requestHeaders = recordedRequestHeaders(request)
         )
     }
 
@@ -152,5 +155,37 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         "cancelled" -> InterruptedIOException("The request was cancelled.")
         "custom" -> IOException("${failure.customDomain} (${failure.customCode}): ${failure.customDescription}")
         else -> IOException("Failure injected by DebugSwift.")
+    }
+
+    /**
+     * A captured body as text, read by DebugSwiftCore as it reads raw bodies before masking (byte
+     * order mark, charset, XML declaration, BOM-less UTF-16/32 XML), so the text the bridge masks is
+     * what the bytes say. A body whose declared encoding can't be read comes back as the placeholder.
+     */
+    private fun decodeBody(bytes: ByteArray, contentType: String?): String {
+        val input = org.json.JSONObject()
+            .put("bytes", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+            .put("contentType", contentType ?: "")
+        return org.json.JSONObject(DebugSwiftCoreBridge.call("body.text", input.toString())).optString("text")
+    }
+
+    /**
+     * The request's headers as recorded. OkHttp adds `Content-Type` from the body only after
+     * application interceptors, so it is added here when missing: the masker picks the body's
+     * format from it.
+     */
+    /** The response's headers as recorded, with its body's media type when there's no `Content-Type` header. */
+    private fun recordedResponseHeaders(response: Response): Map<String, List<String>> {
+        val headers = response.headers.toMultimap()
+        val type = response.body?.contentType() ?: return headers
+        if (headers.keys.any { it.equals("Content-Type", ignoreCase = true) }) return headers
+        return headers + ("Content-Type" to listOf(type.toString()))
+    }
+
+    private fun recordedRequestHeaders(request: okhttp3.Request): Map<String, List<String>> {
+        val headers = request.headers.toMultimap()
+        val type = request.body?.contentType() ?: return headers
+        if (headers.keys.any { it.equals("Content-Type", ignoreCase = true) }) return headers
+        return headers + ("Content-Type" to listOf(type.toString()))
     }
 }

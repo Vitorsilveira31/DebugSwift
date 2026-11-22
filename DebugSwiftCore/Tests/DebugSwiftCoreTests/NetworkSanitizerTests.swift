@@ -168,4 +168,219 @@ struct NetworkSanitizerTests {
         custom.customBodyRedactor = { _, _ in Data([0xff, 0xfe]) }
         #expect(custom.sanitize(unformattedText: "card 4111") == "<redacted>")
     }
+
+    private func xml(_ text: String, type: String = "application/xml") -> String? {
+        String(data: sanitizer.sanitize(body: Data(text.utf8), contentType: type), encoding: .utf8)
+    }
+
+    @Test func masksKeyValuePairsInTextBodies() {
+        let masked = sanitizer.sanitize(body: Data("user=ana password=secret".utf8), contentType: "text/plain; charset=utf-8")
+        #expect(String(data: masked, encoding: .utf8) == "user=ana password=<redacted>")
+        let plain = Data("nothing to hide".utf8)
+        #expect(sanitizer.sanitize(body: plain, contentType: "text/plain") == plain)
+        let image = Data([0x89, 0x50, 0x4e, 0x47])
+        #expect(sanitizer.sanitize(body: image, contentType: "image/png") == image)
+    }
+
+    @Test func masksXMLElementsAndAttributesNamedAfterAKey() {
+        #expect(xml("<login><user>ana</user><password>secret</password></login>")
+            == "<login><user>ana</user><password>&lt;redacted&gt;</password></login>")
+        #expect(xml(#"<user name="ana" password="hunter2"/>"#, type: "text/xml")
+            == #"<user name="ana" password="&lt;redacted&gt;"/>"#)
+        #expect(xml("<user token = 'abc'/>") == "<user token = '&lt;redacted&gt;'/>")
+        #expect(xml("<s:Envelope><ns:password>x</ns:password></s:Envelope>", type: "application/soap+xml")
+            == "<s:Envelope><ns:password>&lt;redacted&gt;</ns:password></s:Envelope>")
+    }
+
+    @Test func anXMLElementIsMaskedWholeWhateverItHolds() {
+        // A `>` in a quoted attribute doesn't end the start tag.
+        #expect(xml(#"<password hint=">">hunter2</password>"#) == #"<password hint=">">&lt;redacted&gt;</password>"#)
+        #expect(xml("<password><![CDATA[a<b]]></password>") == "<password>&lt;redacted&gt;</password>")
+        #expect(xml("<password><part>a</part>\n<part>b</part></password><user>ana</user>")
+            == "<password>&lt;redacted&gt;</password><user>ana</user>")
+        // A nested element of the same name doesn't end the outer one.
+        #expect(xml("<password><password>a</password>b</password>") == "<password>&lt;redacted&gt;</password>")
+        // A longer name that starts like a key isn't that key.
+        #expect(xml("<passwordHint>dog</passwordHint>") == "<passwordHint>dog</passwordHint>")
+        #expect(xml("<password/><user>ana</user>") == "<password/><user>ana</user>")
+    }
+
+    @Test func aCutOffXMLDocumentIsMaskedToItsEnd() {
+        #expect(xml("<login><password>hunter2") == "<login><password>&lt;redacted&gt;")
+        #expect(xml(#"<user password="hunt"#) == #"<user password="&lt;redacted&gt;"#)
+    }
+
+    @Test func anXMLDocumentWithNothingToMaskIsReturnedByteForByte() {
+        let body = Data(#"<user name="ana"><city>Rio</city></user>"#.utf8)
+        #expect(sanitizer.sanitize(body: body, contentType: "application/xml") == body)
+    }
+
+    @Test func aClosingTagInsideCDATAOrACommentDoesNotEndTheElement() {
+        #expect(xml("<password><![CDATA[</password>hunter2]]></password>") == "<password>&lt;redacted&gt;</password>")
+        #expect(xml("<password><!-- </password> -->hunter2</password><user>ana</user>")
+            == "<password>&lt;redacted&gt;</password><user>ana</user>")
+        #expect(xml("<password><![CDATA[hunter2") == "<password>&lt;redacted&gt;")
+    }
+
+    @Test func attributesAreOnlyLookedForInsideTags() {
+        #expect(xml(#"<root>note="<user password="hunter2"/></root>"#)
+            == #"<root>note="<user password="&lt;redacted&gt;"/></root>"#)
+        #expect(xml(#"<root>password="text"</root>"#) == #"<root>password="text"</root>"#)
+    }
+
+    @Test func anUnclosedAttributeValueDoesNotHideTheTagsAfterIt() {
+        #expect(xml(#"<a hint="oops><user password="hunter2"/>"#) == #"<a hint="oops><user password="&lt;redacted&gt;"/>"#)
+        #expect(xml(#"<user password="hunt<b/>"#) == #"<user password="&lt;redacted&gt;<b/>"#)
+    }
+
+    @Test func manyMaskedSiblingsAreMaskedInOnePass() {
+        let body = String(repeating: "<password>x</password>", count: 2_000)
+        #expect(xml(body) == String(repeating: "<password>&lt;redacted&gt;</password>", count: 2_000))
+        // Time grows with the size: 20,000 elements with attributes take well under a second.
+        let start = Date()
+        let large = String(repeating: #"<x a="1"><password>x</password></x>"#, count: 20_000)
+        #expect(xml(large)?.contains("<password>x</password>") == false)
+        #expect(Date().timeIntervalSince(start) < 2)
+    }
+
+    @Test func processingInstructionsCommentsAndCDATAHoldNoTags() {
+        #expect(xml("<password><?pi </password> ?>hunter2</password>") == "<password>&lt;redacted&gt;</password>")
+        let comment = "<root><!-- <password> --><user>ana</user></root>"
+        #expect(xml(comment) == comment)
+        let cdata = "<root><![CDATA[<password>]]>ana</root>"
+        #expect(xml(cdata) == cdata)
+    }
+
+    @Test func attributesInsideCDATAOrCommentsAreLeftAlone() {
+        #expect(xml(#"<root><![CDATA[<a password="]]><password>hunter2</password></root>"#)
+            == #"<root><![CDATA[<a password="]]><password>&lt;redacted&gt;</password></root>"#)
+    }
+
+    @Test func namesInAnyScriptAreRecognized() {
+        #expect(xml("<données><ü:password>x</ü:password></données>") == "<données><ü:password>&lt;redacted&gt;</ü:password></données>")
+        #expect(xml(#"<usuário password="x"/>"#) == #"<usuário password="&lt;redacted&gt;"/>"#)
+    }
+
+    @Test func contentTypeParametersDoNotPickTheMasker() {
+        let text = sanitizer.sanitize(body: Data("password=hunter2".utf8), contentType: #"text/plain; name="payload.xml""#)
+        #expect(String(data: text, encoding: .utf8) == "password=<redacted>")
+        #expect(xml("<password>x</password>", type: #"application/soap+xml; action="urn:json""#) == "<password>&lt;redacted&gt;</password>")
+    }
+
+    @Test func textBodiesAreMaskedInTheirDeclaredEncoding() {
+        let utf16 = Data([0xFF, 0xFE]) + "<password>hunter2</password>".data(using: .utf16LittleEndian)!
+        let masked16 = sanitizer.sanitize(body: utf16, contentType: "application/xml; charset=utf-16")
+        #expect(masked16.starts(with: [0xFF, 0xFE]))
+        #expect(String(data: masked16.dropFirst(2), encoding: .utf16LittleEndian) == "<password>&lt;redacted&gt;</password>")
+        let latin1 = "café password=hunter2".data(using: .isoLatin1)!
+        let maskedLatin1 = sanitizer.sanitize(body: latin1, contentType: "text/plain; charset=iso-8859-1")
+        #expect(String(data: maskedLatin1, encoding: .isoLatin1) == "café password=<redacted>")
+        let declared = #"<?xml version="1.0" encoding="ISO-8859-1"?><password>é</password>"#.data(using: .isoLatin1)!
+        #expect(String(data: sanitizer.sanitize(body: declared, contentType: "text/xml"), encoding: .isoLatin1)
+            == #"<?xml version="1.0" encoding="ISO-8859-1"?><password>&lt;redacted&gt;</password>"#)
+        // Without a declared encoding, a body that isn't UTF-8 is read byte for byte.
+        let undeclared = "café password=hunter2".data(using: .windowsCP1252)!
+        #expect(sanitizer.sanitize(body: undeclared, contentType: "text/plain")
+            == "café password=<redacted>".data(using: .windowsCP1252)!)
+        // Bytes the declared encoding can't read are replaced, not passed through.
+        let invalid = Data([0x70, 0x3D, 0xFF, 0xFE, 0xFD])
+        #expect(sanitizer.sanitize(body: invalid, contentType: "text/plain; charset=utf-8") == Data("<redacted>".utf8))
+    }
+
+    @Test func aDOCTYPEIsSkippedWithItsLiterals() {
+        #expect(xml(#"<!DOCTYPE r [<!-- a "quote --><?pi x?>]><r><password>hunter2</password></r>"#)
+            == #"<!DOCTYPE r [<!-- a "quote --><?pi x?>]><r><password>&lt;redacted&gt;</password></r>"#)
+        let doctype = #"<!DOCTYPE r SYSTEM "r.dtd"><r>ana</r>"#
+        #expect(xml(doctype) == doctype)
+    }
+
+    @Test func aBodyThatDeclaresEntitiesIsReplacedWhole() {
+        #expect(xml(#"<!DOCTYPE r [<!ENTITY credential "hunter2">]><r><password>&credential;</password></r>"#) == "<redacted>")
+        #expect(xml(#"<!DOCTYPE r [<!ENTITY e "<!--">]><r><password>hunter2</password></r>"#) == "<redacted>")
+        #expect(xml(#"<!DOCTYPE user [<!ATTLIST user password CDATA "hunter2">]><user/>"#) == "<redacted>")
+    }
+
+    @Test func decodedTextIsNotReadAgainInTheHeadersCharset() {
+        #expect(sanitizer.sanitize(text: "password=hunter2", contentType: "text/plain; charset=utf-16le") == "password=<redacted>")
+        let capture = HARCapture(
+            request: HARRequest(method: "POST", url: "https://example.com", headers: ["Content-Type": "text/plain; charset=utf-16le"], body: "password=hunter2"),
+            response: HARResponse(status: 200, headers: [:])
+        )
+        #expect(sanitizer.sanitize(capture).request.body == "password=<redacted>")
+    }
+
+    @Test func utf16XMLWithoutAByteOrderMarkIsRecognized() {
+        for encoding in [String.Encoding.utf16LittleEndian, .utf16BigEndian, .utf32LittleEndian, .utf32BigEndian] {
+            let body = "<password>hunter2</password>".data(using: encoding)!
+            #expect(String(data: sanitizer.sanitize(body: body, contentType: "application/xml"), encoding: encoding)
+                == "<password>&lt;redacted&gt;</password>")
+        }
+    }
+
+    @Test func utf32BodiesAreNotTakenForUTF16() {
+        let body = Data([0xFF, 0xFE, 0x00, 0x00]) + "<password>hunter2</password>".data(using: .utf32LittleEndian)!
+        let masked = sanitizer.sanitize(body: body, contentType: "application/xml")
+        #expect(String(data: masked.dropFirst(4), encoding: .utf32LittleEndian) == "<password>&lt;redacted&gt;</password>")
+    }
+
+    @Test func aQuotedParameterHoldsNoCharset() {
+        let masked = sanitizer.sanitize(body: Data("password=hunter2".utf8), contentType: #"text/plain; name="report;charset=utf-16""#)
+        #expect(String(data: masked, encoding: .utf8) == "password=<redacted>")
+        let utf16 = "password=hunter2".data(using: .utf16BigEndian)!
+        #expect(String(data: sanitizer.sanitize(body: utf16, contentType: #"text/plain; charset="utf-16""#), encoding: .utf16BigEndian)
+            == "password=<redacted>")
+    }
+
+    @Test func aCutOffDOCTYPESubsetFailsFast() {
+        let start = Date()
+        let body = "<!DOCTYPE r [" + String(repeating: "<!-- c -->", count: 40)
+        _ = xml(body)
+        #expect(Date().timeIntervalSince(start) < 1)
+    }
+
+    @Test func aDeclaredEncodingThatCantBeReadIsReplaced() {
+        let utf7 = Data("+ADw-password+AD4-hunter2+ADw-/password+AD4-".utf8)
+        #expect(sanitizer.sanitize(body: utf7, contentType: "application/xml; charset=utf-7") == Data("<redacted>".utf8))
+        let plain = Data("password=hunter2".utf8)
+        #expect(String(data: sanitizer.sanitize(body: plain, contentType: "text/plain; charset=UTF-8"), encoding: .utf8) == "password=<redacted>")
+    }
+
+    @Test func theSubtypeAndItsSuffixPickTheMasker() {
+        #expect(xml("<password>x</password>", type: "application/vnd.json+xml") == "<password>&lt;redacted&gt;</password>")
+        let report = Data("<password>x</password>".utf8)
+        #expect(sanitizer.sanitize(body: report, contentType: "application/vnd.example.xml-report") == report)
+        for type in ["application/problem+json", "application/x-amz-json-1.1", "text/x-json"] {
+            let json = sanitizer.sanitize(body: Data(#"{"password":"x"}"#.utf8), contentType: type)
+            #expect(String(data: json, encoding: .utf8) == #"{"password":"<redacted>"}"#)
+        }
+    }
+
+    @Test func aQuotedCharsetIsUnescapedAndOnlyAnXMLDeclarationNamesAnEncoding() {
+        let utf16 = "password=demo".data(using: .utf16LittleEndian)!
+        #expect(String(data: sanitizer.sanitize(body: utf16, contentType: #"text/plain; charset="utf\-16le""#), encoding: .utf16LittleEndian)
+            == "password=<redacted>")
+        #expect(xml(#"<?xml-example encoding="utf-16"?><password>demo</password>"#)
+            == #"<?xml-example encoding="utf-16"?><password>&lt;redacted&gt;</password>"#)
+    }
+
+    @Test func processingInstructionsInsideADOCTYPESubsetAreSkipped() {
+        let body = #"<!DOCTYPE r [<?pi <password> ]> ?>]><r>ana</r>"#
+        #expect(xml(body) == body)
+    }
+
+    @Test func aLongXMLDeclarationIsReadWhole() {
+        let padding = String(repeating: " ", count: 300)
+        let body = Data("<?xml version=\"1.0\"\(padding)encoding=\"utf-7\"?>+ADw-password+AD4-hunter2+ADw-/password+AD4-".utf8)
+        #expect(sanitizer.sanitize(body: body, contentType: "application/xml") == Data("<redacted>".utf8))
+    }
+
+    @Test func decodedTextReadsRawBodiesAsTheSanitizerDoes() {
+        let bare = "<password>x</password>".data(using: .utf16LittleEndian)!
+        #expect(NetworkSanitizer.decodedText(of: bare, contentType: "application/xml") == "<password>x</password>")
+        let bom = Data([0xFE, 0xFF]) + "a=b".data(using: .utf16BigEndian)!
+        #expect(NetworkSanitizer.decodedText(of: bom, contentType: "text/plain") == "a=b")
+        let utf7 = Data(#"<?xml version="1.0" encoding="UTF-7"?>+ADw-password+AD4-x"#.utf8)
+        #expect(NetworkSanitizer.decodedText(of: utf7, contentType: "application/xml") == nil)
+        #expect(NetworkSanitizer.decodedText(of: Data("{}".utf8), contentType: nil) == "{}")
+    }
 }

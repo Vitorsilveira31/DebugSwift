@@ -108,19 +108,47 @@ public struct NetworkSanitizer: Sendable {
 
     // MARK: - Body
 
-    /// Masks matching keys in JSON (at any depth) and `application/x-www-form-urlencoded` bodies.
-    /// A body with nothing to mask is returned byte for byte.
+    /// Masks matching keys in JSON (at any depth), `application/x-www-form-urlencoded`, XML and
+    /// `text/*` bodies. XML masks the content of an element named after a key and the value of an
+    /// attribute named after one; other text masks `key=value` and `key: value` pairs, as
+    /// `sanitize(unformattedText:)` does. A body without a type is masked only as JSON. A body with
+    /// nothing to mask is returned byte for byte.
     public func sanitize(body: Data, contentType: String?) -> Data {
+        sanitize(body: body, contentType: contentType, decodedText: false)
+    }
+
+    /// Masks a body that is already text, as `sanitize(body:contentType:)` does, without reading it
+    /// again in the `charset` the header names: that charset was the wire's, and the text is decoded.
+    /// Output of a custom redactor that isn't UTF-8 becomes the placeholder.
+    public func sanitize(text: String, contentType: String?) -> String {
+        let sanitized = sanitize(body: Data(text.utf8), contentType: contentType, decodedText: true)
+        return String(data: sanitized, encoding: .utf8) ?? Self.redactedValue
+    }
+
+    /// `decodedText`: the bytes are UTF-8 text already, whatever the header's `charset` says.
+    private func sanitize(body: Data, contentType: String?, decodedText: Bool) -> Data {
         var result = body
         if !normalizedBodyKeys.isEmpty, !body.isEmpty {
-            let type = contentType?.lowercased() ?? ""
-            if type.contains("x-www-form-urlencoded") {
+            // The media type alone: a parameter such as `name="payload.xml"` must not pick the masker.
+            let type = (contentType?.split(separator: ";", maxSplits: 1).first.map(String.init) ?? "")
+                .trimmingCharacters(in: .whitespaces).lowercased()
+            // The subtype decides, not the parameters: `xml` or a `+xml` suffix is XML (so
+            // `application/vnd.json+xml` is XML and `application/vnd.example.xml-report` isn't).
+            let subtype = type.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ""
+            let isXML = subtype == "xml" || subtype.hasSuffix("+xml")
+            // JSON keeps its aliases (`x-amz-json-1.1`, `x-json`…): any subtype naming json.
+            let isJSON = !isXML && subtype.contains("json")
+            if subtype == "x-www-form-urlencoded" {
                 if let text = String(data: body, encoding: .utf8) {
                     let sanitized = sanitizeFormEncoded(text, keys: normalizedBodyKeys)
                     if sanitized != text { result = Data(sanitized.utf8) }
                 }
-            } else if type.isEmpty || type.contains("json") {
+            } else if type.isEmpty || isJSON {
                 result = sanitizeJSON(body) ?? body
+            } else if isXML {
+                result = maskingText(body, contentType: decodedText ? nil : contentType, xml: !decodedText) { maskingXML($0) }
+            } else if type.hasPrefix("text/") {
+                result = maskingText(body, contentType: decodedText ? nil : contentType, xml: false) { maskingKeys(inUnformattedText: $0) }
             }
         }
         if let customBodyRedactor {
@@ -161,6 +189,251 @@ public struct NetworkSanitizer: Sendable {
         guard cursor > 0 else { return text }
         return result + source.substring(from: cursor)
     }
+
+    /// Decodes a text body in its declared encoding, masks it and writes it back in that encoding.
+    /// The encoding comes from a byte order mark, the `charset` parameter or, for XML, the
+    /// declaration's `encoding`, else UTF-8, or Latin-1 when nothing declared one and the body
+    /// isn't UTF-8. A body that its declared encoding can't decode is replaced by the placeholder:
+    /// unread text could hold anything.
+    private func maskingText(_ body: Data, contentType: String?, xml: Bool, mask: (String) -> String) -> Data {
+        guard let (text, encoding, bom) = Self.decode(body, contentType: contentType, xml: xml) else {
+            return Data(Self.redactedValue.utf8)
+        }
+        let masked = mask(text)
+        guard masked != text else { return body }
+        guard let data = masked.data(using: encoding, allowLossyConversion: false) else {
+            return Data(Self.redactedValue.utf8)
+        }
+        return bom + data
+    }
+
+    /// A raw body's text, read as the sanitizer reads it before masking, for a platform that records
+    /// bodies as text (Android): a byte order mark, the `charset`, an XML declaration or the
+    /// signature of BOM-less UTF-16/32 XML, else UTF-8, else Latin-1. `nil` when the declared
+    /// encoding can't be read: record the placeholder then, not a guess.
+    public static func decodedText(of body: Data, contentType: String?) -> String? {
+        let type = (contentType?.split(separator: ";", maxSplits: 1).first.map(String.init) ?? "")
+            .trimmingCharacters(in: .whitespaces).lowercased()
+        let subtype = type.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ""
+        return decode(body, contentType: contentType, xml: subtype == "xml" || subtype.hasSuffix("+xml"))?.text
+    }
+
+    /// The text, the encoding it was read in and the byte order mark it started with.
+    private static func decode(_ body: Data, contentType: String?, xml: Bool) -> (text: String, encoding: String.Encoding, bom: Data)? {
+        let (declaredEncoding, bom, declared) = textEncoding(of: body, contentType: contentType, xml: xml)
+        guard let encoding = declaredEncoding else { return nil }
+        if let text = String(data: body.dropFirst(bom.count), encoding: encoding) { return (text, encoding, bom) }
+        // Nothing said it's UTF-8: read it as Latin-1, which takes any byte and writes it back
+        // unchanged, so the ASCII keys are still found.
+        guard !declared, let text = String(data: body, encoding: .isoLatin1) else { return nil }
+        return (text, .isoLatin1, Data())
+    }
+
+    /// The encoding of a text body (`nil` for a declared one this can't read), the byte order mark it
+    /// starts with, if any, and whether the encoding was declared (a mark, a `charset` or an XML
+    /// `encoding`).
+    private static func textEncoding(of body: Data, contentType: String?, xml: Bool) -> (String.Encoding?, Data, Bool) {
+        // UTF-32's marks first: UTF-32LE's starts with UTF-16LE's.
+        let marks: [([UInt8], String.Encoding)] = [
+            ([0xFF, 0xFE, 0x00, 0x00], .utf32LittleEndian), ([0x00, 0x00, 0xFE, 0xFF], .utf32BigEndian),
+            ([0xEF, 0xBB, 0xBF], .utf8), ([0xFF, 0xFE], .utf16LittleEndian), ([0xFE, 0xFF], .utf16BigEndian)
+        ]
+        for (mark, encoding) in marks where body.starts(with: mark) {
+            return (encoding, Data(mark), true)
+        }
+        // XML without a byte order mark starts with `<` and NULs in UTF-32 or UTF-16 (XML 1.0,
+        // appendix F); UTF-32 first, since UTF-32LE's `<` starts like UTF-16LE's.
+        if xml, body.count >= 2 {
+            if body.starts(with: [0x3C, 0x00, 0x00, 0x00]) { return (.utf32LittleEndian, Data(), true) }
+            if body.starts(with: [0x00, 0x00, 0x00, 0x3C]) { return (.utf32BigEndian, Data(), true) }
+            if body.starts(with: [0x3C, 0x00]) { return (.utf16LittleEndian, Data(), true) }
+            if body.starts(with: [0x00, 0x3C]) { return (.utf16BigEndian, Data(), true) }
+        }
+        var name = contentType.flatMap(charsetParameter)
+        // The declaration is read through its `?>`, however much whitespace it holds.
+        if name == nil, xml, body.starts(with: Array("<?xml".utf8)),
+           let end = body.range(of: Data("?>".utf8)),
+           let head = String(data: body[body.startIndex ..< end.upperBound], encoding: .isoLatin1),
+           let match = xmlEncodingPattern.firstMatch(in: head, range: NSRange(location: 0, length: (head as NSString).length)) {
+            name = (head as NSString).substring(with: match.range(at: 1))
+        }
+        switch name?.lowercased() {
+        case "utf-16", "utf-16be": return (.utf16BigEndian, Data(), true)
+        case "utf-16le": return (.utf16LittleEndian, Data(), true)
+        case "utf-32", "utf-32be": return (.utf32BigEndian, Data(), true)
+        case "utf-32le": return (.utf32LittleEndian, Data(), true)
+        case "iso-8859-1", "latin1", "latin-1": return (.isoLatin1, Data(), true)
+        case "windows-1252", "cp1252": return (.windowsCP1252, Data(), true)
+        case "us-ascii", "ascii": return (.ascii, Data(), true)
+        case nil, "utf-8", "utf8": return (.utf8, Data(), name != nil)
+        // An encoding this can't read (UTF-7, EBCDIC…) isn't guessed as UTF-8: its text could hold
+        // tags that UTF-8 bytes don't show.
+        default: return (nil, Data(), true)
+        }
+    }
+
+    /// The `charset` parameter of a Content-Type. Parameters are split on `;` outside quoted
+    /// values, so `name="a;charset=utf-16"` holds no charset.
+    private static func charsetParameter(_ contentType: String) -> String? {
+        var parameters: [String] = []
+        var current = ""
+        var quoted = false
+        var escaped = false
+        for character in contentType {
+            if escaped {
+                escaped = false
+            } else if quoted, character == "\\" {
+                escaped = true
+            } else if character == "\"" {
+                quoted.toggle()
+            } else if character == ";", !quoted {
+                parameters.append(current)
+                current = ""
+                continue
+            }
+            current.append(character)
+        }
+        parameters.append(current)
+        for parameter in parameters.dropFirst() {
+            let pair = parameter.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard pair.count == 2, pair[0].lowercased() == "charset" else { continue }
+            var value = pair[1]
+            guard value.hasPrefix("\""), value.count >= 2 else { return value }
+            // A quoted value: drop the quotes and undo its quoted-pairs (`"utf\-16le"`).
+            value = String(value.dropFirst().dropLast(value.hasSuffix("\"") ? 1 : 0))
+            var unescaped = ""
+            var escaping = false
+            for character in value {
+                if escaping || character != "\\" { unescaped.append(character); escaping = false } else { escaping = true }
+            }
+            return unescaped
+        }
+        return nil
+    }
+
+    /// The `encoding` of an XML declaration (group 1): `<?xml version="…" encoding="…"` at the very
+    /// start, not another processing instruction.
+    private static let xmlEncodingPattern = try! NSRegularExpression(
+        pattern: #"^<\?xml\s+version\s*=\s*["'][^"']*["']\s+encoding\s*=\s*["']([A-Za-z0-9._-]+)["']"#
+    )
+
+    /// The placeholder as XML text, so a masked document stays well-formed.
+    private static let xmlRedactedValue = "&lt;redacted&gt;"
+
+    /// Masks the value of every attribute named after a key, keeping its quotes, then the whole
+    /// content of every element named after a key, nested markup and CDATA included; a closing tag
+    /// written inside CDATA or a comment doesn't end the element. Names may carry
+    /// a namespace prefix (`ns:password`); the local name is compared.
+    private func maskingXML(_ text: String) -> String {
+        guard !normalizedBodyKeys.isEmpty else { return text }
+        // DTD declarations aren't applied: an entity (`&credential;`) or a default attribute value
+        // (`<!ATTLIST user password CDATA "…">`) can hold a secret the elements only imply, and its
+        // value sits in the skipped DOCTYPE. Such a body is replaced whole.
+        if text.contains("<!ENTITY") || text.contains("<!ATTLIST") { return Self.redactedValue }
+        func masked(_ name: String) -> Bool {
+            normalizedBodyKeys.contains(Self.normalize(String(name.split(separator: ":").last ?? Substring(name))))
+        }
+        // Each pass walks the document once (enumerated, not re-searched per element), so the time
+        // grows with the body's size, not with its number of elements.
+        var source = text as NSString
+        var result = ""
+        var cursor = 0
+        // Attributes are looked for inside tags only: `note="` in element text must not hide the
+        // tag that follows it. Each tag is scanned on its own text.
+        Self.xmlTagPattern.enumerateMatches(in: text, range: NSRange(location: 0, length: source.length)) { tag, _, _ in
+            guard let tag, !Self.isNonMarkup(tag, in: source) else { return }
+            let tagText = source.substring(with: tag.range)
+            let tagSource = tagText as NSString
+            for match in Self.xmlAttributePattern.matches(in: tagText, range: NSRange(location: 0, length: tagSource.length))
+            where masked(tagSource.substring(with: match.range(at: 1))) {
+                let value = match.range(at: 3)
+                // Keep the quotes: the value is everything between them, or up to the end of a
+                // document cut off inside it.
+                let closed = value.length >= 2
+                    && tagSource.character(at: value.location + value.length - 1) == tagSource.character(at: value.location)
+                let inner = tag.range.location + value.location + 1
+                result += source.substring(with: NSRange(location: cursor, length: inner - cursor))
+                result += Self.xmlRedactedValue
+                cursor = inner + value.length - (closed ? 2 : 1)
+            }
+        }
+        let attributesMasked = cursor > 0 ? result + source.substring(from: cursor) : text
+
+        // Elements: one pass over CDATA sections, comments, processing instructions and tags. Inside
+        // a masked element only tags of its name count, to find the closing tag that matches.
+        source = attributesMasked as NSString
+        result = ""
+        cursor = 0
+        var open: (name: String, depth: Int, contentStart: Int)?
+        Self.xmlTokenPattern.enumerateMatches(in: attributesMasked, range: NSRange(location: 0, length: source.length)) { token, _, _ in
+            guard let token, !Self.isNonMarkup(token, in: source) else { return }
+            let closing = token.range(at: 1).location != NSNotFound
+            let selfClosing = token.range(at: 3).location != NSNotFound
+            let name = source.substring(with: token.range(at: 2))
+            if var element = open {
+                guard name == element.name, !selfClosing else { return }
+                element.depth += closing ? -1 : 1
+                if element.depth == 0 {
+                    result += source.substring(with: NSRange(location: cursor, length: element.contentStart - cursor))
+                    result += Self.xmlRedactedValue
+                    cursor = token.range.location
+                    open = nil
+                } else {
+                    open = element
+                }
+            } else if !closing, !selfClosing, masked(name) {
+                open = (name, 1, token.range.location + token.range.length)
+            }
+        }
+        if let element = open {
+            // A document cut off inside the element (a truncated capture) is masked to its end.
+            return result + source.substring(with: NSRange(location: cursor, length: element.contentStart - cursor))
+                + Self.xmlRedactedValue
+        }
+        guard cursor > 0 else { return attributesMasked }
+        return result + source.substring(from: cursor)
+    }
+
+    /// An attribute: its name (group 1), `=` and a quoted value (group 3). XML attribute values
+    /// don't escape quotes with a backslash and can't hold `<`, so a value ends at its first
+    /// matching quote; one left open ends before the next `<` or at the end of a cut-off document.
+    private static let xmlAttributePattern = try! NSRegularExpression(
+        pattern: #"(?<=[\s<])("# + xmlName + #")(\s*=\s*)("[^"<]*(?:"|(?=<)|\z)|'[^'<]*(?:'|(?=<)|\z))"#
+    )
+
+    /// Any start tag, self-closing or cut off, as the range its attributes are looked for in. It
+    /// ends at `>`, or, when malformed, before the next `<` or at the end of the document.
+    private static let xmlTagPattern = try! NSRegularExpression(
+        pattern: xmlNonMarkup + "|<" + xmlName + #"(?:\s(?:[^<>"']|"[^"<]*"|'[^'<]*')*(?:"[^"<]*|'[^'<]*)?)?(?:>|(?=<)|\z)"#,
+        options: [.dotMatchesLineSeparators]
+    )
+
+    /// An XML name, prefix included: letters of any script, digits, `_`, `.`, `-` and `:`.
+    private static let xmlName = #"[\p{L}_][\p{L}\p{M}\p{N}_.:-]*"#
+
+    /// A DOCTYPE (its quoted literals and internal subset included), CDATA section, comment or
+    /// processing instruction, matched before tags so their text is skipped; a CDATA section,
+    /// comment or processing instruction left open runs to the end of the document.
+    // The alternatives inside the DOCTYPE never match the same text (a `<` is either a comment's
+    // start or a lone `<`) and repeat possessively, so a subset cut off before `]>` fails in linear
+    // time instead of backtracking.
+    private static let xmlNonMarkup = #"<!DOCTYPE(?:[^\[>"']|"[^"]*"|'[^']*')*+(?:\[(?:<!--.*?-->|<\?.*?\?>|<(?!!--|\?)|[^\]"'<]|"[^"]*"|'[^']*')*+\])?\s*>"#
+        + #"|<!\[CDATA\[.*?(?:\]\]>|\z)|<!--.*?(?:-->|\z)|<\?.*?(?:\?>|\z)"#
+
+    /// Whether a match of a pattern that starts with `xmlNonMarkup` is one of those, not a tag.
+    private static func isNonMarkup(_ match: NSTextCheckingResult, in source: NSString) -> Bool {
+        guard match.range.length > 1 else { return false }
+        let next = source.character(at: match.range.location + 1)
+        return next == 0x21 || next == 0x3F // `<!` or `<?`
+    }
+
+    /// A CDATA section, comment or processing instruction (`xmlNonMarkup`), or a tag: `/` for an end
+    /// tag (group 1), its name (group 2) and `/` for a self-closing one (group 3). Quoted attribute
+    /// values may hold `>`.
+    private static let xmlTokenPattern = try! NSRegularExpression(
+        pattern: xmlNonMarkup + "|<(/)?(" + xmlName + #")(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?(/)?>"#,
+        options: [.dotMatchesLineSeparators]
+    )
 
     /// The host's redactor over text whose type is unknown; output that isn't UTF-8 becomes the
     /// placeholder rather than the unmasked text.
@@ -232,12 +505,6 @@ public struct NetworkSanitizer: Sendable {
     // MARK: - Helpers
 
     static let encodedRedactedValue = "%3Credacted%3E"
-
-    private func sanitize(text: String, contentType: String?) -> String {
-        let sanitized = sanitize(body: Data(text.utf8), contentType: contentType)
-        // A custom redactor may return bytes that aren't UTF-8: never fall back to the original.
-        return String(data: sanitized, encoding: .utf8) ?? Self.redactedValue
-    }
 
     private static func contentType(in headers: [String: String]) -> String? {
         headers.first { $0.key.lowercased() == "content-type" }?.value
