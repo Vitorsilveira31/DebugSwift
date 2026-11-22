@@ -190,7 +190,8 @@ public struct NetworkSanitizer: Sendable {
     /// isn't UTF-8. A body that its declared encoding can't decode is replaced by the placeholder:
     /// unread text could hold anything.
     private func maskingText(_ body: Data, contentType: String?, xml: Bool, mask: (String) -> String) -> Data {
-        var (encoding, bom, declared) = Self.textEncoding(of: body, contentType: contentType, xml: xml)
+        let (declaredEncoding, bom, declared) = Self.textEncoding(of: body, contentType: contentType, xml: xml)
+        guard var encoding = declaredEncoding else { return Data(Self.redactedValue.utf8) }
         var decoded = String(data: body.dropFirst(bom.count), encoding: encoding)
         if decoded == nil, !declared {
             // Nothing said it's UTF-8: read it as Latin-1, which takes any byte and writes it back
@@ -207,9 +208,10 @@ public struct NetworkSanitizer: Sendable {
         return bom + data
     }
 
-    /// The encoding of a text body, the byte order mark it starts with, if any, and whether the
-    /// encoding was declared (a mark, a `charset` or an XML `encoding`).
-    private static func textEncoding(of body: Data, contentType: String?, xml: Bool) -> (String.Encoding, Data, Bool) {
+    /// The encoding of a text body (`nil` for a declared one this can't read), the byte order mark it
+    /// starts with, if any, and whether the encoding was declared (a mark, a `charset` or an XML
+    /// `encoding`).
+    private static func textEncoding(of body: Data, contentType: String?, xml: Bool) -> (String.Encoding?, Data, Bool) {
         // UTF-32's marks first: UTF-32LE's starts with UTF-16LE's.
         let marks: [([UInt8], String.Encoding)] = [
             ([0xFF, 0xFE, 0x00, 0x00], .utf32LittleEndian), ([0x00, 0x00, 0xFE, 0xFF], .utf32BigEndian),
@@ -239,7 +241,10 @@ public struct NetworkSanitizer: Sendable {
         case "iso-8859-1", "latin1", "latin-1": return (.isoLatin1, Data(), true)
         case "windows-1252", "cp1252": return (.windowsCP1252, Data(), true)
         case "us-ascii", "ascii": return (.ascii, Data(), true)
-        default: return (.utf8, Data(), name != nil)
+        case nil, "utf-8", "utf8": return (.utf8, Data(), name != nil)
+        // An encoding this can't read (UTF-7, EBCDIC…) isn't guessed as UTF-8: its text could hold
+        // tags that UTF-8 bytes don't show.
+        default: return (nil, Data(), true)
         }
     }
 
@@ -371,7 +376,10 @@ public struct NetworkSanitizer: Sendable {
     /// A DOCTYPE (its quoted literals and internal subset included), CDATA section, comment or
     /// processing instruction, matched before tags so their text is skipped; a CDATA section,
     /// comment or processing instruction left open runs to the end of the document.
-    private static let xmlNonMarkup = #"<!DOCTYPE(?:[^\[>"']|"[^"]*"|'[^']*')*(?:\[(?:<!--.*?-->|[^\]"']|"[^"]*"|'[^']*')*\])?\s*>"#
+    // The alternatives inside the DOCTYPE never match the same text (a `<` is either a comment's
+    // start or a lone `<`) and repeat possessively, so a subset cut off before `]>` fails in linear
+    // time instead of backtracking.
+    private static let xmlNonMarkup = #"<!DOCTYPE(?:[^\[>"']|"[^"]*"|'[^']*')*+(?:\[(?:<!--.*?-->|<(?!!--)|[^\]"'<]|"[^"]*"|'[^']*')*+\])?\s*>"#
         + #"|<!\[CDATA\[.*?(?:\]\]>|\z)|<!--.*?(?:-->|\z)|<\?.*?(?:\?>|\z)"#
 
     /// Whether a match of a pattern that starts with `xmlNonMarkup` is one of those, not a tag.

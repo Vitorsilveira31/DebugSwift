@@ -324,4 +324,18 @@ struct NetworkSanitizerTests {
         #expect(String(data: sanitizer.sanitize(body: utf16, contentType: #"text/plain; charset="utf-16""#), encoding: .utf16BigEndian)
             == "password=<redacted>")
     }
+
+    @Test func aCutOffDOCTYPESubsetFailsFast() {
+        let start = Date()
+        let body = "<!DOCTYPE r [" + String(repeating: "<!-- c -->", count: 40)
+        _ = xml(body)
+        #expect(Date().timeIntervalSince(start) < 1)
+    }
+
+    @Test func aDeclaredEncodingThatCantBeReadIsReplaced() {
+        let utf7 = Data("+ADw-password+AD4-hunter2+ADw-/password+AD4-".utf8)
+        #expect(sanitizer.sanitize(body: utf7, contentType: "application/xml; charset=utf-7") == Data("<redacted>".utf8))
+        let plain = Data("password=hunter2".utf8)
+        #expect(String(data: sanitizer.sanitize(body: plain, contentType: "text/plain; charset=UTF-8"), encoding: .utf8) == "password=<redacted>")
+    }
 }
