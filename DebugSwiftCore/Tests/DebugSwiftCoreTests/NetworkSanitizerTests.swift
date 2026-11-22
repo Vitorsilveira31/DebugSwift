@@ -305,4 +305,18 @@ struct NetworkSanitizerTests {
                 == "<password>&lt;redacted&gt;</password>")
         }
     }
+
+    @Test func utf32BodiesAreNotTakenForUTF16() {
+        let body = Data([0xFF, 0xFE, 0x00, 0x00]) + "<password>hunter2</password>".data(using: .utf32LittleEndian)!
+        let masked = sanitizer.sanitize(body: body, contentType: "application/xml")
+        #expect(String(data: masked.dropFirst(4), encoding: .utf32LittleEndian) == "<password>&lt;redacted&gt;</password>")
+    }
+
+    @Test func aQuotedParameterHoldsNoCharset() {
+        let masked = sanitizer.sanitize(body: Data("password=hunter2".utf8), contentType: #"text/plain; name="report;charset=utf-16""#)
+        #expect(String(data: masked, encoding: .utf8) == "password=<redacted>")
+        let utf16 = "password=hunter2".data(using: .utf16BigEndian)!
+        #expect(String(data: sanitizer.sanitize(body: utf16, contentType: #"text/plain; charset="utf-16""#), encoding: .utf16BigEndian)
+            == "password=<redacted>")
+    }
 }

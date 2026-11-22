@@ -210,7 +210,9 @@ public struct NetworkSanitizer: Sendable {
     /// The encoding of a text body, the byte order mark it starts with, if any, and whether the
     /// encoding was declared (a mark, a `charset` or an XML `encoding`).
     private static func textEncoding(of body: Data, contentType: String?, xml: Bool) -> (String.Encoding, Data, Bool) {
+        // UTF-32's marks first: UTF-32LE's starts with UTF-16LE's.
         let marks: [([UInt8], String.Encoding)] = [
+            ([0xFF, 0xFE, 0x00, 0x00], .utf32LittleEndian), ([0x00, 0x00, 0xFE, 0xFF], .utf32BigEndian),
             ([0xEF, 0xBB, 0xBF], .utf8), ([0xFF, 0xFE], .utf16LittleEndian), ([0xFE, 0xFF], .utf16BigEndian)
         ]
         for (mark, encoding) in marks where body.starts(with: mark) {
@@ -221,10 +223,7 @@ public struct NetworkSanitizer: Sendable {
             if body.starts(with: [0x3C, 0x00]) { return (.utf16LittleEndian, Data(), true) }
             if body.starts(with: [0x00, 0x3C]) { return (.utf16BigEndian, Data(), true) }
         }
-        var name = contentType?.split(separator: ";").dropFirst()
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .first { $0.lowercased().hasPrefix("charset=") }
-            .map { String($0.dropFirst("charset=".count)).trimmingCharacters(in: CharacterSet(charactersIn: "\"' ")) }
+        var name = contentType.flatMap(charsetParameter)
         if name == nil, xml, let head = String(data: body.prefix(200), encoding: .isoLatin1),
            let match = xmlEncodingPattern.firstMatch(in: head, range: NSRange(location: 0, length: (head as NSString).length)) {
             name = (head as NSString).substring(with: match.range(at: 1))
@@ -232,11 +231,43 @@ public struct NetworkSanitizer: Sendable {
         switch name?.lowercased() {
         case "utf-16", "utf-16be": return (.utf16BigEndian, Data(), true)
         case "utf-16le": return (.utf16LittleEndian, Data(), true)
+        case "utf-32", "utf-32be": return (.utf32BigEndian, Data(), true)
+        case "utf-32le": return (.utf32LittleEndian, Data(), true)
         case "iso-8859-1", "latin1", "latin-1": return (.isoLatin1, Data(), true)
         case "windows-1252", "cp1252": return (.windowsCP1252, Data(), true)
         case "us-ascii", "ascii": return (.ascii, Data(), true)
         default: return (.utf8, Data(), name != nil)
         }
+    }
+
+    /// The `charset` parameter of a Content-Type. Parameters are split on `;` outside quoted
+    /// values, so `name="a;charset=utf-16"` holds no charset.
+    private static func charsetParameter(_ contentType: String) -> String? {
+        var parameters: [String] = []
+        var current = ""
+        var quoted = false
+        var escaped = false
+        for character in contentType {
+            if escaped {
+                escaped = false
+            } else if quoted, character == "\\" {
+                escaped = true
+            } else if character == "\"" {
+                quoted.toggle()
+            } else if character == ";", !quoted {
+                parameters.append(current)
+                current = ""
+                continue
+            }
+            current.append(character)
+        }
+        parameters.append(current)
+        for parameter in parameters.dropFirst() {
+            let pair = parameter.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard pair.count == 2, pair[0].lowercased() == "charset" else { continue }
+            return pair[1].trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        }
+        return nil
     }
 
     /// The `encoding` of an XML declaration (group 1).
