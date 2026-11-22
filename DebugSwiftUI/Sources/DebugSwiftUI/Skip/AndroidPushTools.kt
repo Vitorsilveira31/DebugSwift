@@ -19,6 +19,9 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
+import debug.swift.android.AndroidDebugTools.PushNotificationRecord
+import debug.swift.android.AndroidDebugTools.PushNotificationTemplate
+import debug.swift.android.AndroidDebugTools.PushScheduleResult
 
 // Push notification simulation: templates, scheduling, history and permissions.
 // Part of AndroidDebugTools: these extensions use the object's state, which lives in AndroidDebugTools.kt.

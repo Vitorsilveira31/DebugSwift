@@ -11,6 +11,8 @@ import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.WebSocket
+import debug.swift.android.AndroidDebugTools.WebSocketConnectionRecord
+import debug.swift.android.AndroidDebugTools.WebSocketFrameRecord
 
 // WebSocket capture and the WebSocket inspector.
 // Part of AndroidDebugTools: these extensions use the object's state, which lives in AndroidDebugTools.kt.

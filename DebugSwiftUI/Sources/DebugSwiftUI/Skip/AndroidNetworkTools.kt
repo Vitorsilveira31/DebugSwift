@@ -20,6 +20,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import debug.swift.android.AndroidDebugTools.NetworkRecord
+import debug.swift.android.AndroidDebugTools.ReplayRequest
 
 // Network capture: records, history, the inspector screens, HAR export and replay.
 // Part of AndroidDebugTools: these extensions use the object's state, which lives in AndroidDebugTools.kt.

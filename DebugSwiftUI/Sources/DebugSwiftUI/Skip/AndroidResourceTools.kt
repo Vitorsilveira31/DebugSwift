@@ -13,6 +13,8 @@ import javax.crypto.SecretKeyFactory
 import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.Call
+import debug.swift.android.AndroidDebugTools.SecurityAuditFinding
+import debug.swift.android.AndroidDebugTools.SecurityAuditReport
 
 // Resource tools: persistent data, preferences, files and the security audit.
 // Part of AndroidDebugTools: these extensions use the object's state, which lives in AndroidDebugTools.kt.

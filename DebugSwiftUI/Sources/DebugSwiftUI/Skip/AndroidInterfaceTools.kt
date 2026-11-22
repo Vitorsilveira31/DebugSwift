@@ -18,6 +18,7 @@ import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import debug.swift.android.AndroidDebugTools.RecordedInteraction
 
 // Interface tools: grid, interface toggles, appearance, screenshots, touches and the documentation recorder.
 // Part of AndroidDebugTools: these extensions use the object's state, which lives in AndroidDebugTools.kt.

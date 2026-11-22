@@ -15,6 +15,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.Request
 import okhttp3.Response
+import debug.swift.android.AndroidDebugTools.DelayInjectionSettings
+import debug.swift.android.AndroidDebugTools.EndpointThresholdCount
+import debug.swift.android.AndroidDebugTools.EndpointThresholdLimit
+import debug.swift.android.AndroidDebugTools.FailureInjectionSettings
+import debug.swift.android.AndroidDebugTools.NetworkFailure
+import debug.swift.android.AndroidDebugTools.NetworkInjectionSettings
+import debug.swift.android.AndroidDebugTools.NetworkRecord
+import debug.swift.android.AndroidDebugTools.NetworkRewriteRule
+import debug.swift.android.AndroidDebugTools.ReplayRequest
+import debug.swift.android.AndroidDebugTools.RewriteInjectionSettings
+import debug.swift.android.AndroidDebugTools.ThresholdBreachRecord
 
 // Network injection: delays, failures, rewrites, blocking, request thresholds and their CSV rules.
 // Part of AndroidDebugTools: these extensions use the object's state, which lives in AndroidDebugTools.kt.

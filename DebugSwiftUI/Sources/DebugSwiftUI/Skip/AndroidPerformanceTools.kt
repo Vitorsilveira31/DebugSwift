@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
 import org.json.JSONObject
+import debug.swift.android.AndroidDebugTools.DebugOverlay
 
 // Performance: live metrics, frame monitor, hangs, backtraces, leaks and StrictMode.
 // Part of AndroidDebugTools: these extensions use the object's state, which lives in AndroidDebugTools.kt.
