@@ -63,9 +63,9 @@ final class SharedPanelResources {
             }
             FileSharingManager.share(url)
             return "Sharing \(url.lastPathComponent)."
-        case ("preferences", "set_preference"), ("persistent_data", "set_preference"), ("user_defaults", "set_preference"):
+        case ("preferences", "set_preference"), ("persistent_data", "set_preference"):
             return setPreference(value)
-        case ("preferences", "delete_preference"), ("persistent_data", "delete_preference"), ("user_defaults", "delete_preference"):
+        case ("preferences", "delete_preference"), ("persistent_data", "delete_preference"):
             return deletePreference(value)
         case ("keychain", "set_keychain_item"):
             return setKeychainItem(value)

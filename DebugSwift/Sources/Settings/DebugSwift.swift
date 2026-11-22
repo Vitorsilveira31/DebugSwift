@@ -232,7 +232,7 @@ public extension DebugSwift {
     @MainActor
     static func availableResourceFeatureIDs() -> [String] {
         [
-            "files", "user_defaults", "keychain", "persistent_data", "core_data", "swift_data",
+            "files", "preferences", "keychain", "persistent_data", "core_data", "swift_data",
             "http_cookies", "database", "security_audit"
         ]
     }

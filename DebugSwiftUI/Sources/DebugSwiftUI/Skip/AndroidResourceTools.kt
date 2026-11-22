@@ -32,7 +32,7 @@ internal fun AndroidDebugTools.resourcesSnapshot(context: Context, featureID: St
             "Android Keystore aliases:\n" + store.aliases().toList().joinToString("\n").ifEmpty { "none" } + "\nPrivate key and secret bytes are not exported."
         }
         "realm" -> "Registered Realm databases:\n${DebugSwiftRealmRegistry.snapshot()}\n\nSQLite files:\n${DebugSwiftDatabaseBrowser.databaseNames(context).joinToString("\n").ifEmpty { "none" }}"
-        "sqlite", "core_data", "swift_data" -> {
+        "database", "core_data", "swift_data" -> {
             val dbs = DebugSwiftDatabaseBrowser.databaseNames(context).map { name ->
                 val file = context.getDatabasePath(name)
                 val tables = runCatching { DebugSwiftDatabaseBrowser.tables(context, name).joinToString() }.getOrDefault("unavailable")
@@ -41,7 +41,7 @@ internal fun AndroidDebugTools.resourcesSnapshot(context: Context, featureID: St
             "SQLite/Room databases in this app:\n" + dbs.joinToString("\n").ifEmpty { "No app databases found." } +
                 "\n\nRoom databases use SQLite files. Register external or custom database names to enable browsing."
         }
-        "cookies" -> {
+        "http_cookies" -> {
             val values = webViewHosts.mapNotNull { host -> CookieManager.getInstance().getCookie("https://$host")?.let { "$host\n$it" } }
             values.joinToString("\n\n").ifEmpty { "No cookies available for reported host-app WebView domains." }
         }

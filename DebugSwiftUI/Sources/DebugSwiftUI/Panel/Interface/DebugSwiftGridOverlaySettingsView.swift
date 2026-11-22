@@ -106,8 +106,7 @@ struct DebugSwiftInterfaceSettingView: View {
     private var title: String {
         switch featureID {
         case "touches": "Showing touches"
-        case "colorize": "Colorized view borders"
-        case "view_borders": "Show view borders"
+        case "view_borders": "Colorized view borders"
         case "animations": "Slow animations"
         case "dark_mode": "Dark Mode"
         case "measurement": "UI measurements"

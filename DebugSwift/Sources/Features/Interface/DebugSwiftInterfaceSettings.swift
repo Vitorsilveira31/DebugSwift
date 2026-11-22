@@ -94,7 +94,7 @@ public extension DebugSwift {
     /// panel; this returns a screen that says so, or nil for any other ID.
     @MainActor
     static func debugInterfaceViewController(for featureID: String) -> UIViewController? {
-        let titles = ["swiftui_render": "SwiftUI Render Tracking", "doc_recorder": "Documentation Recorder", "color_palette": "Color Palette"]
+        let titles = ["render_tracking": "SwiftUI Render Tracking", "doc_recorder": "Documentation Recorder", "color_palette": "Color Palette"]
         guard let title = titles[featureID] else { return nil }
         let rootController = SharedPanelOnlyViewController(
             title: title,
@@ -113,7 +113,7 @@ public extension DebugSwift {
     static func availableInterfaceFeatureIDs() -> [String] {
         var featureIDs = InterfaceViewController.Features.allCasesWithPermissions.map { feature in
             switch feature {
-            case .colorize: "colorize"
+            case .colorize: "view_borders"
             case .animations: "animations"
             case .touches: "touches"
             case .grid: "grid"
@@ -125,7 +125,7 @@ public extension DebugSwift {
         featureIDs.insert("view_hierarchy", at: 0)
         if !App.shared.disableMethods.contains(.swiftUIRender),
            FeatureHandling.enabledBetaFeatures.contains(.swiftUIRenderTracking) {
-            featureIDs.append("swiftui_render")
+            featureIDs.append("render_tracking")
         }
         featureIDs += ["doc_recorder", "color_palette"]
         return featureIDs

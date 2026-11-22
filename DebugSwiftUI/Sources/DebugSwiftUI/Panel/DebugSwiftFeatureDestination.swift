@@ -37,11 +37,11 @@ struct DebugSwiftFeatureDestination: View {
             DebugSwiftNetworkSessionHistoryView()
         } else if DebugPerformanceDestination.featureIDs.contains(feature.id) {
             DebugPerformanceDestination(featureID: feature.id)
-        } else if ["touches", "colorize", "animations", "dark_mode", "measurement"].contains(feature.id) {
+        } else if ["touches", "view_borders", "animations", "dark_mode", "measurement"].contains(feature.id) {
             DebugSwiftInterfaceSettingView(featureID: feature.id)
         } else if feature.id == "view_hierarchy" {
             DebugViewHierarchyView()
-        } else if feature.id == "swiftui_render" {
+        } else if feature.id == "render_tracking" {
             DebugComposeRendersView()
         } else if feature.id == "doc_recorder" {
             DebugDocRecorderView()
@@ -51,7 +51,7 @@ struct DebugSwiftFeatureDestination: View {
             DebugAppDestination(feature: feature)
         } else if feature.id == "files" {
             DebugFilesView(path: "")
-        } else if feature.id == "user_defaults" {
+        } else if feature.id == "preferences" {
             DebugPreferencesView(includesKeystore: false)
         } else if feature.id == "http_cookies" {
             DebugCookiesView()
@@ -86,7 +86,7 @@ struct DebugSwiftFeatureDestination: View {
             DebugPushTokenView()
         } else if feature.id == "realm" {
             DebugRealmView()
-        } else if feature.id == "compose_renders" {
+        } else if feature.id == "render_tracking" {
             DebugComposeRendersView()
         } else if feature.id == "doc_recorder" {
             DebugDocRecorderView()
@@ -96,9 +96,9 @@ struct DebugSwiftFeatureDestination: View {
             DebugPreferencesView(includesKeystore: feature.id == "persistent_data")
         } else if feature.id == "keychain" {
             DebugKeystoreView()
-        } else if ["sqlite", "core_data", "swift_data"].contains(feature.id) {
+        } else if ["database", "core_data", "swift_data"].contains(feature.id) {
             DebugDatabasesView(title: feature.title)
-        } else if feature.id == "cookies" {
+        } else if feature.id == "http_cookies" {
             DebugCookiesView()
         } else if feature.id == "security_audit" {
             DebugSwiftSecurityAuditView()

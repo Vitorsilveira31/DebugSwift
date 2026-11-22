@@ -60,23 +60,23 @@ final class SharedPanelInterface {
     func perform(featureID: String, actionID: String, value: String) -> String? {
         let tracker = SwiftUIRenderTracker.shared
         switch (featureID, actionID) {
-        case ("swiftui_render", "tracking"):
+        case ("render_tracking", "tracking"):
             // Both: the host may have switched the tracker through `DebugSwift.SwiftUIRender`,
             // which leaves the toolkit's flag as it was.
             UserInterfaceToolkit.shared.swiftUIRenderTrackingEnabled = value == "true"
             tracker.isEnabled = value == "true"
             return value == "true" ? "Render tracking on." : "Render tracking off."
-        case ("swiftui_render", "persistent"):
+        case ("render_tracking", "persistent"):
             tracker.persistentOverlays = value == "true"
             return value == "true" ? "Borders stay on screen." : "Borders fade out."
-        case ("swiftui_render", "logging"):
+        case ("render_tracking", "logging"):
             tracker.loggingEnabled = value == "true"
             return value == "true" ? "Renders are logged to the console." : "Console logging off."
-        case ("swiftui_render", "style"):
+        case ("render_tracking", "style"):
             guard let style = Self.styles.first(where: { $0.name == value })?.style else { return "Unknown style: \(value)." }
             tracker.overlayStyle = style
             return "Style set."
-        case ("swiftui_render", "clear"):
+        case ("render_tracking", "clear"):
             tracker.clearStats()
             probeRenders = 0
             history.removeAll()

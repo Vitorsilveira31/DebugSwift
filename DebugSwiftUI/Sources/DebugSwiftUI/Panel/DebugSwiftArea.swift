@@ -93,11 +93,11 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("view_hierarchy", "View Hierarchy", "Inspect the app window's UIKit and SwiftUI views, their frames and text."),
                 .init("touches", "Showing touches", "Show touch feedback in the active app window."),
                 .init("grid", "Grid overlay", "Draw a configurable alignment grid over the active app window."),
-                .init("colorize", "Colorized view borders", "Colorize native view borders to help identify layout boundaries."),
+                .init("view_borders", "Colorized view borders", "Colorize native view borders to help identify layout boundaries."),
                 .init("animations", "Slow animations", "Slow app animations to inspect transitions and motion."),
                 .init("dark_mode", "Dark Mode", "Override the active app window appearance."),
                 .init("measurement", "UI measurements", "Show element positions, sizes, and spacing."),
-                .init("swiftui_render", "SwiftUI render tracking", "Count SwiftUI renders and outline each view as it renders."),
+                .init("render_tracking", "SwiftUI render tracking", "Count SwiftUI renders and outline each view as it renders."),
                 .init("doc_recorder", "Documentation Recorder", "Capture taps and scrolls, then save a screenshot annotated with numbered markers and arrows."),
                 .init("color_palette", "Color Palette", "Sample the colors of the app's screen, ranked by how much of it they cover.")
             ].filter { availableIDs.contains($0.id) }
@@ -109,7 +109,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("view_borders", "View Borders", "Outline visible native views to locate spacing and clipping issues."),
                 .init("animation_control", "Animation Settings", "Inspect the system animation scales and open Android Developer options to change them."),
                 .init("dark_mode", "Dark Mode", "Override the host app appearance or follow the Android system setting."),
-                .init("compose_renders", "Compose Render Tracking", "Record Compose composition activity and retain render counts."),
+                .init("render_tracking", "Compose Render Tracking", "Record Compose composition activity and retain render counts."),
                 .init("doc_recorder", "Documentation Recorder", "Capture taps and scrolls, then save a screenshot annotated with numbered markers and arrows."),
                 .init("measurement", "Measurement Tool", "Inspect element positions, sizes, and spacing in the active window."),
                 .init("color_palette", "Color Palette", "Sample colors from a captured screen image and export the palette.")
@@ -120,7 +120,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
             let availableIDs = Set(DebugSwift.availableResourceFeatureIDs())
             return [
                 .init("files", "Files", "Browse files in the app sandbox and shared containers."),
-                .init("user_defaults", "User Defaults", "Inspect and compare registered preferences."),
+                .init("preferences", "User Defaults", "Inspect and compare registered preferences."),
                 .init("keychain", "Keychain", "Browse app keychain items."),
                 .init("persistent_data", "Persistent Data", "Inspect persistent app data."),
                 .init("core_data", "Core Data", "Browse Core Data stores and entities."),
@@ -135,11 +135,11 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("preferences", "Preferences", "View and manage registered Android SharedPreferences values."),
                 .init("keychain", "Secure Storage", "Inspect aliases in Android Keystore without exposing private key material."),
                 .init("persistent_data", "Persistent Data", "Inspect app preferences and Android Keystore aliases together."),
-                .init("sqlite", "Database Browser", "Browse SQLite tables, rows, and run SQL queries."),
+                .init("database", "Database Browser", "Browse SQLite tables, rows, and run SQL queries."),
                 .init("realm", "Realm Browser", "Inspect Realm databases registered by the host app."),
                 .init("core_data", "Room Database", "Browse the Android database layer, including registered Room databases."),
                 .init("swift_data", "Object Store", "Inspect SQLite or Room storage used in place of SwiftData on Android."),
-                .init("cookies", "HTTP Cookies", "Inspect WebView cookies for app-owned domains."),
+                .init("http_cookies", "HTTP Cookies", "Inspect WebView cookies for app-owned domains."),
                 .init("security_audit", "Security Audit", "Check app preferences, manifest metadata, bundled credentials, and private text files for sensitive data.")
             ]
             #endif

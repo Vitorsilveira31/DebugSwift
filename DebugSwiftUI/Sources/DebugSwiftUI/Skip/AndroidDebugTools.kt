@@ -586,8 +586,8 @@ object AndroidDebugTools {
         return when (featureID) {
             "http", "websocket", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network", "network_history" -> networkSnapshot(featureID)
             "performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls" -> performanceSnapshot(context, featureID)
-            "view_hierarchy", "grid", "touches", "view_borders", "animation_control", "dark_mode", "compose_renders", "doc_recorder", "measurement", "color_palette" -> interfaceSnapshot(context, featureID)
-            "files", "preferences", "keychain", "persistent_data", "sqlite", "realm", "core_data", "swift_data", "cookies", "security_audit" -> resourcesSnapshot(context, featureID)
+            "view_hierarchy", "grid", "touches", "view_borders", "animation_control", "dark_mode", "render_tracking", "doc_recorder", "measurement", "color_palette" -> interfaceSnapshot(context, featureID)
+            "files", "preferences", "keychain", "persistent_data", "database", "realm", "core_data", "swift_data", "http_cookies", "security_audit" -> resourcesSnapshot(context, featureID)
             "crashes", "console", "oslog_console", "device_info", "push_token", "push_simulator", "custom_actions", "custom_info", "deep_links", "loaded_libraries", "location", "event_bus", "agent_debug_log" -> appSnapshot(context, featureID)
             else -> "Unknown DebugSwift tool: $featureID"
         }
@@ -1048,6 +1048,8 @@ object AndroidDebugTools {
                 lastRecordingPath = ""
             }
             "color_palette" -> lastPalette = emptyList()
+            // The render tracking screen's "Clear counts", as interface.compose.clear does.
+            "render_tracking" -> composeRenderCount = 0L
             "push_simulator" -> return clearPushHistory()
             else -> {
                 return "$featureID has no history to clear."
@@ -1126,7 +1128,7 @@ object AndroidDebugTools {
             "preferences", "persistent_data" -> File(context.cacheDir, "debugswift-${featureID}-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
             "push_simulator" -> File(context.cacheDir, "debugswift-push-notifications-${System.currentTimeMillis()}.txt").apply { writeText(pushNotificationSnapshot(context, showAllHistory = true)) }
             "color_palette" -> File(context.cacheDir, "debugswift-palette-${System.currentTimeMillis()}.txt").apply { writeText(lastPalette.joinToString("\n")) }
-            "sqlite", "core_data", "swift_data" -> File(context.cacheDir, "debugswift-resources-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
+            "database", "core_data", "swift_data" -> File(context.cacheDir, "debugswift-resources-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
             "doc_recorder" -> File(lastRecordingPath).takeIf { lastRecordingPath.isNotEmpty() && it.exists() }
             else -> null
         }
