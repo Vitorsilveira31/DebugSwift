@@ -210,9 +210,11 @@ public struct NetworkSanitizer: Sendable {
               let start = Self.xmlStartTagPattern.firstMatch(
                   in: attributesMasked, range: NSRange(location: position, length: source.length - position)
               ) {
-            let name = source.substring(with: start.range(at: 1))
             let contentStart = start.range.location + start.range.length
             position = contentStart
+            // A tag written inside a CDATA section, comment or processing instruction isn't one.
+            guard !Self.isNonMarkup(start, in: source) else { continue }
+            let name = source.substring(with: start.range(at: 1))
             guard masked(name) else { continue }
             result += source.substring(with: NSRange(location: cursor, length: contentStart - cursor))
             result += Self.xmlRedactedValue
@@ -229,9 +231,9 @@ public struct NetworkSanitizer: Sendable {
     /// elements of the same name, or `nil` when the document ends before it.
     private static func closingTag(named name: String, in source: NSString, from location: Int) -> NSRange? {
         let escaped = NSRegularExpression.escapedPattern(for: name)
-        // CDATA sections and comments come first, so a tag written inside one isn't counted; one
-        // left open runs to the end, and so does the element.
-        let pattern = #"<!\[CDATA\[.*?(?:\]\]>|\z)|<!--.*?(?:-->|\z)|<(/)?"# + escaped
+        // CDATA sections, comments and processing instructions come first, so a tag written inside
+        // one isn't counted; one left open runs to the end, and so does the element.
+        let pattern = Self.xmlNonMarkup + #"|<(/)?"# + escaped
             + #"(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?(/)?>"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
         var depth = 1
@@ -239,7 +241,7 @@ public struct NetworkSanitizer: Sendable {
         // Enumerated, not collected: the scan stops at the closing tag instead of reading every
         // later sibling.
         regex.enumerateMatches(in: source as String, range: NSRange(location: location, length: source.length - location)) { match, _, stop in
-            guard let match, source.character(at: match.range.location + 1) != 0x21 else { return } // `<!`: CDATA or comment
+            guard let match, !Self.isNonMarkup(match, in: source) else { return }
             if match.range(at: 1).location != NSNotFound {
                 depth -= 1
                 if depth == 0 {
@@ -266,9 +268,22 @@ public struct NetworkSanitizer: Sendable {
         pattern: #"<[A-Za-z_][\w.:-]*(?:\s(?:[^<>"']|"[^"<]*"|'[^'<]*')*(?:"[^"<]*|'[^'<]*)?)?(?:>|(?=<)|\z)"#
     )
 
-    /// A start tag that isn't self-closing: its name (group 1). Quoted attribute values may hold `>`.
+    /// A CDATA section, comment or processing instruction, matched before tags so their text is
+    /// skipped; one left open runs to the end of the document.
+    private static let xmlNonMarkup = #"<!\[CDATA\[.*?(?:\]\]>|\z)|<!--.*?(?:-->|\z)|<\?.*?(?:\?>|\z)"#
+
+    /// Whether a match of a pattern that starts with `xmlNonMarkup` is one of those, not a tag.
+    private static func isNonMarkup(_ match: NSTextCheckingResult, in source: NSString) -> Bool {
+        guard match.range.length > 1 else { return false }
+        let next = source.character(at: match.range.location + 1)
+        return next == 0x21 || next == 0x3F // `<!` or `<?`
+    }
+
+    /// A start tag that isn't self-closing: its name (group 1), after the non-markup it skips.
+    /// Quoted attribute values may hold `>`.
     private static let xmlStartTagPattern = try! NSRegularExpression(
-        pattern: #"<([A-Za-z_][\w.:-]*)(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?>"#
+        pattern: xmlNonMarkup + #"|<([A-Za-z_][\w.:-]*)(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?>"#,
+        options: [.dotMatchesLineSeparators]
     )
 
     /// The host's redactor over text whose type is unknown; output that isn't UTF-8 becomes the

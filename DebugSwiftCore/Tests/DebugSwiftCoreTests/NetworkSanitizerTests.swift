@@ -237,4 +237,12 @@ struct NetworkSanitizerTests {
         let body = String(repeating: "<password>x</password>", count: 2_000)
         #expect(xml(body) == String(repeating: "<password>&lt;redacted&gt;</password>", count: 2_000))
     }
+
+    @Test func processingInstructionsCommentsAndCDATAHoldNoTags() {
+        #expect(xml("<password><?pi </password> ?>hunter2</password>") == "<password>&lt;redacted&gt;</password>")
+        let comment = "<root><!-- <password> --><user>ana</user></root>"
+        #expect(xml(comment) == comment)
+        let cdata = "<root><![CDATA[<password>]]>ana</root>"
+        #expect(xml(cdata) == cdata)
+    }
 }
