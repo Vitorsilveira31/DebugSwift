@@ -516,6 +516,35 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun okHttpXMLNamesItsEncodingInTheDeclaration() {
+        // ISO-8859-1 named only by the XML declaration, and a key outside ASCII: DebugSwiftCore reads
+        // the bytes as the declaration says, so the key matches and the value is masked.
+        val marker = java.util.UUID.randomUUID().toString().take(8)
+        debug.swift.android.DebugSwiftNetworkSanitizer.configure(
+            bodyKeys = debug.swift.android.DebugSwiftNetworkSanitizer.defaultBodyKeys + "contraseña"
+        )
+        try {
+            val client = okhttp3.OkHttpClient.Builder()
+                .addInterceptor(debug.swift.android.DebugSwiftOkHttpInterceptor())
+                .addInterceptor { chain ->
+                    okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                        .code(200).message("OK").body("".toResponseBody("text/plain".toMediaType())).build()
+                }
+                .build()
+            val xml = "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><contraseña>latin-secret-$marker</contraseña>"
+            client.newCall(okhttp3.Request.Builder().url("https://api.example.test/latin-$marker")
+                .post(xml.toByteArray(Charsets.ISO_8859_1).toRequestBody("application/xml".toMediaType())).build()).execute().close()
+
+            val rows = org.json.JSONObject(AndroidDebugTools.networkInspectorSnapshotJSON("http")).getJSONArray("requests")
+            val body = (0 until rows.length()).map { rows.getJSONObject(it) }
+                .last { it.getString("url").endsWith("latin-$marker") }.getString("requestBody")
+            assertEquals("<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><contraseña>&lt;redacted&gt;</contraseña>", body)
+        } finally {
+            debug.swift.android.DebugSwiftNetworkSanitizer.configure(bodyKeys = debug.swift.android.DebugSwiftNetworkSanitizer.defaultBodyKeys)
+        }
+    }
+
+    @Test
     fun pushStateComesBackExactlyAfterAReload() {
         fun state() = org.json.JSONObject(AndroidDebugTools.pushStateJSON())
         val preferences = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
