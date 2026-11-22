@@ -299,7 +299,7 @@ struct NetworkSanitizerTests {
     }
 
     @Test func utf16XMLWithoutAByteOrderMarkIsRecognized() {
-        for encoding in [String.Encoding.utf16LittleEndian, .utf16BigEndian] {
+        for encoding in [String.Encoding.utf16LittleEndian, .utf16BigEndian, .utf32LittleEndian, .utf32BigEndian] {
             let body = "<password>hunter2</password>".data(using: encoding)!
             #expect(String(data: sanitizer.sanitize(body: body, contentType: "application/xml"), encoding: encoding)
                 == "<password>&lt;redacted&gt;</password>")

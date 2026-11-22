@@ -218,8 +218,11 @@ public struct NetworkSanitizer: Sendable {
         for (mark, encoding) in marks where body.starts(with: mark) {
             return (encoding, Data(mark), true)
         }
-        // XML in UTF-16 without a byte order mark starts with `<` and a NUL (XML 1.0, appendix F).
+        // XML without a byte order mark starts with `<` and NULs in UTF-32 or UTF-16 (XML 1.0,
+        // appendix F); UTF-32 first, since UTF-32LE's `<` starts like UTF-16LE's.
         if xml, body.count >= 2 {
+            if body.starts(with: [0x3C, 0x00, 0x00, 0x00]) { return (.utf32LittleEndian, Data(), true) }
+            if body.starts(with: [0x00, 0x00, 0x00, 0x3C]) { return (.utf32BigEndian, Data(), true) }
             if body.starts(with: [0x3C, 0x00]) { return (.utf16LittleEndian, Data(), true) }
             if body.starts(with: [0x00, 0x3C]) { return (.utf16BigEndian, Data(), true) }
         }
