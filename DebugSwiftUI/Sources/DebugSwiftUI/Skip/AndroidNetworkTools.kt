@@ -21,76 +21,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import debug.swift.android.AndroidDebugTools.NetworkRecord
-import debug.swift.android.AndroidDebugTools.ReplayRequest
 
 // Network capture: records, history, the inspector screens, HAR export and replay.
 // Part of AndroidDebugTools: these extensions use the object's state, which lives in AndroidDebugTools.kt.
-
-fun AndroidDebugTools.recordNetwork(
-    method: String,
-    url: String,
-    status: Int,
-    durationMs: Long,
-    requestBytes: Long,
-    responseBytes: Long,
-    requestBody: String,
-    responseBody: String,
-    error: String = "",
-    requestHeaders: Map<String, List<String>> = emptyMap(),
-    responseHeaders: Map<String, List<String>> = emptyMap(),
-    source: String = "http",
-    decryptedResponseBody: String? = null
-) {
-    if (!networkAccepts(url)) return
-    if (source == "webview" && !webViewCaptureEnabled) return
-    val graphOperation = graphqlOperation(requestBody)
-    // Mask before storing: the list, the history file, HAR, cURL and the agent log all read
-    // this record. Only replay needs the original request, so it stays in memory alone.
-    val masked = DebugSwiftNetworkSanitizer.sanitize(
-        url = url,
-        requestHeaders = requestHeaders,
-        responseHeaders = responseHeaders,
-        requestBody = requestBody,
-        responseBody = responseBody,
-        decryptedResponseBody = decryptedResponseBody?.takeIf { it.isNotEmpty() }
-            ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty()
-    )
-    val record = NetworkRecord(
-            System.currentTimeMillis(), method, masked.url, status, durationMs,
-            requestBytes, responseBytes,
-            masked.requestHeaders, masked.responseHeaders,
-            masked.requestBody.take(32_000),
-            masked.responseBody.take(64_000),
-            masked.decryptedResponseBody.take(64_000),
-            error, graphOperation, source
-        )
-    rememberReplayRequest(record.id, ReplayRequest(url, requestHeaders, requestBody))
-    networkRecords.add(record)
-    // The WebView limit first, so a new WebView record does not push out an HTTP one.
-    if (source == "webview") trimWebViewRecords()
-    trim(networkRecords)
-    if (isPersistableNetworkRecord(record)) {
-        networkHistoryRecords.add(record)
-        trimNetworkHistory()
-        persistNetworkHistory()
-    }
-    appendAgentEntry(
-        kind = "network",
-        location = "OkHttp/$source",
-        message = "$method ${masked.url} ($status)",
-        data = mapOf(
-            "method" to method,
-            "url" to masked.url,
-            "status" to status,
-            "durationMs" to durationMs,
-            "requestBytes" to requestBytes,
-            "responseBytes" to responseBytes,
-            "error" to error
-        )
-    )
-    recordThresholdRequest(url)
-    publishEvent("network", "$method ${masked.url} ($status, ${durationMs}ms)")
-}
 
 fun AndroidDebugTools.exportHar(featureID: String = "network_history"): File? {
     val context = appContext ?: return null

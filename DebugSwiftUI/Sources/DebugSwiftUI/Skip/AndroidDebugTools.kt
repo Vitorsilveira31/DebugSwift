@@ -761,6 +761,72 @@ object AndroidDebugTools {
         publishEvent("app", message)
     }
 
+    fun recordNetwork(
+        method: String,
+        url: String,
+        status: Int,
+        durationMs: Long,
+        requestBytes: Long,
+        responseBytes: Long,
+        requestBody: String,
+        responseBody: String,
+        error: String = "",
+        requestHeaders: Map<String, List<String>> = emptyMap(),
+        responseHeaders: Map<String, List<String>> = emptyMap(),
+        source: String = "http",
+        decryptedResponseBody: String? = null
+    ) {
+        if (!networkAccepts(url)) return
+        if (source == "webview" && !webViewCaptureEnabled) return
+        val graphOperation = graphqlOperation(requestBody)
+        // Mask before storing: the list, the history file, HAR, cURL and the agent log all read
+        // this record. Only replay needs the original request, so it stays in memory alone.
+        val masked = DebugSwiftNetworkSanitizer.sanitize(
+            url = url,
+            requestHeaders = requestHeaders,
+            responseHeaders = responseHeaders,
+            requestBody = requestBody,
+            responseBody = responseBody,
+            decryptedResponseBody = decryptedResponseBody?.takeIf { it.isNotEmpty() }
+                ?: DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty()
+        )
+        val record = NetworkRecord(
+                System.currentTimeMillis(), method, masked.url, status, durationMs,
+                requestBytes, responseBytes,
+                masked.requestHeaders, masked.responseHeaders,
+                masked.requestBody.take(32_000),
+                masked.responseBody.take(64_000),
+                masked.decryptedResponseBody.take(64_000),
+                error, graphOperation, source
+            )
+        rememberReplayRequest(record.id, ReplayRequest(url, requestHeaders, requestBody))
+        networkRecords.add(record)
+        // The WebView limit first, so a new WebView record does not push out an HTTP one.
+        if (source == "webview") trimWebViewRecords()
+        trim(networkRecords)
+        if (isPersistableNetworkRecord(record)) {
+            networkHistoryRecords.add(record)
+            trimNetworkHistory()
+            persistNetworkHistory()
+        }
+        appendAgentEntry(
+            kind = "network",
+            location = "OkHttp/$source",
+            message = "$method ${masked.url} ($status)",
+            data = mapOf(
+                "method" to method,
+                "url" to masked.url,
+                "status" to status,
+                "durationMs" to durationMs,
+                "requestBytes" to requestBytes,
+                "responseBytes" to responseBytes,
+                "error" to error
+            )
+        )
+        recordThresholdRequest(url)
+        publishEvent("network", "$method ${masked.url} ($status, ${durationMs}ms)")
+    }
+
     /** The unmasked request behind a stored record, kept in memory only so replay can resend it. */
     internal data class ReplayRequest(
         val url: String,
@@ -871,6 +937,45 @@ object AndroidDebugTools {
 
     /** The last event recorded, by its down time, event time and action. */
     internal var lastTouch: Triple<Long, Long, Int>? = null
+
+    fun recordTouch(event: MotionEvent) {
+        // When another library wraps the window callback after DebugSwift, a later install wraps it
+        // again, and each event reaches here twice: record it once.
+        val identity = Triple(event.downTime, event.eventTime, event.actionMasked)
+        if (identity == lastTouch) return
+        lastTouch = identity
+        val point = localTouchPosition(event)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                activeTouchStart = point
+                recentTouches.add(point)
+            }
+            MotionEvent.ACTION_MOVE -> recentTouches.add(point)
+            MotionEvent.ACTION_UP -> {
+                recentTouches.add(point)
+                val start = activeTouchStart ?: point
+                val dx = point.first - start.first
+                val dy = point.second - start.second
+                val density = appContext?.resources?.displayMetrics?.density ?: 1f
+                val threshold = 24f * density
+                val kind = if (dx * dx + dy * dy >= threshold * threshold) "scroll" else "tap"
+                if (documentationRecording) {
+                    recordedInteractions.add(RecordedInteraction(kind, start.first, start.second, point.first, point.second))
+                    trim(recordedInteractions)
+                }
+                appendAgentEntry(
+                    kind = "event",
+                    location = "Interface/$kind",
+                    message = if (kind == "tap") "Tap recorded" else "Scroll gesture recorded",
+                    data = mapOf("x" to point.first, "y" to point.second, "startX" to start.first, "startY" to start.second)
+                )
+                activeTouchStart = null
+            }
+            MotionEvent.ACTION_CANCEL -> activeTouchStart = null
+        }
+        while (recentTouches.size > 24) recentTouches.removeAt(0)
+        debugOverlay?.invalidate()
+    }
 
     /** Sockets whose rows the history clear removed: their later callbacks do not bring the rows back. */
     internal val clearedWebSockets: MutableSet<WebSocket> =
@@ -1124,6 +1229,16 @@ object AndroidDebugTools {
     internal var previousFrameCount = 0L
     internal var previousCpuTimeMs = 0L
     internal var previousWallTimeMs = 0L
+
+    @Synchronized internal fun cpuUsage(currentCpuMs: Long = Process.getElapsedCpuTime()): Double {
+        val now = SystemClock.elapsedRealtime()
+        val elapsed = now - previousWallTimeMs
+        val cpu = currentCpuMs - previousCpuTimeMs
+        previousWallTimeMs = now
+        previousCpuTimeMs = currentCpuMs
+        if (elapsed <= 0L || cpu < 0L) return cpuUsagePercent
+        return ((cpu.toDouble() / elapsed) * 100.0 / Runtime.getRuntime().availableProcessors()).coerceIn(0.0, 100.0)
+    }
 
     internal class DebugOverlay(context: Context) : View(context) {
         private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = gridColor; strokeWidth = 1f }

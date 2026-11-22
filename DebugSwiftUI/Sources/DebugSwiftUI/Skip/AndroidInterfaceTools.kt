@@ -126,45 +126,6 @@ fun AndroidDebugTools.recordWebViewHost(host: String) {
     if (host.isNotBlank() && host !in webViewHosts) webViewHosts.add(host)
 }
 
-fun AndroidDebugTools.recordTouch(event: MotionEvent) {
-    // When another library wraps the window callback after DebugSwift, a later install wraps it
-    // again, and each event reaches here twice: record it once.
-    val identity = Triple(event.downTime, event.eventTime, event.actionMasked)
-    if (identity == lastTouch) return
-    lastTouch = identity
-    val point = localTouchPosition(event)
-    when (event.actionMasked) {
-        MotionEvent.ACTION_DOWN -> {
-            activeTouchStart = point
-            recentTouches.add(point)
-        }
-        MotionEvent.ACTION_MOVE -> recentTouches.add(point)
-        MotionEvent.ACTION_UP -> {
-            recentTouches.add(point)
-            val start = activeTouchStart ?: point
-            val dx = point.first - start.first
-            val dy = point.second - start.second
-            val density = appContext?.resources?.displayMetrics?.density ?: 1f
-            val threshold = 24f * density
-            val kind = if (dx * dx + dy * dy >= threshold * threshold) "scroll" else "tap"
-            if (documentationRecording) {
-                recordedInteractions.add(RecordedInteraction(kind, start.first, start.second, point.first, point.second))
-                trim(recordedInteractions)
-            }
-            appendAgentEntry(
-                kind = "event",
-                location = "Interface/$kind",
-                message = if (kind == "tap") "Tap recorded" else "Scroll gesture recorded",
-                data = mapOf("x" to point.first, "y" to point.second, "startX" to start.first, "startY" to start.second)
-            )
-            activeTouchStart = null
-        }
-        MotionEvent.ACTION_CANCEL -> activeTouchStart = null
-    }
-    while (recentTouches.size > 24) recentTouches.removeAt(0)
-    debugOverlay?.invalidate()
-}
-
 internal fun AndroidDebugTools.localTouchPosition(event: MotionEvent): Pair<Float, Float> {
     val offset = IntArray(2)
     foregroundActivity.get()?.window?.decorView?.getLocationOnScreen(offset)

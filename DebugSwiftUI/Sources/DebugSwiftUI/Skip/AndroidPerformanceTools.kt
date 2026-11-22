@@ -280,18 +280,6 @@ fun AndroidDebugTools.recordComposeRender() {
     composeRenderCount++
 }
 
-internal fun AndroidDebugTools.cpuUsage(currentCpuMs: Long = Process.getElapsedCpuTime()): Double {
-    return synchronized(this) {
-        val now = SystemClock.elapsedRealtime()
-        val elapsed = now - previousWallTimeMs
-        val cpu = currentCpuMs - previousCpuTimeMs
-        previousWallTimeMs = now
-        previousCpuTimeMs = currentCpuMs
-        if (elapsed <= 0L || cpu < 0L) return cpuUsagePercent
-        return ((cpu.toDouble() / elapsed) * 100.0 / Runtime.getRuntime().availableProcessors()).coerceIn(0.0, 100.0)
-    }
-}
-
 internal fun AndroidDebugTools.startFrameMonitor() {
     if (Looper.myLooper() != Looper.getMainLooper()) {
         mainHandler.post { startFrameMonitor() }
