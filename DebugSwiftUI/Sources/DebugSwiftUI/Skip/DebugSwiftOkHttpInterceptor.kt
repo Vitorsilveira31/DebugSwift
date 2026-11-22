@@ -36,10 +36,10 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         val requestBody = runCatching {
             val buffer = Buffer()
             request.body?.writeTo(buffer)
-            // Read in the request's declared charset, as OkHttp reads responses, so a UTF-16 body
-            // is text the masker can read.
-            val charset = request.body?.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
-            if (buffer.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(buffer.size) else buffer.readString(charset)
+            // Read in the body's byte order mark or else the request's declared charset, as OkHttp
+            // reads responses, so a UTF-16 body is text the masker can read.
+            if (buffer.size > INSPECTED_BODY_LIMIT) tooLargeToKeep(buffer.size)
+            else buffer.readString(bomCharset(buffer) ?: request.body?.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8)
         }.getOrDefault("")
         val requestBytes = request.body?.contentLength()?.takeIf { it >= 0 } ?: 0L
 
@@ -155,5 +155,23 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         "cancelled" -> InterruptedIOException("The request was cancelled.")
         "custom" -> IOException("${failure.customDomain} (${failure.customCode}): ${failure.customDescription}")
         else -> IOException("Failure injected by DebugSwift.")
+    }
+
+    /** The charset a byte order mark at the start of the buffer names, the mark consumed; null without one. */
+    private fun bomCharset(buffer: Buffer): java.nio.charset.Charset? {
+        val marks = listOf(
+            byteArrayOf(0xFF.toByte(), 0xFE.toByte(), 0, 0) to java.nio.charset.Charset.forName("UTF-32LE"),
+            byteArrayOf(0, 0, 0xFE.toByte(), 0xFF.toByte()) to java.nio.charset.Charset.forName("UTF-32BE"),
+            byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) to Charsets.UTF_8,
+            byteArrayOf(0xFE.toByte(), 0xFF.toByte()) to Charsets.UTF_16BE,
+            byteArrayOf(0xFF.toByte(), 0xFE.toByte()) to Charsets.UTF_16LE
+        )
+        for ((mark, charset) in marks) {
+            if (buffer.size >= mark.size && (mark.indices).all { buffer[it.toLong()] == mark[it] }) {
+                buffer.skip(mark.size.toLong())
+                return charset
+            }
+        }
+        return null
     }
 }

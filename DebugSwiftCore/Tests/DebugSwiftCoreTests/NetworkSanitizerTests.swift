@@ -359,4 +359,10 @@ struct NetworkSanitizerTests {
         let body = #"<!DOCTYPE r [<?pi <password> ]> ?>]><r>ana</r>"#
         #expect(xml(body) == body)
     }
+
+    @Test func aLongXMLDeclarationIsReadWhole() {
+        let padding = String(repeating: " ", count: 300)
+        let body = Data("<?xml version=\"1.0\"\(padding)encoding=\"utf-7\"?>+ADw-password+AD4-hunter2+ADw-/password+AD4-".utf8)
+        #expect(sanitizer.sanitize(body: body, contentType: "application/xml") == Data("<redacted>".utf8))
+    }
 }

@@ -234,7 +234,10 @@ public struct NetworkSanitizer: Sendable {
             if body.starts(with: [0x00, 0x3C]) { return (.utf16BigEndian, Data(), true) }
         }
         var name = contentType.flatMap(charsetParameter)
-        if name == nil, xml, let head = String(data: body.prefix(200), encoding: .isoLatin1),
+        // The declaration is read through its `?>`, however much whitespace it holds.
+        if name == nil, xml, body.starts(with: Array("<?xml".utf8)),
+           let end = body.range(of: Data("?>".utf8)),
+           let head = String(data: body[body.startIndex ..< end.upperBound], encoding: .isoLatin1),
            let match = xmlEncodingPattern.firstMatch(in: head, range: NSRange(location: 0, length: (head as NSString).length)) {
             name = (head as NSString).substring(with: match.range(at: 1))
         }
