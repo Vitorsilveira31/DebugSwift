@@ -3,6 +3,7 @@ package debug.swift.example
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import debug.swift.android.AndroidDebugTools
+import debug.swift.android.pushStateJSON
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertTrue
