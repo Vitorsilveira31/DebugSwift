@@ -65,7 +65,7 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         }
         if (injectedFailure != null) {
             val failure = networkIOException(injectedFailure)
-            AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", failure.message ?: "network error", request.headers.toMultimap())
+            AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", failure.message ?: "network error", recordedRequestHeaders(request))
             throw failure
         }
 
@@ -81,7 +81,7 @@ class DebugSwiftOkHttpInterceptor : Interceptor {
         val response = try {
             chain.proceed(request)
         } catch (error: IOException) {
-            AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", error.message ?: "network error", request.headers.toMultimap())
+            AndroidDebugTools.recordNetwork(request.method, url, 0, SystemClock.elapsedRealtime() - start, requestBytes, 0, requestBody, "", error.message ?: "network error", recordedRequestHeaders(request))
             throw error
         }
         // The response's own size, kept apart from the text recorded for it: a body too large to keep
