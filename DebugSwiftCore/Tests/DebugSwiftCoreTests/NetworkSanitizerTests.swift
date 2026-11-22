@@ -261,4 +261,31 @@ struct NetworkSanitizerTests {
         #expect(String(data: text, encoding: .utf8) == "password=<redacted>")
         #expect(xml("<password>x</password>", type: #"application/soap+xml; action="urn:json""#) == "<password>&lt;redacted&gt;</password>")
     }
+
+    @Test func textBodiesAreMaskedInTheirDeclaredEncoding() {
+        let utf16 = Data([0xFF, 0xFE]) + "<password>hunter2</password>".data(using: .utf16LittleEndian)!
+        let masked16 = sanitizer.sanitize(body: utf16, contentType: "application/xml; charset=utf-16")
+        #expect(masked16.starts(with: [0xFF, 0xFE]))
+        #expect(String(data: masked16.dropFirst(2), encoding: .utf16LittleEndian) == "<password>&lt;redacted&gt;</password>")
+        let latin1 = "café password=hunter2".data(using: .isoLatin1)!
+        let maskedLatin1 = sanitizer.sanitize(body: latin1, contentType: "text/plain; charset=iso-8859-1")
+        #expect(String(data: maskedLatin1, encoding: .isoLatin1) == "café password=<redacted>")
+        let declared = #"<?xml version="1.0" encoding="ISO-8859-1"?><password>é</password>"#.data(using: .isoLatin1)!
+        #expect(String(data: sanitizer.sanitize(body: declared, contentType: "text/xml"), encoding: .isoLatin1)
+            == #"<?xml version="1.0" encoding="ISO-8859-1"?><password>&lt;redacted&gt;</password>"#)
+        // Without a declared encoding, a body that isn't UTF-8 is read byte for byte.
+        let undeclared = "café password=hunter2".data(using: .windowsCP1252)!
+        #expect(sanitizer.sanitize(body: undeclared, contentType: "text/plain")
+            == "café password=<redacted>".data(using: .windowsCP1252)!)
+        // Bytes the declared encoding can't read are replaced, not passed through.
+        let invalid = Data([0x70, 0x3D, 0xFF, 0xFE, 0xFD])
+        #expect(sanitizer.sanitize(body: invalid, contentType: "text/plain; charset=utf-8") == Data("<redacted>".utf8))
+    }
+
+    @Test func aDOCTYPEIsSkippedWithItsLiterals() {
+        #expect(xml(#"<!DOCTYPE r [<!ENTITY e "<!--">]><r><password>hunter2</password></r>"#)
+            == #"<!DOCTYPE r [<!ENTITY e "<!--">]><r><password>&lt;redacted&gt;</password></r>"#)
+        let entity = #"<!DOCTYPE r [<!ENTITY e '<password>'>]><r>ana</r>"#
+        #expect(xml(entity) == entity)
+    }
 }

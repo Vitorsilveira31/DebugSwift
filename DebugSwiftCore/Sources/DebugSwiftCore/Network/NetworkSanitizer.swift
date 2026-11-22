@@ -126,12 +126,10 @@ public struct NetworkSanitizer: Sendable {
                 }
             } else if type.isEmpty || type.contains("json") {
                 result = sanitizeJSON(body) ?? body
-            } else if type.contains("xml"), let text = String(data: body, encoding: .utf8) {
-                let masked = maskingXML(text)
-                if masked != text { result = Data(masked.utf8) }
-            } else if type.hasPrefix("text/"), let text = String(data: body, encoding: .utf8) {
-                let masked = maskingKeys(inUnformattedText: text)
-                if masked != text { result = Data(masked.utf8) }
+            } else if type.contains("xml") {
+                result = maskingText(body, contentType: contentType, xml: true) { maskingXML($0) }
+            } else if type.hasPrefix("text/") {
+                result = maskingText(body, contentType: contentType, xml: false) { maskingKeys(inUnformattedText: $0) }
             }
         }
         if let customBodyRedactor {
@@ -172,6 +170,61 @@ public struct NetworkSanitizer: Sendable {
         guard cursor > 0 else { return text }
         return result + source.substring(from: cursor)
     }
+
+    /// Decodes a text body in its declared encoding, masks it and writes it back in that encoding.
+    /// The encoding comes from a byte order mark, the `charset` parameter or, for XML, the
+    /// declaration's `encoding`, else UTF-8, or Latin-1 when nothing declared one and the body
+    /// isn't UTF-8. A body that its declared encoding can't decode is replaced by the placeholder:
+    /// unread text could hold anything.
+    private func maskingText(_ body: Data, contentType: String?, xml: Bool, mask: (String) -> String) -> Data {
+        var (encoding, bom, declared) = Self.textEncoding(of: body, contentType: contentType, xml: xml)
+        var decoded = String(data: body.dropFirst(bom.count), encoding: encoding)
+        if decoded == nil, !declared {
+            // Nothing said it's UTF-8: read it as Latin-1, which takes any byte and writes it back
+            // unchanged, so the ASCII keys are still found.
+            encoding = .isoLatin1
+            decoded = String(data: body, encoding: encoding)
+        }
+        guard let text = decoded else { return Data(Self.redactedValue.utf8) }
+        let masked = mask(text)
+        guard masked != text else { return body }
+        guard let data = masked.data(using: encoding, allowLossyConversion: false) else {
+            return Data(Self.redactedValue.utf8)
+        }
+        return bom + data
+    }
+
+    /// The encoding of a text body, the byte order mark it starts with, if any, and whether the
+    /// encoding was declared (a mark, a `charset` or an XML `encoding`).
+    private static func textEncoding(of body: Data, contentType: String?, xml: Bool) -> (String.Encoding, Data, Bool) {
+        let marks: [([UInt8], String.Encoding)] = [
+            ([0xEF, 0xBB, 0xBF], .utf8), ([0xFF, 0xFE], .utf16LittleEndian), ([0xFE, 0xFF], .utf16BigEndian)
+        ]
+        for (mark, encoding) in marks where body.starts(with: mark) {
+            return (encoding, Data(mark), true)
+        }
+        var name = contentType?.split(separator: ";").dropFirst()
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.lowercased().hasPrefix("charset=") }
+            .map { String($0.dropFirst("charset=".count)).trimmingCharacters(in: CharacterSet(charactersIn: "\"' ")) }
+        if name == nil, xml, let head = String(data: body.prefix(200), encoding: .isoLatin1),
+           let match = xmlEncodingPattern.firstMatch(in: head, range: NSRange(location: 0, length: (head as NSString).length)) {
+            name = (head as NSString).substring(with: match.range(at: 1))
+        }
+        switch name?.lowercased() {
+        case "utf-16", "utf-16be": return (.utf16BigEndian, Data(), true)
+        case "utf-16le": return (.utf16LittleEndian, Data(), true)
+        case "iso-8859-1", "latin1", "latin-1": return (.isoLatin1, Data(), true)
+        case "windows-1252", "cp1252": return (.windowsCP1252, Data(), true)
+        case "us-ascii", "ascii": return (.ascii, Data(), true)
+        default: return (.utf8, Data(), name != nil)
+        }
+    }
+
+    /// The `encoding` of an XML declaration (group 1).
+    private static let xmlEncodingPattern = try! NSRegularExpression(
+        pattern: #"^\s*<\?xml[^>]*\bencoding\s*=\s*["']([A-Za-z0-9._-]+)["']"#
+    )
 
     /// The placeholder as XML text, so a masked document stays well-formed.
     private static let xmlRedactedValue = "&lt;redacted&gt;"
@@ -275,9 +328,11 @@ public struct NetworkSanitizer: Sendable {
     /// An XML name, prefix included: letters of any script, digits, `_`, `.`, `-` and `:`.
     private static let xmlName = #"[\p{L}_][\p{L}\p{M}\p{N}_.:-]*"#
 
-    /// A CDATA section, comment or processing instruction, matched before tags so their text is
-    /// skipped; one left open runs to the end of the document.
-    private static let xmlNonMarkup = #"<!\[CDATA\[.*?(?:\]\]>|\z)|<!--.*?(?:-->|\z)|<\?.*?(?:\?>|\z)"#
+    /// A DOCTYPE (its quoted literals and internal subset included), CDATA section, comment or
+    /// processing instruction, matched before tags so their text is skipped; a CDATA section,
+    /// comment or processing instruction left open runs to the end of the document.
+    private static let xmlNonMarkup = #"<!DOCTYPE(?:[^\[>"']|"[^"]*"|'[^']*')*(?:\[(?:<!--.*?-->|[^\]"']|"[^"]*"|'[^']*')*\])?\s*>"#
+        + #"|<!\[CDATA\[.*?(?:\]\]>|\z)|<!--.*?(?:-->|\z)|<\?.*?(?:\?>|\z)"#
 
     /// Whether a match of a pattern that starts with `xmlNonMarkup` is one of those, not a tag.
     private static func isNonMarkup(_ match: NSTextCheckingResult, in source: NSString) -> Bool {
