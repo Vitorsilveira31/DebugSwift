@@ -245,4 +245,14 @@ struct NetworkSanitizerTests {
         let cdata = "<root><![CDATA[<password>]]>ana</root>"
         #expect(xml(cdata) == cdata)
     }
+
+    @Test func attributesInsideCDATAOrCommentsAreLeftAlone() {
+        #expect(xml(#"<root><![CDATA[<a password="]]><password>hunter2</password></root>"#)
+            == #"<root><![CDATA[<a password="]]><password>&lt;redacted&gt;</password></root>"#)
+    }
+
+    @Test func namesInAnyScriptAreRecognized() {
+        #expect(xml("<données><ü:password>x</ü:password></données>") == "<données><ü:password>&lt;redacted&gt;</ü:password></données>")
+        #expect(xml(#"<usuário password="x"/>"#) == #"<usuário password="&lt;redacted&gt;"/>"#)
+    }
 }

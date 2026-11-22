@@ -189,6 +189,7 @@ public struct NetworkSanitizer: Sendable {
         // Attributes are looked for inside tags only: `note="` in element text must not hide the
         // tag that follows it.
         let attributes = Self.xmlTagPattern.matches(in: text, range: NSRange(location: 0, length: source.length))
+            .filter { !Self.isNonMarkup($0, in: source) }
             .flatMap { Self.xmlAttributePattern.matches(in: text, range: $0.range) }
         for match in attributes where masked(source.substring(with: match.range(at: 1))) {
             let value = match.range(at: 3)
@@ -259,14 +260,18 @@ public struct NetworkSanitizer: Sendable {
     /// don't escape quotes with a backslash and can't hold `<`, so a value ends at its first
     /// matching quote; one left open ends before the next `<` or at the end of a cut-off document.
     private static let xmlAttributePattern = try! NSRegularExpression(
-        pattern: #"(?<=[\s<])([A-Za-z_][\w.:-]*)(\s*=\s*)("[^"<]*(?:"|(?=<)|\z)|'[^'<]*(?:'|(?=<)|\z))"#
+        pattern: #"(?<=[\s<])("# + xmlName + #")(\s*=\s*)("[^"<]*(?:"|(?=<)|\z)|'[^'<]*(?:'|(?=<)|\z))"#
     )
 
     /// Any start tag, self-closing or cut off, as the range its attributes are looked for in. It
     /// ends at `>`, or, when malformed, before the next `<` or at the end of the document.
     private static let xmlTagPattern = try! NSRegularExpression(
-        pattern: #"<[A-Za-z_][\w.:-]*(?:\s(?:[^<>"']|"[^"<]*"|'[^'<]*')*(?:"[^"<]*|'[^'<]*)?)?(?:>|(?=<)|\z)"#
+        pattern: xmlNonMarkup + "|<" + xmlName + #"(?:\s(?:[^<>"']|"[^"<]*"|'[^'<]*')*(?:"[^"<]*|'[^'<]*)?)?(?:>|(?=<)|\z)"#,
+        options: [.dotMatchesLineSeparators]
     )
+
+    /// An XML name, prefix included: letters of any script, digits, `_`, `.`, `-` and `:`.
+    private static let xmlName = #"[\p{L}_][\p{L}\p{M}\p{N}_.:-]*"#
 
     /// A CDATA section, comment or processing instruction, matched before tags so their text is
     /// skipped; one left open runs to the end of the document.
@@ -282,7 +287,7 @@ public struct NetworkSanitizer: Sendable {
     /// A start tag that isn't self-closing: its name (group 1), after the non-markup it skips.
     /// Quoted attribute values may hold `>`.
     private static let xmlStartTagPattern = try! NSRegularExpression(
-        pattern: xmlNonMarkup + #"|<([A-Za-z_][\w.:-]*)(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?>"#,
+        pattern: xmlNonMarkup + "|<(" + xmlName + #")(?:\s(?:[^<>"'/]|"[^"<]*"|'[^'<]*'|/(?!>))*)?>"#,
         options: [.dotMatchesLineSeparators]
     )
 
