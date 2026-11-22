@@ -1048,6 +1048,8 @@ object AndroidDebugTools {
                 lastRecordingPath = ""
             }
             "color_palette" -> lastPalette = emptyList()
+            // The render tracking screen's "Clear counts", as interface.compose.clear does.
+            "render_tracking" -> composeRenderCount = 0L
             "push_simulator" -> return clearPushHistory()
             else -> {
                 return "$featureID has no history to clear."
