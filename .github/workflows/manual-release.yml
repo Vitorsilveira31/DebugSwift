@@ -39,8 +39,9 @@ jobs:
         # The newest stable SemVer tag, as git-version.yml finds it. With none yet (the first stable
         # release) it stays empty, and the notes start at the first commit. The releases API isn't used:
         # without a stable release it answers 404 with a JSON body that ended up as the tag.
-        # The tag being released is left out, in case it already exists (a release run again).
-        tag=$(git tag -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "${TAG_NAME#v}" | sort -V | tail -1 || true)
+        # Only versions below the one being released count: the tag itself may already exist (a
+        # release run again), and a higher one may too (a fix for an older line).
+        tag=$( (git tag -l | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'; echo "${TAG_NAME#v}") | sort -V -u | awk -v v="${TAG_NAME#v}" '$0 == v { exit } { prev = $0 } END { print prev }')
         echo "PREVIOUS_TAG=$tag" >> $GITHUB_OUTPUT
         echo "Previous tag: ${tag:-none}"
       env:
@@ -131,13 +132,14 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ github.event.inputs.tag_name }}
+        # The bare version (a `v` prefix stripped), the form the previous-tag lookup matches.
+        tag_name: ${{ steps.extract_version.outputs.VERSION }}
         release_name: ${{ github.event.inputs.release_name }}
         body: |
           **What's New:**
           ${{ steps.generate_notes.outputs.PR_LIST }}
           
-          ${{ steps.previous_tag.outputs.PREVIOUS_TAG && format('**Full changelog:** [{0}...{1}](https://github.com/{2}/compare/{0}...{1})', steps.previous_tag.outputs.PREVIOUS_TAG, github.event.inputs.tag_name, github.repository) || '**Initial release**' }}
+          ${{ steps.previous_tag.outputs.PREVIOUS_TAG && format('**Full changelog:** [{0}...{1}](https://github.com/{2}/compare/{0}...{1})', steps.previous_tag.outputs.PREVIOUS_TAG, steps.extract_version.outputs.VERSION, github.repository) || '**Initial release**' }}
         draft: false
         prerelease: ${{ github.event.inputs.is_prerelease == 'true' }}
 
