@@ -50,6 +50,14 @@ O módulo está em modo `native` (Skip Fuse) em [`skip.yml`](../DebugSwiftUI/Sou
 - [`DebugSwiftAndroidPanel.swift`](../DebugSwiftUI/Sources/DebugSwiftUI/Panel/DebugSwiftAndroidPanel.swift): lista de áreas/features, seleção entre views compartilhadas, detalhes genéricos e hosts UIKit.
 - [`Main.kt`](../Example/Android/app/src/main/kotlin/Main.kt) e [`README Android`](../Example/README.md): entrada Compose e setup exigido para integrar o painel/serviços a um app hospedeiro Android.
 - [`DebugSwiftNativeBridge.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/DebugSwiftNativeBridge.kt): interface Kotlin que o Swift nativo chama por JNI (espelhada em [`DebugSwiftNativeBridge.swift`](../DebugSwiftUI/Sources/DebugSwiftUI/Android/DebugSwiftNativeBridge.swift)).
-- [`AndroidDebugTools.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidDebugTools.kt): serviços, snapshots e ações nativas Android.
+- [`AndroidDebugTools.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidDebugTools.kt): estado, API do host, `snapshot`, `perform` e `hostAPI`. Cada subsistema fica num arquivo próprio, como extensões do mesmo `object`:
+  - [`AndroidNetworkTools.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidNetworkTools.kt): captura de rede, histórico, inspetor, HAR e replay.
+  - [`AndroidNetworkInjection.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidNetworkInjection.kt): injeção de rede, limites de requisições e regras CSV.
+  - [`AndroidWebSocketTools.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidWebSocketTools.kt): WebSocket.
+  - [`AndroidPerformanceTools.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidPerformanceTools.kt): performance, frames, hangs, backtraces e StrictMode.
+  - [`AndroidPushTools.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidPushTools.kt): simulação de push.
+  - [`AndroidInterfaceTools.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidInterfaceTools.kt): ferramentas de interface e gravador de documentação.
+  - [`AndroidResourceTools.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidResourceTools.kt): dados persistentes, preferências, arquivos e auditoria de segurança.
+  - [`AndroidAppTools.kt`](../DebugSwiftUI/Sources/DebugSwiftUI/Skip/AndroidAppTools.kt): crashes, Logcat, informações do dispositivo, eventos e log do agente.
 - [`DebugSwift.swift`](../DebugSwift/Sources/Settings/DebugSwift.swift): disponibilidade de features iOS e factories UIKit para network, app e performance.
 - [`DebugSwiftInterfaceSettings.swift`](../DebugSwift/Sources/Features/Interface/DebugSwiftInterfaceSettings.swift) e [`DebugSwiftResourceViewControllers.swift`](../DebugSwift/Sources/Features/Resources/DebugSwiftResourceViewControllers.swift): factories UIKit para interface e resources.
