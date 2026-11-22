@@ -288,4 +288,21 @@ struct NetworkSanitizerTests {
         let entity = #"<!DOCTYPE r [<!ENTITY e '<password>'>]><r>ana</r>"#
         #expect(xml(entity) == entity)
     }
+
+    @Test func decodedTextIsNotReadAgainInTheHeadersCharset() {
+        #expect(sanitizer.sanitize(text: "password=hunter2", contentType: "text/plain; charset=utf-16le") == "password=<redacted>")
+        let capture = HARCapture(
+            request: HARRequest(method: "POST", url: "https://example.com", headers: ["Content-Type": "text/plain; charset=utf-16le"], body: "password=hunter2"),
+            response: HARResponse(status: 200, headers: [:])
+        )
+        #expect(sanitizer.sanitize(capture).request.body == "password=<redacted>")
+    }
+
+    @Test func utf16XMLWithoutAByteOrderMarkIsRecognized() {
+        for encoding in [String.Encoding.utf16LittleEndian, .utf16BigEndian] {
+            let body = "<password>hunter2</password>".data(using: encoding)!
+            #expect(String(data: sanitizer.sanitize(body: body, contentType: "application/xml"), encoding: encoding)
+                == "<password>&lt;redacted&gt;</password>")
+        }
+    }
 }

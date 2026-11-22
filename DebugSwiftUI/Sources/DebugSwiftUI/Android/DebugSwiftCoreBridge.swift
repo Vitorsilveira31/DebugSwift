@@ -159,9 +159,8 @@ enum DebugSwiftCoreBridge {
             let text = input[key] as? String ?? ""
             guard !text.isEmpty else { return text }
             let type = headers.first { $0.key.lowercased() == "content-type" }?.value.first
-            let masked = sanitizer.sanitize(body: Data(text.utf8), contentType: type)
-            // A custom redactor may return bytes that aren't UTF-8: never fall back to the original.
-            return String(data: masked, encoding: .utf8) ?? NetworkSanitizer.redactedValue
+            // Kotlin already decoded the body: the header's charset must not be applied again.
+            return sanitizer.sanitize(text: text, contentType: type)
         }
         return [
             "url": sanitizer.sanitize(url: input["url"] as? String ?? ""),

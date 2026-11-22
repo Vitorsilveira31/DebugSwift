@@ -114,6 +114,19 @@ public struct NetworkSanitizer: Sendable {
     /// `sanitize(unformattedText:)` does. A body without a type is masked only as JSON. A body with
     /// nothing to mask is returned byte for byte.
     public func sanitize(body: Data, contentType: String?) -> Data {
+        sanitize(body: body, contentType: contentType, decodedText: false)
+    }
+
+    /// Masks a body that is already text, as `sanitize(body:contentType:)` does, without reading it
+    /// again in the `charset` the header names: that charset was the wire's, and the text is decoded.
+    /// Output of a custom redactor that isn't UTF-8 becomes the placeholder.
+    public func sanitize(text: String, contentType: String?) -> String {
+        let sanitized = sanitize(body: Data(text.utf8), contentType: contentType, decodedText: true)
+        return String(data: sanitized, encoding: .utf8) ?? Self.redactedValue
+    }
+
+    /// `decodedText`: the bytes are UTF-8 text already, whatever the header's `charset` says.
+    private func sanitize(body: Data, contentType: String?, decodedText: Bool) -> Data {
         var result = body
         if !normalizedBodyKeys.isEmpty, !body.isEmpty {
             // The media type alone: a parameter such as `name="payload.xml"` must not pick the masker.
@@ -127,9 +140,9 @@ public struct NetworkSanitizer: Sendable {
             } else if type.isEmpty || type.contains("json") {
                 result = sanitizeJSON(body) ?? body
             } else if type.contains("xml") {
-                result = maskingText(body, contentType: contentType, xml: true) { maskingXML($0) }
+                result = maskingText(body, contentType: decodedText ? nil : contentType, xml: !decodedText) { maskingXML($0) }
             } else if type.hasPrefix("text/") {
-                result = maskingText(body, contentType: contentType, xml: false) { maskingKeys(inUnformattedText: $0) }
+                result = maskingText(body, contentType: decodedText ? nil : contentType, xml: false) { maskingKeys(inUnformattedText: $0) }
             }
         }
         if let customBodyRedactor {
@@ -202,6 +215,11 @@ public struct NetworkSanitizer: Sendable {
         ]
         for (mark, encoding) in marks where body.starts(with: mark) {
             return (encoding, Data(mark), true)
+        }
+        // XML in UTF-16 without a byte order mark starts with `<` and a NUL (XML 1.0, appendix F).
+        if xml, body.count >= 2 {
+            if body.starts(with: [0x3C, 0x00]) { return (.utf16LittleEndian, Data(), true) }
+            if body.starts(with: [0x00, 0x3C]) { return (.utf16BigEndian, Data(), true) }
         }
         var name = contentType?.split(separator: ";").dropFirst()
             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -418,12 +436,6 @@ public struct NetworkSanitizer: Sendable {
     // MARK: - Helpers
 
     static let encodedRedactedValue = "%3Credacted%3E"
-
-    private func sanitize(text: String, contentType: String?) -> String {
-        let sanitized = sanitize(body: Data(text.utf8), contentType: contentType)
-        // A custom redactor may return bytes that aren't UTF-8: never fall back to the original.
-        return String(data: sanitized, encoding: .utf8) ?? Self.redactedValue
-    }
 
     private static func contentType(in headers: [String: String]) -> String? {
         headers.first { $0.key.lowercased() == "content-type" }?.value
