@@ -297,6 +297,7 @@ struct NetworkSanitizerTests {
     @Test func aBodyThatDeclaresEntitiesIsReplacedWhole() {
         #expect(xml(#"<!DOCTYPE r [<!ENTITY credential "hunter2">]><r><password>&credential;</password></r>"#) == "<redacted>")
         #expect(xml(#"<!DOCTYPE r [<!ENTITY e "<!--">]><r><password>hunter2</password></r>"#) == "<redacted>")
+        #expect(xml(#"<!DOCTYPE user [<!ATTLIST user password CDATA "hunter2">]><user/>"#) == "<redacted>")
     }
 
     @Test func decodedTextIsNotReadAgainInTheHeadersCharset() {
@@ -348,8 +349,10 @@ struct NetworkSanitizerTests {
         #expect(xml("<password>x</password>", type: "application/vnd.json+xml") == "<password>&lt;redacted&gt;</password>")
         let report = Data("<password>x</password>".utf8)
         #expect(sanitizer.sanitize(body: report, contentType: "application/vnd.example.xml-report") == report)
-        let json = sanitizer.sanitize(body: Data(#"{"password":"x"}"#.utf8), contentType: "application/problem+json")
-        #expect(String(data: json, encoding: .utf8) == #"{"password":"<redacted>"}"#)
+        for type in ["application/problem+json", "application/x-amz-json-1.1", "text/x-json"] {
+            let json = sanitizer.sanitize(body: Data(#"{"password":"x"}"#.utf8), contentType: type)
+            #expect(String(data: json, encoding: .utf8) == #"{"password":"<redacted>"}"#)
+        }
     }
 
     @Test func aQuotedCharsetIsUnescapedAndOnlyAnXMLDeclarationNamesAnEncoding() {

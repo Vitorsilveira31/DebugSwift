@@ -132,11 +132,12 @@ public struct NetworkSanitizer: Sendable {
             // The media type alone: a parameter such as `name="payload.xml"` must not pick the masker.
             let type = (contentType?.split(separator: ";", maxSplits: 1).first.map(String.init) ?? "")
                 .trimmingCharacters(in: .whitespaces).lowercased()
-            // The subtype and its structured suffix decide (`+xml`, `+json`), not a substring:
-            // `application/vnd.json+xml` is XML and `application/vnd.example.xml-report` is neither.
+            // The subtype decides, not the parameters: `xml` or a `+xml` suffix is XML (so
+            // `application/vnd.json+xml` is XML and `application/vnd.example.xml-report` isn't).
             let subtype = type.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ""
             let isXML = subtype == "xml" || subtype.hasSuffix("+xml")
-            let isJSON = !isXML && (subtype == "json" || subtype.hasSuffix("+json"))
+            // JSON keeps its aliases (`x-amz-json-1.1`, `x-json`…): any subtype naming json.
+            let isJSON = !isXML && subtype.contains("json")
             if subtype == "x-www-form-urlencoded" {
                 if let text = String(data: body, encoding: .utf8) {
                     let sanitized = sanitizeFormEncoded(text, keys: normalizedBodyKeys)
@@ -325,9 +326,10 @@ public struct NetworkSanitizer: Sendable {
     /// a namespace prefix (`ns:password`); the local name is compared.
     private func maskingXML(_ text: String) -> String {
         guard !normalizedBodyKeys.isEmpty else { return text }
-        // Entities aren't resolved: a declared one can hold a secret that elements only reference
-        // (`&credential;`), and its value sits in the skipped DOCTYPE. Such a body is replaced whole.
-        if text.contains("<!ENTITY") { return Self.redactedValue }
+        // DTD declarations aren't applied: an entity (`&credential;`) or a default attribute value
+        // (`<!ATTLIST user password CDATA "…">`) can hold a secret the elements only imply, and its
+        // value sits in the skipped DOCTYPE. Such a body is replaced whole.
+        if text.contains("<!ENTITY") || text.contains("<!ATTLIST") { return Self.redactedValue }
         func masked(_ name: String) -> Bool {
             normalizedBodyKeys.contains(Self.normalize(String(name.split(separator: ":").last ?? Substring(name))))
         }
